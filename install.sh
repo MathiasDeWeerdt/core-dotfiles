@@ -564,7 +564,7 @@ if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]
         # Find the first empty slot
         local slot=0
         while gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${slot}/ name 2>/dev/null | grep -q .; do
-            ((slot++))
+            slot=$((slot + 1))
         done
 
         local path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${slot}/"
