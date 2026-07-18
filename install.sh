@@ -572,7 +572,7 @@ if [[ "$SHELL" == "$ZSH_PATH" ]]; then
     log "Default shell is already zsh"
 else
     info "Setting default shell to zsh..."
-    chsh -s "$ZSH_PATH" "$USER"
+    sudo chsh -s "$ZSH_PATH" "$USER"
     log "Default shell set to zsh (takes effect on next login)"
 fi
 
