@@ -1,0 +1,19 @@
+# Stow artifact directories (symlinks don't need tracking)
+# But we want empty dirs preserved for stow structure
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# User environment overrides (personal, not tracked)
+env
+
+# Secrets (ensure no API keys leak)
+*.secret

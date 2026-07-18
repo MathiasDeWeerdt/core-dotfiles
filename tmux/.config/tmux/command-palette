@@ -1,0 +1,24 @@
+#!/bin/bash
+# tmux command palette — fuzzy search then execute
+# Bound to Ctrl-a P
+
+cat <<'CMDS' | fzf --reverse --height=50% --header="Command Palette" --delimiter='|' --with-nth=1 | cut -d'|' -f2 | bash
+🪟  New Window|tmux new-window
+❌  Kill Window|tmux kill-window
+✏️   Rename Window|tmux command-prompt -I "" "rename-window '%%'"
+📐  Split Horizontal|tmux split-window -v
+📐  Split Vertical|tmux split-window -h
+🔀  Switch Session|tmux choose-tree -s
+📋  List Windows|tmux choose-tree -w
+🖥️   New Session|tmux new-session
+💤  Detach|tmux detach-client
+📋  Copy Mode|tmux copy-mode
+🔍  Find Window|~/.tmux/plugins/tmux-fzf/scripts/session_search.sh
+🔲  Toggle Sidebar|~/.tmux/plugins/tmux-sidebar/scripts/toggle.sh
+🔌  Kill Pane|tmux kill-pane
+🔄  Respawn Pane|tmux respawn-pane -k
+🔢  Renumber Windows|tmux move-window -r
+📜  Show Keybindings|tmux list-keys
+⏱️   Clock|tmux clock-mode
+🔄  Reload Config|tmux source-file ~/.tmux.conf
+CMDS

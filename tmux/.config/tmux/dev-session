@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Reuse one development session. Optional project paths stay in private storage.
+set -euo pipefail
+SESSION=${DOTFILES_TMUX_SESSION:-dev}
+[[ "$SESSION" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Invalid tmux session name.' >&2; exit 1; }
+BOOT_MODE=false
+case "${1:-}" in
+    --boot) BOOT_MODE=true ;;
+    '') ;;
+    *) echo 'Usage: dev-session [--boot]' >&2; exit 1 ;;
+esac
+
+if ! tmux has-session -t "=$SESSION" 2>/dev/null; then
+    first=$(tmux new-session -d -P -F '#{window_id}' -s "$SESSION" -n Opencode -c "$HOME")
+    tmux send-keys -t "$first" 'opencode' Enter
+    projects=${DOTFILES_TMUX_PROJECTS:-${XDG_CONFIG_HOME:-$HOME/.config}/core-dotfiles/tmux-projects}
+    declare -A seen=()
+    index=0
+    if [[ -f "$projects" ]]; then
+        while IFS= read -r directory || [[ -n "$directory" ]]; do
+            [[ -n "$directory" && "$directory" != \#* ]] || continue
+            [[ "$directory" != '~/'* ]] || directory="$HOME/${directory:2}"
+            [[ -d "$directory" ]] || { echo 'Skipping unavailable private project directory.' >&2; continue; }
+            [[ -z "${seen[$directory]+set}" ]] || continue
+            seen[$directory]=1
+            index=$((index + 1))
+            window=$(tmux new-window -t "$SESSION" -P -F '#{window_id}' -n "Project $index" -c "$directory")
+            tmux send-keys -t "$window" 'opencode' Enter
+        done < "$projects"
+    fi
+    tmux new-window -t "$SESSION" -n CLI -c "$HOME"
+    tmux select-window -t "$first"
+fi
+$BOOT_MODE && exit 0
+exec tmux attach-session -t "=$SESSION"

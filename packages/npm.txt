@@ -1,0 +1,7 @@
+# npm global packages
+# Install with: npm install -g $(cat packages/npm.txt)
+
+codewhale
+@openai/codex
+bun
+@nestjs/cli
