@@ -40,9 +40,11 @@ echo '</background>' >> "$xml"
 gsettings set org.gnome.desktop.background picture-uri "file://$xml"
 gsettings set org.gnome.desktop.background picture-uri-dark "file://$xml"
 gsettings set org.gnome.desktop.background picture-options 'zoom'
-gsettings set org.gnome.desktop.screensaver picture-uri "file://$xml"
-gsettings set org.gnome.desktop.screensaver picture-uri-dark "file://$xml"
-log "Wallpapers: slideshow active"
+gsettings set org.gnome.desktop.screensaver picture-uri "file://$xml" 2>/dev/null || true
+gsettings set org.gnome.desktop.screensaver picture-uri-dark "file://$xml" 2>/dev/null || true
+gsettings set org.gnome.desktop.lock-screen picture-uri "file://$xml" 2>/dev/null || true
+gsettings set org.gnome.desktop.lock-screen picture-uri-dark "file://$xml" 2>/dev/null || true
+log "Wallpapers: desktop + lockscreen set"
 
 # GDM login screen wallpaper — same slideshow as user
 sudo mkdir -p /usr/share/backgrounds/gnome 2>/dev/null || true
