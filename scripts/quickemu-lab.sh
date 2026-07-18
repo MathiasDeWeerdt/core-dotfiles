@@ -66,7 +66,7 @@ cmd_create() {
     local count=0
 
     for entry in "${VMS[@]}"; do
-        ((count++))
+        count=$((count + 1))
         read -r os release edition disk ram cores extra <<< "$entry"
         extra="${extra:-}"
 
