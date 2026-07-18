@@ -85,11 +85,7 @@ cmd_create() {
         mkdir -p "$vm_path"
 
         # Download ISO + create config using quickget
-        if [[ "$edition" != "default" ]]; then
-            quickget "$os" "$release" --path "$vm_path" 2>&1 | tail -3
-        else
-            quickget "$os" "$release" --path "$vm_path" 2>&1 | tail -3
-        fi
+        quickget "$os" "$release" --path "$vm_path"
 
         # Patch the generated config with our custom settings
         local conf=$(find_conf "$vm_path")
