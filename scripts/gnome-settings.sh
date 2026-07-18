@@ -44,12 +44,11 @@ gsettings set org.gnome.desktop.screensaver picture-uri "file://$xml"
 gsettings set org.gnome.desktop.screensaver picture-uri-dark "file://$xml"
 log "Wallpapers: slideshow active"
 
-# GDM login screen wallpaper
-info "GDM login screen..."
+# GDM login screen wallpaper — same slideshow as user
 sudo mkdir -p /usr/share/backgrounds/gnome 2>/dev/null || true
-sudo cp "$DOTFILES/wallpapers/wallhaven-mlgzzy.png" /usr/share/backgrounds/gnome/core-wallpaper.png 2>/dev/null || true
-sudo cp "$DOTFILES/wallpapers/wallhaven-ogy6zm.jpg" /usr/share/backgrounds/gnome/core-wallpaper-dark.jpg 2>/dev/null || true
-log "GDM wallpaper copied"
+sudo cp "$DOTFILES/wallpapers/"*.{png,jpg} /usr/share/backgrounds/gnome/ 2>/dev/null || true
+sudo cp "$xml" /usr/share/backgrounds/gnome/slideshow.xml 2>/dev/null || true
+log "GDM: wallpapers + slideshow deployed"
 
 # Orchis theme
 if [[ -d /usr/share/themes/Orchis-Dark ]]; then
