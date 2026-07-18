@@ -248,6 +248,7 @@ PACMAN_PKGS=(
     nmap smbclient hashcat impacket proxychains-ng
     openbsd-netcat gawk nano vim lm_sensors binwalk
     bettercap aircrack-ng socat maven
+    metasploit
     flameshot xclip
     ufw gufw
 )
