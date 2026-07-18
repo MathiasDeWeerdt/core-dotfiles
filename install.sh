@@ -581,6 +581,33 @@ if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]
 
     setup_keybinding "Terminal"     "<Control><Alt>t"      "foot -m"
     setup_keybinding "Screenshot"   "<Shift><Control>a"    "$HOME/.local/bin/flameshot-gui"
+
+    # Mouse: disable acceleration
+    gsettings set org.gnome.desktop.peripherals.mouse accel-profile flat 2>/dev/null || true
+
+    # Wallpapers: copy and set up slideshow rotation
+    if ls "$DOTFILES/wallpapers/"*.{png,jpg} &>/dev/null; then
+        BG_DIR="$HOME/.local/share/backgrounds"
+        mkdir -p "$BG_DIR"
+        cp "$DOTFILES/wallpapers/"*.{png,jpg} "$BG_DIR/" 2>/dev/null || true
+
+        # Create slideshow XML
+        xml="$BG_DIR/slideshow.xml"
+        echo '<background><starttime><year>2026</year><month>01</month><day>01</day><hour>00</hour><minute>00</minute><second>00</second></starttime>' > "$xml"
+        prev=""
+        for img in "$BG_DIR/"*.{png,jpg}; do
+            [[ -f "$img" ]] || continue
+            echo "  <static><duration>1795.0</duration><file>$img</file></static>" >> "$xml"
+            [[ -n "$prev" ]] && echo "  <transition><duration>5.0</duration><from>$prev</from><to>$img</to></transition>" >> "$xml"
+            prev="$img"
+        done
+        echo '</background>' >> "$xml"
+
+        gsettings set org.gnome.desktop.background picture-uri "file://$xml" 2>/dev/null || true
+        gsettings set org.gnome.desktop.background picture-options 'zoom' 2>/dev/null || true
+        gsettings set org.gnome.desktop.screensaver picture-uri "file://$xml" 2>/dev/null || true
+        log "Wallpapers configured (slideshow, 30min rotation)"
+    fi
 fi
 
 # ── Set default shell ────────────────────────────────────────────────
