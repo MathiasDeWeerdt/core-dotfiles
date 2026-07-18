@@ -611,12 +611,12 @@ if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]
         gsettings set org.gnome.desktop.background picture-options 'zoom' 2>/dev/null || true
         gsettings set org.gnome.desktop.screensaver picture-uri "file://$xml" 2>/dev/null || true
 
-        # GDM login screen wallpaper
+        # GDM login screen wallpaper (may hang without GDM session bus — timeout)
         if [[ -f "$DOTFILES/wallpapers/wallhaven-mlgzzy.png" ]]; then
             sudo cp "$DOTFILES/wallpapers/wallhaven-mlgzzy.png" /usr/share/backgrounds/gnome/core-wallpaper.png 2>/dev/null || true
-            sudo -u gdm dbus-launch gsettings set org.gnome.desktop.background picture-uri \
+            timeout 3 sudo -u gdm dbus-launch gsettings set org.gnome.desktop.background picture-uri \
                 "file:///usr/share/backgrounds/gnome/core-wallpaper.png" 2>/dev/null || true
-            sudo -u gdm dbus-launch gsettings set org.gnome.desktop.background picture-options 'zoom' 2>/dev/null || true
+            timeout 3 sudo -u gdm dbus-launch gsettings set org.gnome.desktop.background picture-options 'zoom' 2>/dev/null || true
         fi
 
         log "Wallpapers configured (desktop, lockscreen, login)"
