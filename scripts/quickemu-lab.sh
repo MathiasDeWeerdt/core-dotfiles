@@ -89,6 +89,9 @@ cmd_create() {
 
         # Patch the generated config with our custom settings
         local conf=$(find_conf "$vm_path")
+        local idx=$((count - 1))
+        local ssh_port=$((2222 + idx))
+
         if [[ -n "$conf" && -f "$conf" ]]; then
             # RAM and CPU
             sed -i "s/^ram=.*/ram=\"${ram}G\"/" "$conf" 2>/dev/null || true
@@ -101,23 +104,14 @@ cmd_create() {
                 sed -i "s/^disk_size=.*/disk_size=\"$disk\"/" "$conf" 2>/dev/null || true
             fi
 
-            # Networking: user-mode NAT — works across WiFi/Ethernet/VPN
-            if ! grep -q "^network=" "$conf"; then
-                echo "network=\"user\"" >> "$conf"
-            fi
+            # Networking: user-mode NAT
+            grep -q "^network=" "$conf" || echo "network=\"user\"" >> "$conf"
 
             # Share host public directory for file transfer
-            if ! grep -q "^public_dir=" "$conf"; then
-                echo "public_dir=\"$HOME/Public\"" >> "$conf"
-            fi
+            grep -q "^public_dir=" "$conf" || echo "public_dir=\"$HOME/Public\"" >> "$conf"
 
-            # Port forwarding: SSH (2222+offset) and RDP (3389+offset)
-            # Each VM gets unique ports based on its index
-            local idx=$((count - 1))
-            local ssh_port=$((2222 + idx))
-            if ! grep -q "^port_forwards=" "$conf"; then
-                echo "port_forwards=(\"${name}:22:tcp:${ssh_port}\")" >> "$conf"
-            fi
+            # Port forwarding: unique SSH port per VM
+            grep -q "^port_forwards=" "$conf" || echo "port_forwards=(\"${name}:22:tcp:${ssh_port}\")" >> "$conf"
         fi
 
         log "Configured: $vm_path"
