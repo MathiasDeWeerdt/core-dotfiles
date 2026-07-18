@@ -82,5 +82,8 @@ maven
 metasploit
 flameshot
 xclip
+wireguard-tools
+gnome-shell-extensions
+gnome-shell-extension-appindicator
 ufw
 gufw

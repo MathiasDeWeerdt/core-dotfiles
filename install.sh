@@ -250,6 +250,7 @@ PACMAN_PKGS=(
     bettercap aircrack-ng socat maven
     metasploit
     flameshot xclip
+    wireguard-tools gnome-shell-extensions gnome-shell-extension-appindicator
     ufw gufw
 )
 
@@ -292,6 +293,9 @@ AUR_PKGS=(
     bettercap-ui
     quickemu
     burpsuite
+    visual-studio-code-bin
+    gnome-shell-extension-no-overview
+    gnome-shell-extension-clipboard-history
 )
 
 info "Installing ${#AUR_PKGS[@]} AUR packages..."
@@ -423,8 +427,18 @@ if command -v archlinux-java &>/dev/null; then
     fi
 fi
 
-# ── 8. Firewall ──────────────────────────────────────────────────────
-section "8/11 — Firewall (ufw)"
+# ── 8. Power & firewall ─────────────────────────────────────────────
+section "8/11 — Power & firewall"
+
+# Set performance power profile
+if command -v powerprofilesctl &>/dev/null; then
+    info "Setting power profile to performance..."
+    powerprofilesctl set performance 2>/dev/null && \
+        log "Power profile: performance" || \
+        warn "Could not set power profile"
+fi
+
+# ufw firewall
 
 if systemctl is-active --quiet ufw 2>/dev/null; then
     log "ufw already running"
