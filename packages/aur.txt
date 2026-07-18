@@ -9,5 +9,4 @@ google-chrome
 netexec
 bettercap-ui
 quickemu
-quickgui
 burpsuite
