@@ -79,6 +79,7 @@ bettercap
 aircrack-ng
 socat
 maven
+metasploit
 flameshot
 xclip
 ufw
