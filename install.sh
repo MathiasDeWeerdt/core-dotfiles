@@ -233,7 +233,7 @@ PACMAN_PKGS=(
     qemu-desktop
 
     # Build tools
-    base-devel cmake
+    base-devel cmake gcc
 
     # GitHub
     github-cli
@@ -482,13 +482,17 @@ for pkg in "${NPM_GLOBALS[@]}"; do
     fi
 done
 
-# GitHub Copilot CLI via pipx
-if gh extension list 2>/dev/null | grep -q 'gh-copilot'; then
-    log "GitHub Copilot CLI already installed"
+# GitHub Copilot CLI (gh extension)
+if command -v gh &>/dev/null; then
+    if gh extension list 2>/dev/null | grep -q 'gh-copilot'; then
+        log "GitHub Copilot CLI already installed"
+    else
+        info "Installing GitHub Copilot CLI extension..."
+        gh extension install github/gh-copilot 2>/dev/null || \
+            warn "Copilot CLI install failed — run: gh auth login && gh extension install github/gh-copilot"
+    fi
 else
-    info "Installing GitHub Copilot CLI extension..."
-    gh extension install github/gh-copilot 2>/dev/null || \
-        warn "Copilot CLI install failed — install manually: gh extension install github/gh-copilot"
+    warn "gh CLI not found — skipping Copilot CLI (install github-cli and run 'gh auth login')"
 fi
 
 # Python security tools via pipx (isolated environments)
