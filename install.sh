@@ -498,16 +498,18 @@ fi
 
 # Python security tools via pipx (isolated environments)
 PIPX_TOOLS=(
-    donpapi
-    mitm6
+    "donpapi|git+https://github.com/login-securite/DonPAPI.git"
+    "mitm6|mitm6"
 )
 
-for tool in "${PIPX_TOOLS[@]}"; do
-    if command -v "$tool" &>/dev/null; then
-        log "pipx: $tool already installed"
+for entry in "${PIPX_TOOLS[@]}"; do
+    name="${entry%%|*}"
+    pkg="${entry##*|}"
+    if command -v "$name" &>/dev/null; then
+        log "pipx: $name already installed"
     else
-        info "pipx: installing $tool..."
-        pipx install "$tool" 2>/dev/null || warn "$tool install failed — install manually if needed"
+        info "pipx: installing $name..."
+        pipx install "$pkg" 2>/dev/null || warn "$name install failed — install manually if needed"
     fi
 done
 
