@@ -46,29 +46,8 @@ gsettings set org.gnome.desktop.lock-screen picture-uri "file://$xml" 2>/dev/nul
 gsettings set org.gnome.desktop.lock-screen picture-uri-dark "file://$xml" 2>/dev/null || true
 log "Wallpapers: desktop + lockscreen set"
 
-# GDM login screen wallpaper via dconf (the proper way)
-info "GDM login screen..."
-WALLPAPER=$(ls "$BG_DIR/"*.png "$BG_DIR/"*.jpg 2>/dev/null | head -1)
-if [[ -n "$WALLPAPER" ]]; then
-    # Copy wallpaper to system location GDM can access
-    sudo mkdir -p /usr/share/backgrounds/gnome 2>/dev/null || true
-    sudo cp "$DOTFILES/wallpapers/"*.{png,jpg} /usr/share/backgrounds/gnome/ 2>/dev/null || true
-
-    # Create dconf profile for GDM
-    sudo mkdir -p /etc/dconf/profile 2>/dev/null || true
-    echo -e "user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults" | sudo tee /etc/dconf/profile/gdm > /dev/null
-
-    # Set wallpaper in GDM's dconf database
-    sudo mkdir -p /etc/dconf/db/gdm.d 2>/dev/null || true
-    cat <<DCONF | sudo tee /etc/dconf/db/gdm.d/01-wallpaper > /dev/null
-[org/gnome/desktop/background]
-picture-uri='file:///usr/share/backgrounds/gnome/$(basename "$WALLPAPER")'
-picture-options='zoom'
-DCONF
-
-    sudo dconf update
-    log "GDM: wallpaper configured"
-fi
+# GDM login screen: use gdm-settings GUI (installed via AUR)
+# Run: gtk-launch gdm-settings
 
 # Orchis theme
 if [[ -d /usr/share/themes/Orchis-Dark ]]; then
