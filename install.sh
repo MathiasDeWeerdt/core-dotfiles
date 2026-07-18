@@ -236,7 +236,7 @@ PACMAN_PKGS=(
     chromium firefox
 
     # Security / networking tools
-    nmap smbclient hashcat python-impacket proxychains-ng
+    nmap smbclient hashcat impacket proxychains-ng
     openbsd-netcat gawk nano vim lm_sensors binwalk
     bettercap aircrack-ng socat maven
     flameshot xclip

@@ -67,7 +67,7 @@ firefox
 nmap
 smbclient
 hashcat
-python-impacket
+impacket
 proxychains-ng
 openbsd-netcat
 gawk
