@@ -546,48 +546,48 @@ stow -d "$DOTFILES" -t "$HOME" -R --adopt "${STOW_PACKAGES[@]}" 2>/dev/null || \
 
 log "Dotfiles deployed"
 
-# ── GNOME keybindings ────────────────────────────────────────────────
+# ── GNOME settings ──────────────────────────────────────────────────
 if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] && timeout 2 gsettings get org.gnome.desktop.background picture-uri &>/dev/null; then
-    info "Configuring GNOME shortcuts..."
+    info "Configuring GNOME settings..."
 
-    setup_keybinding() {
-        local name="$1" binding="$2" command="$3"
-        # Check if this binding already exists
-        for i in $(seq 0 9); do
-            local existing=$(gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${i}/ name 2>/dev/null | tr -d "'")
-            if [[ "$existing" == "$name" ]]; then
-                log "Keybinding '$name' already configured"
-                return 0
-            fi
-        done
+    gs() { timeout 2 gsettings "$@" 2>/dev/null || true; }
 
-        # Find the first empty slot
-        local slot=0
-        while gsettings get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${slot}/ name 2>/dev/null | grep -q .; do
+    # Keybindings
+    info "  Keybindings..."
+    for i in $(seq 0 9); do
+        existing=$(gs get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${i}/ name | tr -d "'")
+        [[ "$existing" == "Terminal" ]] && found_terminal=true
+        [[ "$existing" == "Screenshot" ]] && found_screenshot=true
+    done
+
+    if [[ -z "${found_terminal:-}" ]]; then
+        slot=0
+        while gs get org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${slot}/ name | grep -q .; do
             slot=$((slot + 1))
         done
+        path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${slot}/"
+        gs set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$path" name 'Terminal'
+        gs set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$path" command 'foot -m'
+        gs set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$path" binding '<Control><Alt>t'
+        current_list=$(gs get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)
+        [[ "$current_list" != *"$path"* ]] && gs set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "${current_list%]*}, '$path']"
+        log "  Terminal: Ctrl+Alt+T → foot -m"
+    fi
 
-        local path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${slot}/"
-        gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$path" name "$name"
-        gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$path" command "$command"
-        gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$path" binding "$binding"
-
-        # Add to the list of enabled custom keybindings
-        local current_list=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)
-        if [[ "$current_list" == "@as []" ]]; then
-            current_list="['$path']"
-        elif ! echo "$current_list" | grep -q "$path"; then
-            current_list=$(echo "$current_list" | sed "s/]$/, '$path']/")
-        fi
-        gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$current_list"
-        log "Keybinding '$name' → $binding: $command"
-    }
-
-    setup_keybinding "Terminal"     "<Control><Alt>t"      "foot -m"
-    setup_keybinding "Screenshot"   "<Shift><Control>a"    "$HOME/.local/bin/flameshot-gui"
+    if [[ -z "${found_screenshot:-}" ]]; then
+        slot=$((slot + 1))
+        path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${slot}/"
+        gs set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$path" name 'Screenshot'
+        gs set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$path" command "$HOME/.local/bin/flameshot-gui"
+        gs set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"$path" binding '<Shift><Control>a'
+        current_list=$(gs get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)
+        [[ "$current_list" != *"$path"* ]] && gs set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "${current_list%]*}, '$path']"
+        log "  Screenshot: Ctrl+Shift+A → flameshot-gui"
+    fi
 
     # Mouse: disable acceleration
-    gsettings set org.gnome.desktop.peripherals.mouse accel-profile flat 2>/dev/null || true
+    info "  Mouse acceleration..."
+    gs set org.gnome.desktop.peripherals.mouse accel-profile flat
 
     # Wallpapers: copy and set up slideshow rotation
     if ls "$DOTFILES/wallpapers/"*.{png,jpg} &>/dev/null; then
@@ -607,25 +607,26 @@ if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]
         done
         echo '</background>' >> "$xml"
 
-        gsettings set org.gnome.desktop.background picture-uri "file://$xml" 2>/dev/null || true
-        gsettings set org.gnome.desktop.background picture-options 'zoom' 2>/dev/null || true
-        gsettings set org.gnome.desktop.screensaver picture-uri "file://$xml" 2>/dev/null || true
+        info "  Wallpapers..."
+        gs set org.gnome.desktop.background picture-uri "file://$xml"
+        gs set org.gnome.desktop.background picture-options 'zoom'
+        gs set org.gnome.desktop.screensaver picture-uri "file://$xml"
 
         # GDM login screen wallpaper (may hang without GDM session bus — timeout)
         if [[ -f "$DOTFILES/wallpapers/wallhaven-mlgzzy.png" ]]; then
             sudo cp "$DOTFILES/wallpapers/wallhaven-mlgzzy.png" /usr/share/backgrounds/gnome/core-wallpaper.png 2>/dev/null || true
             timeout 3 sudo -u gdm dbus-launch gsettings set org.gnome.desktop.background picture-uri \
                 "file:///usr/share/backgrounds/gnome/core-wallpaper.png" 2>/dev/null || true
-            timeout 3 sudo -u gdm dbus-launch gsettings set org.gnome.desktop.background picture-options 'zoom' 2>/dev/null || true
         fi
 
-        log "Wallpapers configured (desktop, lockscreen, login)"
+        log "  Wallpapers configured (desktop, lockscreen, login)"
 
         # Orchis shell theme (transparent floating top bar)
         if [[ -d /usr/share/themes/Orchis-Dark ]]; then
-            gsettings set org.gnome.shell.extensions.user-theme name 'Orchis-Dark' 2>/dev/null || true
-            gsettings set org.gnome.desktop.interface gtk-theme 'Orchis-Dark' 2>/dev/null || true
-            log "Shell theme: Orchis-Dark"
+            info "  Shell theme: Orchis-Dark..."
+            gs set org.gnome.shell.extensions.user-theme name 'Orchis-Dark'
+            gs set org.gnome.desktop.interface gtk-theme 'Orchis-Dark'
+            log "  Shell theme: Orchis-Dark"
         fi
     fi
 fi
