@@ -6,10 +6,14 @@ GREEN='\033[0;32m'; BLUE='\033[0;34m'; NC='\033[0m'
 log() { echo -e "${GREEN}[✓]${NC} $*"; }
 info() { echo -e "${BLUE}[→]${NC} $*"; }
 
-# Power profile
-info "Power → performance"
-powerprofilesctl set performance
-log "Power: $(powerprofilesctl get)"
+# Power profile — pick best available
+info "Setting power profile..."
+if powerprofilesctl list 2>/dev/null | grep -q 'performance'; then
+    powerprofilesctl set performance
+elif powerprofilesctl list 2>/dev/null | grep -q 'balanced'; then
+    powerprofilesctl set balanced
+fi
+log "Power: $(powerprofilesctl get 2>/dev/null || echo 'unavailable')"
 
 # Mouse acceleration
 info "Mouse → flat (no acceleration)"
