@@ -547,7 +547,7 @@ stow -d "$DOTFILES" -t "$HOME" -R --adopt "${STOW_PACKAGES[@]}" 2>/dev/null || \
 log "Dotfiles deployed"
 
 # ── GNOME keybindings ────────────────────────────────────────────────
-if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]; then
+if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] && timeout 2 gsettings get org.gnome.desktop.background picture-uri &>/dev/null; then
     info "Configuring GNOME shortcuts..."
 
     setup_keybinding() {
