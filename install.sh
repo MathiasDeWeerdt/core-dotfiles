@@ -221,7 +221,7 @@ PACMAN_PKGS=(
     keychain tree rsync aria2 lsof
 
     # Dev runtimes
-    go dotnet-sdk python python-pip python-pipx
+    go dotnet-sdk python python-pip python-pipx python-setuptools
 
     # Java — all LTS versions
     jdk17-openjdk jdk21-openjdk jdk25-openjdk
@@ -480,12 +480,12 @@ for pkg in "${NPM_GLOBALS[@]}"; do
 done
 
 # GitHub Copilot CLI via pipx
-if command -v copilot &>/dev/null; then
+if gh extension list 2>/dev/null | grep -q 'gh-copilot'; then
     log "GitHub Copilot CLI already installed"
 else
-    info "Installing GitHub Copilot CLI via pipx..."
-    pipx install copilot-cli 2>/dev/null || \
-        warn "Copilot CLI install via pipx failed — install manually if needed"
+    info "Installing GitHub Copilot CLI extension..."
+    gh extension install github/gh-copilot 2>/dev/null || \
+        warn "Copilot CLI install failed — install manually: gh extension install github/gh-copilot"
 fi
 
 # Python security tools via pipx (isolated environments)
