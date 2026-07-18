@@ -47,13 +47,22 @@ zstyle ':fzf-tab:*' fzf-flags --tiebreak=length,begin
 
 # Cross-platform ls: use GNU flags when available, fallback for BSD/macOS
 if ls --group-directories-first &>/dev/null; then
-    alias ls='ls --color -h --group-directories-first'
+    alias ls='ls --color=auto --group-directories-first'
+    alias ll='ls -lh --group-directories-first'
+    alias la='ls -lAh --group-directories-first'
 else
-    alias ls='ls -G -h'
+    alias ls='ls -G'
+    alias ll='ls -lhG'
+    alias la='ls -lAhG'
 fi
 
 # Launch the tmux dev session
 alias dev='~/.config/tmux/dev-session'
+
+# ── fzf Ctrl+R history search ────────────────────────────────────────
+if [[ -f /usr/share/fzf/key-bindings.zsh ]]; then
+    source /usr/share/fzf/key-bindings.zsh
+fi
 
 # ── Functions ───────────────────────────────────────────────────────
 
