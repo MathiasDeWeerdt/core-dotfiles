@@ -241,6 +241,9 @@ PACMAN_PKGS=(
     # Fonts
     noto-fonts noto-fonts-cjk ttf-dejavu
 
+    # Communication
+    discord telegram-desktop
+
     # Browsers
     chromium firefox
 
@@ -248,7 +251,7 @@ PACMAN_PKGS=(
     nmap smbclient hashcat impacket proxychains-ng
     openbsd-netcat gawk nano vim lm_sensors binwalk
     bettercap aircrack-ng socat maven
-    metasploit
+    metasploit wireshark-qt tcpdump
     flameshot xclip
     wireguard-tools gnome-shell-extensions gnome-shell-extension-appindicator
     ufw gufw
