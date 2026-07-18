@@ -13,4 +13,3 @@ burpsuite
 visual-studio-code-bin
 gnome-shell-extension-no-overview
 gnome-shell-extension-clipboard-history
-gdm-settings
