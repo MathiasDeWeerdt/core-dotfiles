@@ -253,6 +253,7 @@ PACMAN_PKGS=(
     bettercap aircrack-ng socat maven
     metasploit wireshark-qt tcpdump
     flameshot xclip
+    orchis-theme
     wireguard-tools gnome-shell-extensions gnome-shell-extension-appindicator
     ufw gufw
 )
@@ -619,6 +620,13 @@ if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]
         fi
 
         log "Wallpapers configured (desktop, lockscreen, login)"
+
+        # Orchis shell theme (transparent floating top bar)
+        if [[ -d /usr/share/themes/Orchis-Dark ]]; then
+            gsettings set org.gnome.shell.extensions.user-theme name 'Orchis-Dark' 2>/dev/null || true
+            gsettings set org.gnome.desktop.interface gtk-theme 'Orchis-Dark' 2>/dev/null || true
+            log "Shell theme: Orchis-Dark"
+        fi
     fi
 fi
 
