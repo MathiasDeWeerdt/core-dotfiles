@@ -59,6 +59,10 @@ noto-fonts
 noto-fonts-cjk
 ttf-dejavu
 
+# Communication
+discord
+telegram-desktop
+
 # Browsers
 chromium
 firefox
@@ -80,6 +84,8 @@ aircrack-ng
 socat
 maven
 metasploit
+wireshark-qt
+tcpdump
 flameshot
 xclip
 wireguard-tools
