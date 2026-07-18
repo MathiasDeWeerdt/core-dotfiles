@@ -300,6 +300,7 @@ AUR_PKGS=(
     visual-studio-code-bin
     gnome-shell-extension-no-overview
     gnome-shell-extension-clipboard-history
+    gdm-settings
 )
 
 info "Installing ${#AUR_PKGS[@]} AUR packages..."
