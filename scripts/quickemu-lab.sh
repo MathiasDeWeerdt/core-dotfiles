@@ -30,11 +30,9 @@ warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 # extra_flags: passed to quickget as additional args
 
 VMS=(
-    # ── Ubuntu ──────────────────────────────────────────────────
+    # ── Ubuntu (desktop only — quickget doesn't support server) ──
     "ubuntu 26.04  desktop  64G  4  2"
-    "ubuntu 26.04  server   32G  4  2  --edition server"
     "ubuntu 24.04  desktop  64G  4  2"
-    "ubuntu 24.04  server   32G  4  2  --edition server"
 
     # ── Windows ─────────────────────────────────────────────────
     "windows 11    default  128G 4  2"
@@ -87,10 +85,8 @@ cmd_create() {
         mkdir -p "$vm_path"
 
         # Download ISO + create config using quickget
-        if [[ -n "$extra" ]]; then
-            quickget "$os" "$release" "$extra" --path "$vm_path" 2>&1 | tail -3
-        elif [[ "$edition" != "default" ]]; then
-            quickget "$os" "$release" "$edition" --path "$vm_path" 2>&1 | tail -3
+        if [[ "$edition" != "default" ]]; then
+            quickget "$os" "$release" --path "$vm_path" 2>&1 | tail -3
         else
             quickget "$os" "$release" --path "$vm_path" 2>&1 | tail -3
         fi
