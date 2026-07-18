@@ -196,7 +196,16 @@ fi
 # ── 1. System packages (official repos) ─────────────────────────────
 section() { echo; echo -e "${BLUE}═══ $* ═══${NC}"; echo; }
 
-section "1/10 — System packages (pacman)"
+# Speed up downloads and builds
+if ! grep -q '^ParallelDownloads' /etc/pacman.conf 2>/dev/null; then
+    info "Enabling parallel downloads in pacman..."
+    sudo sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 5/' /etc/pacman.conf
+fi
+if ! grep -q '^MAKEFLAGS' /etc/makepkg.conf 2>/dev/null; then
+    echo "MAKEFLAGS=\"-j\$(nproc)\"" | sudo tee -a /etc/makepkg.conf >/dev/null
+fi
+
+section "1/11 — System packages (pacman)"
 
 if $SKIP_PACKAGES; then
     log "Skipping package installs (--skip-packages)"
@@ -249,7 +258,7 @@ log "Official packages installed"
 fi  # SKIP_PACKAGES
 
 # ── 2. AUR helper (yay) ─────────────────────────────────────────────
-section "2/10 — AUR helper"
+section "2/11 — AUR helper"
 
 if $SKIP_PACKAGES; then
     log "Skipping AUR helper (--skip-packages)"
@@ -266,7 +275,7 @@ else
 fi
 
 # ── 3. AUR packages ─────────────────────────────────────────────────
-section "3/10 — AUR packages"
+section "3/11 — AUR packages"
 
 if $SKIP_PACKAGES; then
     log "Skipping AUR packages (--skip-packages)"
@@ -281,12 +290,11 @@ AUR_PKGS=(
     netexec
     bettercap-ui
     quickemu
-    quickgui
     burpsuite
 )
 
 info "Installing ${#AUR_PKGS[@]} AUR packages..."
-yay -S --needed --noconfirm "${AUR_PKGS[@]}"
+yay -S --needed --noconfirm --answerclean All --answerdiff None --combinedupgrade "${AUR_PKGS[@]}"
 log "AUR packages installed"
 fi  # SKIP_PACKAGES
 
@@ -294,7 +302,7 @@ fi  # SKIP_PACKAGES
 # Place your burpsuite_pro*.jar in ~/Burpsuite-Professional/ manually.
 
 # ── 4. Oh My Zsh ────────────────────────────────────────────────────
-section "4/10 — Oh My Zsh + plugins"
+section "4/11 — Oh My Zsh + plugins"
 
 if [[ -d "$HOME/.oh-my-zsh" ]]; then
     log "Oh My Zsh already installed"
@@ -334,7 +342,7 @@ else
 fi
 
 # ── 5. Tmux Plugin Manager ──────────────────────────────────────────
-section "5/10 — Tmux Plugin Manager"
+section "5/11 — Tmux Plugin Manager"
 
 TPM_DIR="$HOME/.tmux/plugins/tpm"
 if [[ -d "$TPM_DIR" ]]; then
@@ -356,7 +364,7 @@ else
 fi
 
 # ── 6. Fonts — MesloLGS NF ──────────────────────────────────────────
-section "6/10 — Nerd Fonts"
+section "6/11 — Nerd Fonts"
 
 FONT_DIR="$HOME/.local/share/fonts"
 if ls "$FONT_DIR"/MesloLGS*.ttf >/dev/null 2>&1; then
@@ -367,7 +375,7 @@ fi
 fc-cache -fv "$FONT_DIR" >/dev/null 2>&1 || true
 
 # ── 7. Language runtimes ────────────────────────────────────────────
-section "7/10 — Language runtimes"
+section "7/11 — Language runtimes"
 
 # Node.js via nvm
 export NVM_DIR="$HOME/.nvm"
@@ -412,7 +420,7 @@ if command -v archlinux-java &>/dev/null; then
 fi
 
 # ── 8. Firewall ──────────────────────────────────────────────────────
-section "8/10 — Firewall (ufw)"
+section "8/11 — Firewall (ufw)"
 
 if systemctl is-active --quiet ufw 2>/dev/null; then
     log "ufw already running"
@@ -504,15 +512,14 @@ cd "$DOTFILES"
 
 STOW_PACKAGES=(zsh p10k foot tmux git fonts local-bin flameshot)
 
-for pkg in "${STOW_PACKAGES[@]}"; do
-    info "Stowing: $pkg"
-    stow -R "$pkg" 2>/dev/null || stow "$pkg"
-done
+info "Stowing dotfiles..."
+stow -d "$DOTFILES" -t "$HOME" -R --adopt "${STOW_PACKAGES[@]}" 2>/dev/null || \
+    stow -d "$DOTFILES" -t "$HOME" --adopt "${STOW_PACKAGES[@]}"
 
 log "Dotfiles deployed"
 
 # ── GNOME keybindings ────────────────────────────────────────────────
-if command -v gsettings &>/dev/null && [[ "$XDG_CURRENT_DESKTOP" =~ GNOME ]]; then
+if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]; then
     info "Configuring GNOME shortcuts..."
 
     setup_keybinding() {
