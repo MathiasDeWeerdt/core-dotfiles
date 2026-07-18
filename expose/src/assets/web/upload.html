@@ -1,0 +1,55 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>expose / upload</title>
+<style>@@CSS@@</style></head><body>
+
+<div class="shell">
+  <header>
+    <span class="id"><b>expose</b></span>
+    <span class="pipe">/</span>
+    <span class="path" id="hpath">&hellip;</span>
+  </header>
+
+  <div class="ctx" id="ctx"></div>
+
+  <div class="sep"><span>upload</span></div>
+
+  <div class="drop" id="drop">
+    <p>Drop files or <a id="browse">select</a></p>
+    <input type="file" id="fi" multiple>
+  </div>
+
+  <div class="queue" id="queue"></div>
+  <div class="qn" id="qn"></div>
+
+  <div class="acts" id="acts">
+    <button class="abtn" id="send">Send</button>
+    <button class="aclr" id="clr">clear</button>
+  </div>
+
+  <div class="prog" id="prog"><i id="bar"></i></div>
+  <div class="msg" id="msg"></div>
+
+  <div class="div" id="divider"><span>on disk</span></div>
+  <div class="disk" id="disk"></div>
+  <div class="dn" id="dn"></div>
+</div>
+
+<footer>expose &mdash; uploads save to ~/Downloads/expose</footer>
+
+<div class="lp collapsed" id="lp">
+  <div class="lp-bar" id="lp-bar">
+    <span class="lp-title">log</span>
+    <span class="lp-badge" id="lp-badge"></span>
+    <input class="lp-search" id="lp-search" type="text" placeholder="filter&hellip;" autocomplete="off" spellcheck="false">
+    <div class="lp-acts">
+      <button class="lp-btn" id="lp-pause" title="Pause polling">pause</button>
+      <button class="lp-btn" id="lp-export" title="Copy log as JSON">export</button>
+      <button class="lp-btn" id="lp-clear" title="Clear log">clear</button>
+    </div>
+  </div>
+  <div class="lp-body" id="lp-body">
+    <div class="lp-empty" id="lp-empty">waiting for requests&hellip;</div>
+  </div>
+</div>
+
+<script>@@JS@@</script></body></html>

@@ -1,0 +1,13 @@
+# AUR packages
+# Install with: yay -S --needed - < packages/aur.txt
+
+claude-code
+opencode-bin
+jdk8-openjdk
+jdk11-openjdk
+google-chrome
+netexec
+bettercap-ui
+quickemu
+quickgui
+burpsuite

@@ -1,0 +1,40 @@
+#!/bin/bash
+# Launch a preconfigured dev session — all windows ready to go.
+# Usage: dev (or call directly)
+#        dev-session --boot  (systemd: create only, don't attach)
+
+SESSION="dev"
+BOOT_MODE=false
+
+[[ "$1" == "--boot" ]] && BOOT_MODE=true
+
+# Don't create if the session already exists — just attach
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    $BOOT_MODE && exit 0  # Already exists, nothing to do on boot
+    tmux attach-session -t "$SESSION"
+    exit 0
+fi
+
+# Window 1: Opencode in home dir
+tmux new-session -d -s "$SESSION" -n "Opencode" -c "$HOME"
+tmux send-keys -t "$SESSION:Opencode" "opencode" Enter
+
+# Window 2: Opencode in jimberfw
+tmux new-window -t "$SESSION" -n "JimberFW" -c "/home/mathias/Documents/jimber/jimberfw"
+tmux send-keys -t "$SESSION:JimberFW" "opencode" Enter
+
+# Window 3: Opencode in signalserver
+tmux new-window -t "$SESSION" -n "SignalServer" -c "/home/mathias/Documents/jimber/jimberfw_signalserver"
+tmux send-keys -t "$SESSION:SignalServer" "opencode" Enter
+
+# Window 4: Regular CLI
+tmux new-window -t "$SESSION" -n "CLI"
+
+# Jump back to first window
+tmux select-window -t "$SESSION:Opencode"
+
+# Boot mode: create session silently, don't attach
+$BOOT_MODE && exit 0
+
+# Attach
+tmux attach-session -t "$SESSION"

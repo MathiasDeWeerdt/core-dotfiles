@@ -1,0 +1,18 @@
+#!/bin/sh
+# Burp Suite Community Edition launcher
+BURP_DIR="$HOME/Burpsuite-Community"
+JAR=$(ls "$BURP_DIR"/burpsuite_community*.jar 2>/dev/null | head -1)
+
+# Fallback: check for burpsuite (generic name from AUR)
+if [ -z "$JAR" ]; then
+    JAR=$(find /usr/share/burpsuite -name 'burpsuite*.jar' 2>/dev/null | head -1)
+fi
+
+if [ -z "$JAR" ]; then
+    echo "Burp Suite not found." >&2
+    echo "Install: yay -S burpsuite" >&2
+    echo "Or place your jar in $BURP_DIR" >&2
+    exit 1
+fi
+
+java -jar "$JAR" &

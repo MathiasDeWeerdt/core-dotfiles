@@ -1,0 +1,6 @@
+[user]
+	# Set these globally — this file is a template.
+	#   git config --global user.name "Your Name"
+	#   git config --global user.email "you@example.com"
+	# name = Your Name
+	# email = you@example.com
