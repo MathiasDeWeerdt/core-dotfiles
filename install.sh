@@ -214,7 +214,7 @@ else
 PACMAN_PKGS=(
     # Shell & terminal
     zsh git curl wget
-    foot tmux fzf fd ripgrep jq zoxide tldr
+    foot tmux fzf fd ripgrep jq zoxide
 
     # CLI tools
     htop fastfetch ncdu wl-clipboard stow
@@ -223,8 +223,8 @@ PACMAN_PKGS=(
     # Dev runtimes
     go dotnet-sdk python python-pip python-pipx python-setuptools
 
-    # Java — all LTS versions
-    jdk17-openjdk jdk21-openjdk jdk25-openjdk
+    # Java — all LTS versions (including latest)
+    jdk17-openjdk jdk21-openjdk jdk-openjdk
 
     # Docker
     docker docker-buildx docker-compose
@@ -414,9 +414,12 @@ fi
 if command -v archlinux-java &>/dev/null; then
     info "Available Java versions:"
     archlinux-java status
-    # Default to latest LTS (25)
-    sudo archlinux-java set java-25-openjdk 2>/dev/null || true
-    log "Java default set to 25"
+    # Default to the latest installed JDK
+    LATEST_JDK=$(archlinux-java status 2>/dev/null | grep -oP 'java-\d+-openjdk' | sort -V | tail -1)
+    if [[ -n "$LATEST_JDK" ]]; then
+        sudo archlinux-java set "$LATEST_JDK" 2>/dev/null || true
+        log "Java default set to $LATEST_JDK"
+    fi
 fi
 
 # ── 8. Firewall ──────────────────────────────────────────────────────
