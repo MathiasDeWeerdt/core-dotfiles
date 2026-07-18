@@ -34,8 +34,8 @@ VMS=(
     "ubuntu 26.04  desktop  64G  4  2"
     "ubuntu 24.04  desktop  64G  4  2"
 
-    # ── Windows ─────────────────────────────────────────────────
-    "windows 11    default  128G 4  2"
+    # ── Windows (needs language edition instead of --path) ──────
+    "windows 11    \"English (United States)\"  128G 4  2"
 
     # ── macOS Tahoe ─────────────────────────────────────────────
     "macos   tahoe  default  64G  4  2"
@@ -85,7 +85,12 @@ cmd_create() {
         mkdir -p "$vm_path"
 
         # Download ISO + create config using quickget
-        quickget "$os" "$release" --path "$vm_path"
+        if [[ "$os" == "windows" ]]; then
+            # Windows uses language edition, no --path
+            (cd "$vm_path" && quickget "$os" "$release" "$edition")
+        else
+            quickget "$os" "$release" --path "$vm_path"
+        fi
 
         # Patch the generated config with our custom settings
         local conf=$(find_conf "$vm_path")
