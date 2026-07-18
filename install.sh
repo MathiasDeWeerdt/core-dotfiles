@@ -434,12 +434,9 @@ fi
 # ── 8. Power & firewall ─────────────────────────────────────────────
 section "8/11 — Power & firewall"
 
-# Set performance power profile
-if command -v powerprofilesctl &>/dev/null; then
-    info "Setting power profile to performance..."
-    powerprofilesctl set performance 2>/dev/null && \
-        log "Power profile: performance" || \
-        warn "Could not set power profile"
+# Set performance power profile (needs D-Bus — best-effort)
+if command -v powerprofilesctl &>/dev/null && timeout 5 powerprofilesctl set performance 2>/dev/null; then
+    log "Power profile: performance"
 fi
 
 # ufw firewall
@@ -492,8 +489,7 @@ NPM_GLOBALS=(
 )
 
 for pkg in "${NPM_GLOBALS[@]}"; do
-    pkg_name=$(echo "$pkg" | sed 's/@//g' | tr '/' '-')
-    if npm list -g --depth=0 2>/dev/null | grep -q "$pkg_name"; then
+    if npm list -g "$pkg" --depth=0 2>/dev/null | grep -q "$pkg@"; then
         log "npm: $pkg already installed"
     else
         info "npm: installing $pkg..."
