@@ -38,8 +38,10 @@ done
 echo '</background>' >> "$xml"
 
 gsettings set org.gnome.desktop.background picture-uri "file://$xml"
+gsettings set org.gnome.desktop.background picture-uri-dark "file://$xml"
 gsettings set org.gnome.desktop.background picture-options 'zoom'
 gsettings set org.gnome.desktop.screensaver picture-uri "file://$xml"
+gsettings set org.gnome.desktop.screensaver picture-uri-dark "file://$xml"
 log "Wallpapers: slideshow active"
 
 # Orchis theme
