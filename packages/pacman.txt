@@ -13,7 +13,6 @@ fd
 ripgrep
 jq
 zoxide
-tldr
 
 # CLI tools
 htop
@@ -33,11 +32,12 @@ dotnet-sdk
 python
 python-pip
 python-pipx
+python-setuptools
 
 # Java LTS versions (official repos)
 jdk17-openjdk
 jdk21-openjdk
-jdk25-openjdk
+jdk-openjdk
 
 # Docker
 docker
