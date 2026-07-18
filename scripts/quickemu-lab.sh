@@ -55,6 +55,12 @@ vm_name() {
     fi
 }
 
+# Find the config file quickget generated (naming varies by OS)
+find_conf() {
+    local dir="$1"
+    find "$dir" -maxdepth 1 -name '*.conf' ! -name '.*' 2>/dev/null | head -1
+}
+
 # ── Create all VMs ───────────────────────────────────────────────────
 
 cmd_create() {
@@ -72,7 +78,8 @@ cmd_create() {
         echo ""
         info "[$count/$total] $name"
 
-        if [[ -f "$vm_path/${name}.conf" ]]; then
+        local existing_conf=$(find_conf "$vm_path")
+        if [[ -n "$existing_conf" ]]; then
             log "Already configured — skipping"
             continue
         fi
@@ -89,8 +96,8 @@ cmd_create() {
         fi
 
         # Patch the generated config with our custom settings
-        local conf="$vm_path/${name}.conf"
-        if [[ -f "$conf" ]]; then
+        local conf=$(find_conf "$vm_path")
+        if [[ -n "$conf" && -f "$conf" ]]; then
             # RAM and CPU
             sed -i "s/^ram=.*/ram=\"${ram}G\"/" "$conf" 2>/dev/null || true
             sed -i "s/^cpu_cores=.*/cpu_cores=\"$cores\"/" "$conf" 2>/dev/null || true
@@ -150,9 +157,9 @@ cmd_list() {
     for entry in "${VMS[@]}"; do
         read -r os release edition disk ram cores extra <<< "$entry"
         local name=$(vm_name "$os" "$release" "$edition")
-        local conf="$VM_DIR/$name/${name}.conf"
+        local conf=$(find_conf "$VM_DIR/$name")
 
-        if [[ -f "$conf" ]]; then
+        if [[ -n "$conf" && -f "$conf" ]]; then
             found=true
             local status="ready"
             [[ ! -f "$VM_DIR/$name/disk.qcow2" ]] && status="config-only (run 'create' to download ISO)"
@@ -174,9 +181,9 @@ cmd_snapshot() {
     for entry in "${VMS[@]}"; do
         read -r os release edition disk ram cores extra <<< "$entry"
         local name=$(vm_name "$os" "$release" "$edition")
-        local conf="$VM_DIR/$name/${name}.conf"
+        local conf=$(find_conf "$VM_DIR/$name")
 
-        if [[ -f "$conf" ]]; then
+        if [[ -n "$conf" && -f "$conf" ]]; then
             info "Snapshot '$tag' → $name"
             quickemu --vm "$conf" --snapshot create "$tag" 2>&1 | tail -1 || warn "Snapshot failed for $name (VM may need to be running)"
         fi
