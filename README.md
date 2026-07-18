@@ -3,7 +3,7 @@
 One-command terminal environment for **CachyOS / Arch Linux** (GNOME + Wayland).
 
 ```bash
-git clone https://github.com/mathias/core-dotfiles ~/Documents/core-dotfiles
+git clone https://github.com/MathiasDeWeerdt/core-dotfiles ~/Documents/core-dotfiles
 cd ~/Documents/core-dotfiles && ./install.sh
 ```
 
@@ -26,11 +26,11 @@ cd ~/Documents/core-dotfiles && ./install.sh
 ### 60+ CLI tools
 | Category | Tools |
 |----------|-------|
-| Shell | `fzf` `fd` `ripgrep` `jq` `zoxide` `tldr` `keychain` `stow` |
+| Shell | `fzf` `fd` `ripgrep` `jq` `zoxide` `keychain` `stow` |
 | Monitoring | `htop` `fastfetch` `ncdu` `lm_sensors` |
 | Editing | `vim` `nano` `tree` |
 | Networking | `nmap` `smbclient` `openbsd-netcat` `aria2` `rsync` `curl` `wget` |
-| Security | `bettercap` `aircrack-ng` `hashcat` `python-impacket` `proxychains-ng` `netexec` `binwalk` `ufw` `gufw` |
+| Security | `metasploit` `bettercap` `aircrack-ng` `hashcat` `impacket` `proxychains-ng` `netexec` `binwalk` `ufw` `gufw` |
 | Transfer | `flameshot` `xclip` `wl-clipboard` |
 | Browsers | `chromium` `firefox` `google-chrome` |
 
@@ -43,7 +43,7 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | `codex` (`@openai/codex`) | npm global | OpenAI |
 | `claude-code` | AUR | Anthropic |
 | `opencode` | AUR | OpenCode |
-| `copilot` | pipx | GitHub |
+| `copilot` | gh extension | GitHub |
 
 ### Dev runtimes
 | Runtime | Manager | Versions |
@@ -53,17 +53,17 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | Rust | rustup | Stable |
 | Python | pacman | Latest + pipx |
 | .NET | pacman | Latest SDK |
-| Java | archlinux-java | JDK 8, 11, 17, 21, 25 |
+| Java | archlinux-java | JDK 8, 11, 17, 21, 26 |
 | Bun | npm global | Latest |
 
 ### Infrastructure
 - **Docker** — Engine + buildx + compose, user in `docker` group
-- **QEMU** — full stack with `virt-manager` GUI + `quickemu`/`quickgui`
+- **QEMU** — full stack with `virt-manager` GUI + `quickemu`
 - **Firewall** — `ufw` enabled (deny incoming, allow outgoing) + `gufw` GUI
 
 ### Virtual machines
 Run `./scripts/quickemu-lab.sh create` to provision:
-- Ubuntu 26.04 desktop/server, Ubuntu 24.04 desktop/server
+- Ubuntu 26.04 desktop, Ubuntu 24.04 desktop
 - Windows 11, macOS Tahoe
 
 All thin-provisioned qcow2, user-mode NAT networking (stable across WiFi/Ethernet switches).
@@ -75,7 +75,7 @@ All thin-provisioned qcow2, user-mode NAT networking (stable across WiFi/Etherne
 | `Ctrl+Shift+A` | Screenshot (flameshot) |
 
 ### Custom tooling
-- `expose` — serve files/dirs over HTTP with request inspection (2043-line bash script, full source in `expose/`)
+- `expose` — serve files/dirs over HTTP with request inspection (full source in `expose/`)
 - `flameshot-gui` — screenshot → clipboard in one shot
 - `killport <port>` — kill whatever's listening on a port
 - `dev` — launch pre-configured tmux dev session
@@ -84,7 +84,8 @@ All thin-provisioned qcow2, user-mode NAT networking (stable across WiFi/Etherne
 
 ```
 core-dotfiles/
-├── install.sh                   # Bootstrap (569 lines, 11 steps)
+├── install.sh                   # Bootstrap (610 lines, 11 steps)
+├── update.sh                    # Upgrade everything in one shot
 ├── env.example                  # Copy to env, customize
 ├── README.md
 ├── AGENTS.md                    # Coding agent setup & API keys
@@ -100,8 +101,7 @@ core-dotfiles/
 │
 ├── expose/       → Full source for the expose HTTP tool
 ├── scripts/      → quickemu-lab.sh (VM fleet manager)
-├── packages/     → pacman.txt, aur.txt, npm.txt
-└── burp/         → (gitignored — local only)
+└── packages/     → pacman.txt, aur.txt, npm.txt
 ```
 
 Uses **GNU Stow** — each directory symlinks into `$HOME`. Rerun anytime.
@@ -113,6 +113,8 @@ Uses **GNU Stow** — each directory symlinks into `$HOME`. Rerun anytime.
 ./install.sh --help             # Show flags
 ./install.sh --dry-run          # Preview only
 ./install.sh --skip-packages    # Re-deploy configs, skip package installs
+
+./update.sh                     # Upgrade everything to latest
 ```
 
 Configuration lives in `env` (copy from `env.example`):
@@ -135,4 +137,5 @@ SSH_KEY_TYPE="ed25519"
 - **Docker**: log out and back in for group membership
 - **API keys**: see [AGENTS.md](AGENTS.md)
 - **VMs**: `./scripts/quickemu-lab.sh create`
-- **Burp Suite**: community edition installed via AUR, launcher in `~/.local/bin/burpsuitepro`
+- **Burp Suite**: community edition via AUR, launcher at `~/.local/bin/burpsuitepro`
+- **Updates**: `./update.sh` keeps everything current
