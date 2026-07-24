@@ -5,3 +5,4 @@ codewhale
 @openai/codex
 bun
 @nestjs/cli
+@earendil-works/pi-coding-agent

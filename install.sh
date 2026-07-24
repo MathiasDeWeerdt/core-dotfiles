@@ -144,7 +144,7 @@ echo -e "  Target: ${GREEN}${PRETTY_NAME:-$DISTRO}${NC}  |  User: ${GREEN}$TARGE
 echo ""
 echo -e "  This will:"
 echo -e "    • Install ${BLUE}55+${NC} system packages"
-echo -e "    • Install ${BLUE}5${NC} CLI coding agents"
+echo -e "    • Install ${BLUE}6${NC} CLI coding agents"
 echo -e "    • Configure zsh, tmux, foot, git"
 echo -e "    • Set hostname to ${YELLOW}${DESIRED_HOSTNAME}${NC}"
 echo -e "    • Change default shell to ${YELLOW}zsh${NC}"
@@ -301,12 +301,22 @@ AUR_PKGS=(
     gnome-shell-extension-no-overview
     gnome-shell-extension-clipboard-history
     gdm-settings
+    preload
 )
 
 info "Installing ${#AUR_PKGS[@]} AUR packages..."
 yay -S --needed --noconfirm --answerclean All --answerdiff None --combinedupgrade "${AUR_PKGS[@]}"
 log "AUR packages installed"
 fi  # SKIP_PACKAGES
+
+# Enable preload daemon (adaptive readahead — faster app startup)
+if systemctl is-active --quiet preload 2>/dev/null; then
+    log "preload daemon already running"
+elif command -v preload &>/dev/null; then
+    info "Enabling preload daemon..."
+    sudo systemctl enable --now preload
+    log "preload daemon started"
+fi
 
 # Burp Suite Professional — launcher is stowed to ~/.local/bin/.
 # Place your burpsuite_pro*.jar in ~/Burpsuite-Professional/ manually.
@@ -487,6 +497,7 @@ NPM_GLOBALS=(
     "@openai/codex"
     bun
     "@nestjs/cli"
+    "@earendil-works/pi-coding-agent"
 )
 
 for pkg in "${NPM_GLOBALS[@]}"; do
@@ -530,12 +541,106 @@ done
 
 log "Coding agents ready"
 
+# ── Wire global memory (~/.memory.md) into each harness ─────────────
+# Creates harness-specific global instruction files that point to the
+# single source of truth at ~/.memory.md. Idempotent — won't overwrite
+# existing files so you can customize per-harness instructions safely.
+
+section "10b/11 — Cross-harness memory wiring"
+
+MEMORY_REF_LINE="Follow all preferences in ~/.memory.md. At the start of every session, read that file and incorporate its content."
+CLAUDE_IMPORT="@~/.memory.md"
+
+# Claude Code — native @import syntax, bulletproof
+CLAUDE_GLOBAL="$HOME/.claude/CLAUDE.md"
+if [[ -f "$CLAUDE_GLOBAL" ]]; then
+    log "Claude Code global CLAUDE.md already exists — skipping"
+else
+    info "Wiring Claude Code → ~/.memory.md (native @import)..."
+    mkdir -p "$(dirname "$CLAUDE_GLOBAL")"
+    cat > "$CLAUDE_GLOBAL" <<'CLAUDE_EOF'
+@~/.memory.md
+
+# Claude Code — Global Instructions
+# Add Claude-specific preferences below this line.
+CLAUDE_EOF
+    log "Claude Code wired"
+fi
+
+# Codex — instruction-based reference
+CODEX_GLOBAL="$HOME/.codex/AGENTS.md"
+if [[ -f "$CODEX_GLOBAL" ]]; then
+    log "Codex global AGENTS.md already exists — skipping"
+else
+    info "Wiring Codex → ~/.memory.md..."
+    mkdir -p "$(dirname "$CODEX_GLOBAL")"
+    cat > "$CODEX_GLOBAL" <<CODEX_EOF
+# Codex — Global Instructions
+$MEMORY_REF_LINE
+
+# Add Codex-specific preferences below this line.
+CODEX_EOF
+    log "Codex wired"
+fi
+
+# Pi — instruction-based reference
+PI_GLOBAL="$HOME/.pi/agent/AGENTS.md"
+if [[ -f "$PI_GLOBAL" ]]; then
+    log "Pi global AGENTS.md already exists — skipping"
+else
+    info "Wiring Pi → ~/.memory.md..."
+    mkdir -p "$(dirname "$PI_GLOBAL")"
+    cat > "$PI_GLOBAL" <<PI_EOF
+# Pi — Global Instructions
+$MEMORY_REF_LINE
+
+# Add Pi-specific preferences below this line.
+PI_EOF
+    log "Pi wired"
+fi
+
+# OpenCode — instruction-based reference
+OPENCODE_GLOBAL="$HOME/.config/opencode/AGENTS.md"
+if [[ -f "$OPENCODE_GLOBAL" ]]; then
+    log "OpenCode global AGENTS.md already exists — skipping"
+else
+    info "Wiring OpenCode → ~/.memory.md..."
+    mkdir -p "$(dirname "$OPENCODE_GLOBAL")"
+    cat > "$OPENCODE_GLOBAL" <<OC_EOF
+# OpenCode — Global Instructions
+$MEMORY_REF_LINE
+
+# Add OpenCode-specific preferences below this line.
+OC_EOF
+    log "OpenCode wired"
+fi
+
+# Codewhale — append memory reference to existing instructions.md
+CODEWHALE_INSTRUCTIONS="$HOME/.codewhale/instructions.md"
+CODEWHALE_REF="At session start, read ~/.memory.md and treat it as authoritative user preferences. These preferences override defaults but yield to explicit current-turn requests."
+if [[ -f "$CODEWHALE_INSTRUCTIONS" ]]; then
+    if grep -qF '~/.memory.md' "$CODEWHALE_INSTRUCTIONS" 2>/dev/null; then
+        log "Codewhale already references ~/.memory.md"
+    else
+        info "Wiring Codewhale → ~/.memory.md..."
+        printf '\n%s\n' "$CODEWHALE_REF" >> "$CODEWHALE_INSTRUCTIONS"
+        log "Codewhale wired"
+    fi
+else
+    info "Creating Codewhale instructions.md with memory reference..."
+    mkdir -p "$(dirname "$CODEWHALE_INSTRUCTIONS")"
+    echo "$CODEWHALE_REF" > "$CODEWHALE_INSTRUCTIONS"
+    log "Codewhale wired"
+fi
+
+log "Harness memory wiring complete"
+
 # ── 10. Deploy dotfiles (stow) ──────────────────────────────────────
 section "11/11 — Dotfiles (stow)"
 
 cd "$DOTFILES"
 
-STOW_PACKAGES=(zsh p10k foot tmux git fonts local-bin flameshot)
+STOW_PACKAGES=(zsh p10k foot tmux git fonts local-bin flameshot memory)
 
 info "Stowing dotfiles..."
 stow -d "$DOTFILES" -t "$HOME" -R --adopt "${STOW_PACKAGES[@]}" 2>/dev/null || \

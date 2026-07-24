@@ -1,7 +1,11 @@
 # CLI Coding Agents
 
-Five coding agents are installed and ready to use. Each has its own
+Six coding agents are installed and ready to use. Each has its own
 strengths — pick the right tool for the job.
+
+> **Cross-harness memory**: All agents load preferences from `~/.memory.md`.
+> Edit one file to update identity, opinions, and development philosophy
+> across every agent at once. Stowed from `memory/.memory.md`.
 
 ## Agent overview
 
@@ -12,6 +16,7 @@ strengths — pick the right tool for the job.
 | **Claude Code** | `claude` | Anthropic | Large codebases, long sessions, design work |
 | **OpenCode** | `opencode` | OpenCode | Open-source agent, terminal-native, configurable |
 | **Copilot CLI** | `copilot` | GitHub | Shell command generation, git commit messages, PRs |
+| **Pi** | `pi` | Earendil | Minimal harness, extensible via TS extensions/skills/packages |
 
 ## Setting up API keys
 
@@ -58,6 +63,14 @@ export COPILOT_PROVIDER_MODEL_ID="deepseek-v4-pro"
 export COPILOT_PROVIDER_WIRE_MODEL="deepseek/deepseek-v4-pro"
 ```
 
+### Pi (Earendil)
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+Pi shares the same API keys as the other agents (OpenAI, Anthropic, etc.).
+Configure providers via `pi config` or environment variables.
+[Homepage →](https://pi.dev)
+
 ## Quick reference
 
 ```bash
@@ -70,6 +83,7 @@ codewhale "add input validation to login form"
 codex "refactor this function to async"
 claude "review this PR for security issues"
 opencode "generate unit tests for this module"
+pi "refactor the auth module to use JWT"
 
 # Tmux integration
 # The 'dev' alias launches opencode in pre-configured tmux windows
