@@ -256,6 +256,7 @@ PACMAN_PKGS=(
     orchis-theme
     wireguard-tools gnome-shell-extensions gnome-shell-extension-appindicator
     ufw gufw
+    nautilus-python
 )
 
 info "Installing ${#PACMAN_PKGS[@]} packages..."
@@ -302,6 +303,7 @@ AUR_PKGS=(
     gnome-shell-extension-clipboard-history
     gdm-settings
     preload
+    nautilus-open-any-terminal
 )
 
 info "Installing ${#AUR_PKGS[@]} AUR packages..."

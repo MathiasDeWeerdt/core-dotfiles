@@ -20,6 +20,17 @@ info "Mouse → flat (no acceleration)"
 gsettings set org.gnome.desktop.peripherals.mouse accel-profile flat
 log "Mouse: $(gsettings get org.gnome.desktop.peripherals.mouse accel-profile)"
 
+# Default terminal → foot (Nautilus "Open in Console")
+info "Terminal → foot"
+gsettings set org.gnome.desktop.default-applications.terminal exec foot
+gsettings set org.gnome.desktop.default-applications.terminal exec-arg ''
+# nautilus-open-any-terminal extension: set foot as the context-menu terminal
+if command -v nautilus &>/dev/null; then
+    gsettings set com.github.stunkymonkey.nautilus-open-any-terminal terminal foot 2>/dev/null || true
+    nautilus -q 2>/dev/null || true  # restart to apply
+fi
+log "Terminal: foot"
+
 # Wallpapers
 BG_DIR="$HOME/.local/share/backgrounds"
 DOTFILES="$HOME/Documents/core-dotfiles"

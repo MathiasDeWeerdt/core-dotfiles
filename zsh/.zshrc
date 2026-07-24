@@ -25,8 +25,8 @@ unsetopt correct_all # disables argument correction too
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
-export JIMBER_PAT="d719cbbb2d6f7b3b5563c78c2bb31d353b61443e13c2db8c6b9dcff2f1393472"
-export PATH="$JIMBER_PAT:$PATH"
+export JIMBER_PAT="your-jimber-pat-token-here"
+# export PATH="$JIMBER_PAT:$PATH"
 
 # CodeWhale search provider fallback aliases
 alias cw='codewhale'
