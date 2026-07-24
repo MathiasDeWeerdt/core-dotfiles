@@ -93,3 +93,4 @@ gnome-shell-extensions
 gnome-shell-extension-appindicator
 ufw
 gufw
+nautilus-python

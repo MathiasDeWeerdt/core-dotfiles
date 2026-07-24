@@ -14,3 +14,4 @@ visual-studio-code-bin
 gnome-shell-extension-no-overview
 gnome-shell-extension-clipboard-history
 preload
+nautilus-open-any-terminal
