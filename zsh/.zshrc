@@ -5,145 +5,110 @@ if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
-# ── Path to Oh My Zsh ──────────────────────────────────────────────
-export ZSH="$HOME/.oh-my-zsh"
+# export PATH="$PATH:/home/mathias/.local/bin"
+source /usr/share/cachyos-zsh-config/cachyos-config.zsh
 
-# ── Theme ───────────────────────────────────────────────────────────
-ZSH_THEME="powerlevel10k/powerlevel10k"
-
-# ── Plugins ─────────────────────────────────────────────────────────
-plugins=(
-  git
-  fzf
-  fzf-tab
-  docker
-  docker-compose
-  npm
-  nvm
-  dotnet
-  node
-  ssh
-  tmux
-  zsh-syntax-highlighting
-  zsh-autosuggestions
-  magic-enter
-  encode64
-  extract
-)
-source $ZSH/oh-my-zsh.sh
-
-# ── Smarter filename completion ─────────────────────────────────────
-
-# Show dotfiles in completions
-setopt globdots
-
-# Case-insensitive substring matching for all completions
-zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|=*' 'l:|=* r:|=*'
-
-# fzf-tab: prefer shorter matches first
-zstyle ':fzf-tab:*' fzf-flags --tiebreak=length,begin
-
-# ── Aliases ─────────────────────────────────────────────────────────
-
-# Cross-platform ls: use GNU flags when available, fallback for BSD/macOS
-if ls --group-directories-first &>/dev/null; then
-    alias ls='ls --color=auto --group-directories-first'
-    alias ll='ls -lh --group-directories-first'
-    alias la='ls -lAh --group-directories-first'
-else
-    alias ls='ls -G'
-    alias ll='ls -lhG'
-    alias la='ls -lAhG'
-fi
-
-# Launch the tmux dev session
-alias dev='~/.config/tmux/dev-session'
-
-# ── fzf Ctrl+R history search ────────────────────────────────────────
-if [[ -f /usr/share/fzf/key-bindings.zsh ]]; then
-    source /usr/share/fzf/key-bindings.zsh
-fi
-
-# ── Functions ───────────────────────────────────────────────────────
-
-# Kill process on specified port
-killport() {
-    if [ -z "$1" ]; then
-        echo "Usage: killport <port>"
-        return 1
-    fi
-
-    local port=$1
-    local pids=""
-
-    # Try multiple methods to find the process
-    # Method 1: lsof
-    pids=$(lsof -ti:$port 2>/dev/null)
-
-    # Method 2: fuser (if lsof didn't find anything)
-    if [ -z "$pids" ]; then
-        pids=$(fuser $port/tcp 2>&1 | grep -o '[0-9]*' | head -1)
-    fi
-
-    # Method 3: ss/netstat
-    if [ -z "$pids" ]; then
-        pids=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u | head -1)
-    fi
-
-    if [ -n "$pids" ]; then
-        echo "Found process(es) on port $port: $pids"
-        echo "$pids" | xargs -r kill -9 2>/dev/null
-        echo "Killed process(es) on port $port"
-        sleep 0.5
-    else
-        echo "No process found on port $port"
-        echo "Note: If you still get 'Address already in use', the port might be in TIME_WAIT state."
-        echo "      Wait a few seconds or use 'ss -tan | grep :$port' to check socket states."
-    fi
-}
-
-# ── Prompt ──────────────────────────────────────────────────────────
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
-# ── SSH Agent ───────────────────────────────────────────────────────
-# Load SSH keys into agent automatically
-eval "$(keychain --eval 2>/dev/null | sed '/^ \* /d')"
+export PATH="$PATH:/home/mathias/.local/bin/"
 
-# ── Node.js (nvm) ───────────────────────────────────────────────────
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
-
-# ── PATH ────────────────────────────────────────────────────────────
-export PATH="$HOME/.local/bin:$HOME/go/bin:$PATH"
-
-# ── Rust ────────────────────────────────────────────────────────────
-[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
-
-# ── zoxide (smarter cd) ─────────────────────────────────────────────
+source /usr/share/nvm/init-nvm.sh
 eval "$(zoxide init zsh)"
 
-# ── Magic Enter ─────────────────────────────────────────────────────
-MAGIC_ENTER_GIT_COMMAND='git status -u .'
-MAGIC_ENTER_OTHER_COMMAND='ls -lh .'
-
-# ── Shell integrations ──────────────────────────────────────────────
 # bun completions
-[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
+[ -s "/home/mathias/.bun/_bun" ] && source "/home/mathias/.bun/_bun"
 
-# ── Optional: cloud / AI provider keys ──────────────────────────────
-# Set these in your environment or a separate secrets file.
-#
-#   export COPILOT_PROVIDER_BASE_URL=https://openrouter.ai/api/v1
-#   export COPILOT_PROVIDER_API_KEY=your-openrouter-api-key
-#   export COPILOT_PROVIDER_MODEL_ID=deepseek-v4-pro
-#   export COPILOT_PROVIDER_WIRE_MODEL=deepseek/deepseek-v4-pro
-#   export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_your-token-here
+unsetopt correct     # disables command correction
+unsetopt correct_all # disables argument correction too
 
-# ── Optional: Android SDK (uncomment if needed) ─────────────────────
-# export ANDROID_HOME=/opt/android-sdk
-# export ANDROID_SDK_ROOT=$ANDROID_HOME
-# export PATH=$PATH:$ANDROID_HOME/platform-tools
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+export JIMBER_PAT="d719cbbb2d6f7b3b5563c78c2bb31d353b61443e13c2db8c6b9dcff2f1393472"
+export PATH="$JIMBER_PAT:$PATH"
 
-# ── Optional: Flutter (uncomment if needed) ─────────────────────────
-# export PATH="$HOME/development/flutter/bin:$PATH"
+# CodeWhale search provider fallback aliases
+alias cw='codewhale'
+alias cw-fallback='DEEPSEEK_SEARCH_PROVIDER=duckduckgo codewhale'
+
+# ls with hidden-first sorting: .dirs → dirs → .files → files
+unalias ls 2>/dev/null
+ls() {
+  emulate -L zsh
+  setopt localoptions extendedglob nullglob
+
+  local -a opts targets
+  local default_opts=(--color -h)
+
+  for arg in "$@"; do
+    if [[ "$arg" == -* ]]; then
+      opts+=("$arg")
+    else
+      targets+=("$arg")
+    fi
+  done
+
+  (( ${#targets} )) || targets=(".")
+
+  # Detect -a / -A / --all / --almost-all
+  local show_hidden=false
+  local show_dotdot=false
+  for opt in "${opts[@]}"; do
+    if [[ "$opt" == "--all" ]]; then
+      show_hidden=true; show_dotdot=true
+    elif [[ "$opt" == "--almost-all" ]]; then
+      show_hidden=true
+    elif [[ "$opt" == -*a* && "$opt" != *A* && "$opt" != "--almost-all" ]]; then
+      show_hidden=true; show_dotdot=true
+    elif [[ "$opt" == -*A* && "$opt" != "--all" ]]; then
+      show_hidden=true
+    fi
+  done
+
+  # If any target is not a directory, fall back to normal ls
+  local all_dirs=true
+  for t in "${targets[@]}"; do
+    [[ -d "$t" ]] || { all_dirs=false; break; }
+  done
+
+  if ! $all_dirs; then
+    command ls $default_opts "${opts[@]}" "${targets[@]}"
+    return
+  fi
+
+  local first=true
+  for dir in "${targets[@]}"; do
+    $first || print     # blank line between directories
+    first=false
+
+    (( ${#targets} > 1 )) && print "${dir}:"
+
+    local -a dotdirs dirs dotfiles files
+
+    if $show_hidden; then
+      dotdirs=("$dir"/.*(/))
+      if $show_dotdot; then
+        dotdirs=("$dir/." "$dir/.." $dotdirs)
+      fi
+      dotfiles=("$dir"/.*(^/))
+    fi
+
+    dirs=("$dir"/*(/))
+    files=("$dir"/*(^/))
+
+    local -a all=($dotdirs $dirs $dotfiles $files)
+
+    if (( ${#all} )); then
+      (cd "$dir" && command ls -dU $default_opts "${opts[@]}" -- ${all:t})
+    else
+      command ls -d $default_opts "${opts[@]}" -- "$dir"
+    fi
+  done
+}
+
+# >>> grok installer >>>
+export PATH="$HOME/.grok/bin:$PATH"
+fpath=(~/.grok/completions/zsh $fpath)
+autoload -Uz compinit && compinit -C
+# <<< grok installer <<<

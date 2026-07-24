@@ -27,6 +27,7 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | Category | Tools |
 |----------|-------|
 | Shell | `fzf` `fd` `ripgrep` `jq` `zoxide` `keychain` `stow` |
+| GitHub | `gh` |
 | Monitoring | `htop` `fastfetch` `ncdu` `lm_sensors` |
 | Editing | `vim` `nano` `tree` |
 | Networking | `nmap` `smbclient` `openbsd-netcat` `aria2` `rsync` `curl` `wget` |
@@ -34,7 +35,7 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | Transfer | `flameshot` `xclip` `wl-clipboard` |
 | Browsers | `chromium` `firefox` `google-chrome` |
 
-### 5 CLI coding agents
+### 6 CLI coding agents
 [See AGENTS.md](AGENTS.md) for configuration and API keys.
 
 | Agent | Install | Vendor |
@@ -44,6 +45,7 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | `claude-code` | AUR | Anthropic |
 | `opencode` | AUR | OpenCode |
 | `copilot` | gh extension | GitHub |
+| `pi` (`@earendil-works/pi-coding-agent`) | npm global | Earendil |
 
 ### Dev runtimes
 | Runtime | Manager | Versions |
@@ -80,6 +82,11 @@ All thin-provisioned qcow2, user-mode NAT networking (stable across WiFi/Etherne
 - `killport <port>` — kill whatever's listening on a port
 - `dev` — launch pre-configured tmux dev session
 
+### Global agent memory
+A single `~/.memory.md` feeds identity, preferences, and development philosophy
+into all coding agents (Claude Code via `@import`, Codex/Pi/OpenCode via global
+`AGENTS.md`). Edit one file, all agents pick it up. Stowed from `memory/`.
+
 ## Structure
 
 ```
@@ -89,6 +96,7 @@ core-dotfiles/
 ├── env.example                  # Copy to env, customize
 ├── README.md
 ├── AGENTS.md                    # Coding agent setup & API keys
+├── memory/        → ~/.memory.md           (cross-harness memory)
 │
 ├── zsh/          → ~/.zshrc, .zshenv
 ├── p10k/         → ~/.p10k.zsh           (1,713 lines)
