@@ -149,6 +149,7 @@ serve_dir() {
   export EXPOSE_LOGFILE="$_LOGFILE"
   export EXPOSE_BIND="$BIND"
   export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
+  export EXPOSE_CHAT_FILE="$_CHAT_FILE"
   python3 <<'PYEOF'
 @@INJECT:assets/server.py@@
 PYEOF
