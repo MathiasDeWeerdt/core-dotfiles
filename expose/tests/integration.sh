@@ -7,7 +7,10 @@ TEST_HOME=$(mktemp -d /tmp/expose-tests.XXXXXX)
 export HOME="$TEST_HOME"
 
 cleanup_test() {
-  [[ -n "${SERVER_PID:-}" ]] && kill "$SERVER_PID" 2>/dev/null || true
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    pkill -TERM -P "$SERVER_PID" 2>/dev/null || true
+    kill "$SERVER_PID" 2>/dev/null || true
+  fi
   rm -rf "$TEST_HOME"
 }
 trap cleanup_test EXIT
@@ -21,18 +24,24 @@ with socket.socket() as sock:
 PY
 }
 
+stop_server() {
+  pkill -TERM -P "$SERVER_PID" 2>/dev/null || true
+  kill "$SERVER_PID" 2>/dev/null || true
+  wait "$SERVER_PID"
+  SERVER_PID=""
+}
+
 request_once() {
   local path="$1"
   shift
   local port
   port=$(free_port)
-  "$EXPOSE" --once --bind 127.0.0.1 --port "$port" "$@" \
+  "$EXPOSE" --bind 127.0.0.1 --port "$port" "$@" \
     >"$TEST_HOME/server.out" 2>"$TEST_HOME/server.err" &
   SERVER_PID=$!
   for _ in {1..50}; do
     if curl -fsS "http://127.0.0.1:$port$path" 2>/dev/null; then
-      wait "$SERVER_PID"
-      SERVER_PID=""
+      stop_server
       return
     fi
     sleep 0.05
@@ -74,34 +83,32 @@ printf 'listed' > "$TEST_HOME/shared/item.txt"
 )
 
 port=$(free_port)
-"$EXPOSE" --once --bind 127.0.0.1 --port "$port" \
+"$EXPOSE" --bind 127.0.0.1 --port "$port" \
   --redirect https://example.test >"$TEST_HOME/server.out" 2>"$TEST_HOME/server.err" &
 SERVER_PID=$!
 for _ in {1..50}; do
   location=$(curl -sS -o /dev/null -w '%{redirect_url}' "http://127.0.0.1:$port/anything" 2>/dev/null) && break
   sleep 0.05
 done
-wait "$SERVER_PID"
-SERVER_PID=""
+stop_server
 assert_eq "https://example.test/" "$location"
 
 port=$(free_port)
-"$EXPOSE" --once --bind 127.0.0.1 --port "$port" --code 418 \
+"$EXPOSE" --bind 127.0.0.1 --port "$port" --code 418 \
   --header "X-Expose-Test: yes" teapot >"$TEST_HOME/server.out" 2>"$TEST_HOME/server.err" &
 SERVER_PID=$!
 for _ in {1..50}; do
   response=$(curl -sS -D - "http://127.0.0.1:$port/content" 2>/dev/null) && break
   sleep 0.05
 done
-wait "$SERVER_PID"
-SERVER_PID=""
+stop_server
 [[ "$response" == HTTP/1.1\ 418* ]]
 [[ "$response" == *$'X-Expose-Test: yes\r'* ]]
 [[ "$response" == *$'\r\n\r\nteapot' ]]
 
 printf 'uploaded body' > "$TEST_HOME/upload.txt"
 port=$(free_port)
-"$EXPOSE" --once --bind 127.0.0.1 --port "$port" upload-test \
+"$EXPOSE" --bind 127.0.0.1 --port "$port" upload-test \
   >"$TEST_HOME/server.out" 2>"$TEST_HOME/server.err" &
 SERVER_PID=$!
 for _ in {1..50}; do
@@ -109,34 +116,9 @@ for _ in {1..50}; do
     "http://127.0.0.1:$port/upload" 2>/dev/null) && break
   sleep 0.05
 done
-wait "$SERVER_PID"
-SERVER_PID=""
+stop_server
 assert_eq '{"saved": ["upload.txt"], "count": 1}' "$upload_result"
 assert_eq "uploaded body" "$(<"$TEST_HOME/Downloads/expose/upload.txt")"
-
-port=$(free_port)
-"$EXPOSE" --once --bind 127.0.0.1 --port "$port" --auth user:pass secret \
-  >"$TEST_HOME/server.out" 2>"$TEST_HOME/server.err" &
-SERVER_PID=$!
-for _ in {1..50}; do
-  auth_result=$(curl -fsS -u user:pass "http://127.0.0.1:$port/content" 2>/dev/null) && break
-  sleep 0.05
-done
-wait "$SERVER_PID"
-SERVER_PID=""
-assert_eq "secret" "$auth_result"
-
-port=$(free_port)
-"$EXPOSE" --once --tls --bind 127.0.0.1 --port "$port" secure \
-  >"$TEST_HOME/server.out" 2>"$TEST_HOME/server.err" &
-SERVER_PID=$!
-for _ in {1..50}; do
-  tls_result=$(curl -kfsS "https://127.0.0.1:$port/content" 2>/dev/null) && break
-  sleep 0.05
-done
-wait "$SERVER_PID"
-SERVER_PID=""
-assert_eq "secure" "$tls_result"
 
 port=$(free_port)
 "$EXPOSE" --bind 127.0.0.1 --port "$port" shutdown-test \
@@ -155,8 +137,14 @@ wait "$SERVER_PID"
 SERVER_PID=""
 ! rg -q 'python3 <<|Terminated|import http.server' "$TEST_HOME/server.err"
 
-db_summary=$("$EXPOSE" db --summary)
-[[ "$db_summary" == *requests* ]]
-[[ "$db_summary" == *fingerprints* ]]
+python3 - "$TEST_HOME/.expose/requests.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as log_file:
+    entries = json.load(log_file)
+assert entries
+assert any(entry["path"] == "/content" for entry in entries)
+PY
 
 echo "integration tests passed"

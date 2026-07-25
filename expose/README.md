@@ -4,9 +4,8 @@ Serve text, files, or directories over HTTP from your terminal — a single-file
 bash tool for quick sharing on a LAN, webhook catching, and pentest payloads.
 
 Think `python3 -m http.server` combined with a request inspector: one command
-gives you a web server with verbose request logging, basic auth, TLS, IP
-allow-lists, file uploads (drag & drop web UI), and built-in reverse-shell
-payloads.
+gives you a web server with persistent request logging, file uploads (drag &
+drop web UI), and built-in reverse-shell payloads.
 
 **Version:** 2.0 · **Default port:** 9090 · **License:** personal toolkit
 
@@ -21,20 +20,18 @@ payloads.
 - **Smart request viewer** — request bodies are auto-decoded (JSON pretty-print, JWT header+payload, form-urlencoded) and credential-looking bodies are flagged with a red `creds` chip
 - **CLI one-liners** — copy-ready commands per OS (Linux/macOS/Windows) for uploading files, posting to chat, and downloading shared content: curl, wget, nc, socat, python (stdlib + requests), httpie, PowerShell, certutil, bitsadmin
 - **Reverse shells** — revshells.com-style card with editable LHOST/LPORT: bash `/dev/tcp`, zsh `ztcp`, nc (`-e` + mkfifo), python3, socat for Linux/macOS; PowerShell (+ AMSI-bypass variant) and ncat for Windows; plus listener commands (nc / rlwrap / socat)
-- **Persistent request log** — every request is appended to `~/.expose/requests.db` (SQLite, WAL) with timestamp, method, path, client, UA and mode; survives restarts. Every page visit also reports a **device fingerprint** (browser + device signals, stable visitor id) into the `fingerprints` table. Internal API polling is excluded. Query with `sqlite3 ~/.expose/requests.db 'select * from fingerprints'`
-- **Access control** — HTTP Basic Auth, source IP/CIDR allow-list, bind address
-- **TLS** — HTTPS with an auto-generated self-signed certificate
+- **Persistent request log** — requests are kept in `~/.expose/requests.json` as a JSON array capped at 500 entries; internal API polling is excluded
+- **Network binding** — listen on all interfaces or select a specific address
 - **Response shaping** — custom status code, custom headers, CORS, artificial delay, 302 redirect mode
 - **Pentest payloads** — built-in PHP / PowerShell / Python / bash reverse shells and a certutil download cradle
-- **Extras** — `/me` request-echo + device-fingerprint page, JSON request log API, mini chat, new-request sound alert, request stats view, WebSocket echo server (experimental), one-shot mode (`--once`)
+- **Extras** — `/me` request-echo + device-fingerprint page, JSON request log API, mini chat, new-request sound alert, and request stats view
 
 ## Requirements
 
 | Dependency | Needed for |
 |------------|------------|
 | `bash`     | everything |
-| `python3`  | HTTP serving, uploads, request logging, IP allow-lists, and WebSockets |
-| `openssl`  | `--tls` only |
+| `python3`  | HTTP serving, uploads, and request logging |
 | `ss`, `file`, `mktemp` | standard utilities (pre-flight checks, MIME detection) |
 
 ## Install
@@ -59,7 +56,6 @@ echo "secret" | expose -                # serve stdin
 expose --catch                          # webhook catcher (dumps bodies)
 expose --payload powershell-reverse     # serve a reverse-shell one-liner
 expose --redirect https://evil.com      # 302 redirect everything
-expose db                               # browse persistent request history
 ```
 
 Stop with `Ctrl+C`. The startup banner shows the local and network URLs.
@@ -70,14 +66,8 @@ Stop with `Ctrl+C`. The startup banner shows the local and network URLs.
 |--------|-------------|
 | `-p, --port <port>` | Listen port (default: 9090) |
 | `--bind <addr>` | Bind to a specific interface (default: 0.0.0.0) |
-| `--tls` | HTTPS with auto-generated self-signed certificate |
-| `--once` | Exit after the first request is served |
-| `--log <file>` | Persist request log (JSON) to file — survives exit |
-| `--allow <cidr>` | Restrict access by source IP/CIDR (repeatable) |
-| `--body-limit <bytes>` | Max POST body bytes captured in log (default: 4096, 0 = off) |
 | `-m, --more` | Verbose logging: all headers, reverse DNS, parsed UA |
 | `--catch` | Request catcher — dump full headers + body (implies `--more`) |
-| `--auth <user:pass>` | Require HTTP Basic Auth |
 | `--code <N>` | HTTP status code for responses (100–599, default: 200) |
 | `--header "K: V"` | Add a response header (repeatable) |
 | `--cors` | Add permissive CORS headers |
@@ -85,19 +75,7 @@ Stop with `Ctrl+C`. The startup banner shows the local and network URLs.
 | `--payload <name>` | Serve a built-in payload (see below) |
 | `--collect` | Collect requests to a JSONL log, printed on exit |
 | `--delay <ms>` | Artificial response delay in milliseconds |
-| `--websocket` | WebSocket echo server (experimental) |
-| `--replay <log>` | Replay the last request from a JSON log file |
 | `-h, --help` | Show help |
-
-### Database viewer
-
-`expose db` opens `~/.expose/requests.db` in a read-only terminal browser.
-Choose between requests and browser fingerprints, search with `fzf`, and
-preview complete records without leaving the viewer. Press `Esc` to move back
-or exit.
-
-Use `expose db --summary` for a non-interactive row-count summary, or
-`expose db ./other.db` to select another expose database.
 
 ### Built-in payloads
 
@@ -132,15 +110,11 @@ listing API at `/ls[/path]`.
 ```bash
 expose --more -p 9000 -f ./notes.txt
 expose --catch --code 404
-expose --auth admin:hunter2 -f ./flag.txt
 expose --header "X-Custom: yes" --code 418 "I'm a teapot"
-expose --once -f ./payload.bin
-expose --tls --auth admin:hunter2 -f ./flag.txt
-expose --bind 127.0.0.1 --log ./session.json --catch
-expose --allow 10.10.0.0/16 --allow 192.168.1.0/24 -f ./data.txt
+expose --bind 127.0.0.1 --catch
 expose --cors --code 200 '{"ok":true}'
 expose --delay 500 "slow response"
-expose --collect --log calls.jsonl --catch
+expose --collect --catch
 ```
 
 ## Development

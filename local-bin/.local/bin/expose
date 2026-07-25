@@ -7,14 +7,8 @@ PORT=9090
 MODE=""
 TARGET=""
 VERBOSE=0
-AUTH=""
 CATCH=0
-ONCE=0
-LOGFILE=""
 BIND="0.0.0.0"
-TLS=0
-ALLOWED_NETS=()
-BODY_LIMIT=4096
 RESP_CODE=""
 RESP_HEADERS=()
 CORS=0
@@ -22,8 +16,6 @@ REDIRECT=""
 PAYLOAD=""
 COLLECT=0
 DELAY_MS=0
-WEBSOCKET=0
-DB_SUMMARY=0
 _COLLECT_FILE=""
 _CLEANUP_DONE=""
 _TMPFILES=()
@@ -59,7 +51,6 @@ cleanup() {
   fi
   for f in "${_TMPFILES[@]+"${_TMPFILES[@]}"}"; do rm -f "$f" 2>/dev/null; done
   if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
-    [[ -n "${LOGFILE:-}" ]] && log "${BLU}Log saved to ${U}${LOGFILE}${R}"
     log "${GRN}Stopped.${R}"
   fi
 }
@@ -80,21 +71,12 @@ ${B}USAGE${R}
     expose [opts] ${CYN}.${R}                Serve the current directory
     expose [opts] ${CYN}--redirect <url>${R} 302 redirect all requests
     expose [opts] ${CYN}--payload <name>${R} Serve a built-in pentest payload
-    expose [opts] ${CYN}--websocket${R}      WebSocket echo server
-    expose ${CYN}--replay <logfile>${R}      Replay the last logged request
-    expose ${CYN}db [database]${R}           Browse the request database
 
 ${B}OPTIONS${R}
     -p, --port ${CYN}<port>${R}     Listen port  (default: ${PORT})
     --bind ${CYN}<addr>${R}        Bind to specific interface  (default: 0.0.0.0)
-    --tls               HTTPS with auto-generated self-signed certificate
-    --once              Exit after the first request is served
-    --log ${CYN}<file>${R}         Persist request log to file (survives exit)
-    --allow ${CYN}<cidr>${R}       Restrict access by source IP/CIDR (repeatable)
-    --body-limit ${CYN}<bytes>${R}  Max POST body bytes captured in log  (default: 4096, 0=off)
     -m, --more          Verbose logging (all headers, reverse DNS, parsed UA)
     --catch             Request catcher (dump full headers + body)
-    --auth ${CYN}<user:pass>${R}   Require HTTP Basic Auth
     --code ${CYN}<N>${R}           HTTP status code for responses (default: 200)
     --header ${CYN}"K: V"${R}     Add response header (repeatable)
     --cors              Add CORS headers (Access-Control-Allow-Origin: *)
@@ -102,8 +84,6 @@ ${B}OPTIONS${R}
     --payload ${CYN}<name>${R}    Serve a built-in payload (list: expose --help)
     --collect           Collect requests to JSONL log (dump on exit)
     --delay ${CYN}<ms>${R}        Artificial response delay in milliseconds
-    --websocket         WebSocket echo server (experimental)
-    --replay ${CYN}<log>${R}      Replay the last logged request
     -h, --help          Show this help
 
 ${B}BUILT-IN PAYLOADS${R}
@@ -119,21 +99,13 @@ ${B}EXAMPLES${R}
     expose .
     echo "secret" | expose -
     expose --catch --code 404
-    expose --auth admin:hunter2 -f ./flag.txt
     expose --header "X-Custom: yes" --code 418 "I'm a teapot"
-    expose --once -f ./payload.bin
-    expose --tls --auth admin:hunter2 -f ./flag.txt
-    expose --bind 127.0.0.1 --log ./session.json --catch
-    expose --allow 10.10.0.0/16 --allow 192.168.1.0/24 -f ./data.txt
+    expose --bind 127.0.0.1 --catch
     expose --redirect https://evil.com
     expose --payload powershell-reverse
-    expose --collect --log calls.jsonl --catch
-    expose --websocket
+    expose --collect --catch
     expose --cors --code 200 '{"ok":true}'
     expose --delay 500 "slow response"
-    expose --replay ./session.json
-    expose db
-    expose db --summary
 EOF
 }
 
@@ -146,13 +118,7 @@ while [[ $# -gt 0 ]]; do
     -p|--port)   [[ -n "${2:-}" ]] || die "Missing port after $1"; PORT="$2"; shift 2 ;;
     -f|--file)   [[ -n "${2:-}" ]] || die "Missing filename after $1"; MODE="file"; TARGET="$2"; shift 2 ;;
     --catch)     CATCH=1; shift ;;
-    --once)      ONCE=1; shift ;;
-    --tls)       TLS=1; shift ;;
-    --log)       [[ -n "${2:-}" ]] || die "Missing path after $1"; LOGFILE="$2"; shift 2 ;;
     --bind)      [[ -n "${2:-}" ]] || die "Missing address after $1"; BIND="$2"; shift 2 ;;
-    --allow)      [[ -n "${2:-}" ]] || die "Missing CIDR after $1"; ALLOWED_NETS+=("$2"); shift 2 ;;
-    --body-limit) [[ -n "${2:-}" ]] || die "Missing bytes after $1"; BODY_LIMIT="$2"; shift 2 ;;
-    --auth)      [[ -n "${2:-}" ]] || die "Missing user:pass after $1"; AUTH="$2"; shift 2 ;;
     --code)      [[ -n "${2:-}" ]] || die "Missing status code after $1"; RESP_CODE="$2"; shift 2 ;;
     --header)    [[ -n "${2:-}" ]] || die "Missing header after $1"; RESP_HEADERS+=("$2"); shift 2 ;;
     --cors)      CORS=1; shift ;;
@@ -160,20 +126,12 @@ while [[ $# -gt 0 ]]; do
     --payload)   [[ -n "${2:-}" ]] || die "Missing payload name after $1"; PAYLOAD="$2"; MODE="payload"; shift 2 ;;
     --collect)   COLLECT=1; shift ;;
     --delay)     [[ -n "${2:-}" ]] || die "Missing milliseconds after $1"; DELAY_MS="$2"; shift 2 ;;
-    --websocket) WEBSOCKET=1; MODE="websocket"; shift ;;
-    --replay)    [[ -n "${2:-}" ]] || die "Missing logfile after $1"; MODE="replay"; TARGET="$2"; shift 2 ;;
-    --summary)   [[ "$MODE" == "db" ]] || die "--summary is only valid with 'expose db'"; DB_SUMMARY=1; shift ;;
-    db)          MODE="db"; TARGET="${HOME}/.expose/requests.db"; shift ;;
     .)           MODE="dir"; shift ;;
     -)           MODE="stdin"; shift ;;
     -*)          die "Unknown option: $1" ;;
     *)
-      if [[ "$MODE" == "db" && "$TARGET" == "${HOME}/.expose/requests.db" ]]; then
-        TARGET="$1"
-      else
-        MODE="text"
-        TARGET="$1"
-      fi
+      MODE="text"
+      TARGET="$1"
       shift
       ;;
   esac
@@ -197,22 +155,12 @@ fi
 
 
 # ── Validate ──────────────────────────────────────────────────────────────────
-if [[ "$MODE" == "db" ]]; then
-  command -v sqlite3 &>/dev/null || die "sqlite3 is required for database browsing"
-  [[ -f "$TARGET" ]] || die "Database not found: $TARGET"
-  if [[ $DB_SUMMARY -eq 0 ]]; then
-    command -v fzf &>/dev/null || die "fzf is required for the database viewer"
-    [[ -t 0 && -t 1 ]] || die "Database viewer requires an interactive terminal (use --summary otherwise)"
-  fi
-else
 [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) \
   || die "Invalid port: $PORT (must be 1–65535)"
 [[ "$MODE" == "file" && ! -f "$TARGET" ]] && die "File not found: $TARGET"
 command -v python3 &>/dev/null || die "python3 is required"
 [[ -n "$RESP_CODE" ]] && { [[ "$RESP_CODE" =~ ^[0-9]+$ ]] && (( RESP_CODE >= 100 && RESP_CODE <= 599 )) \
   || die "Invalid status code: $RESP_CODE (must be 100–599)"; }
-[[ -n "$AUTH" && "$AUTH" != *:* ]] && die "Invalid auth format: use user:pass"
-[[ "$BODY_LIMIT" =~ ^[0-9]+$ ]] || die "Invalid --body-limit: must be a non-negative integer"
 if (( ${#RESP_HEADERS[@]} )); then
   for _header in "${RESP_HEADERS[@]}"; do
     [[ "$_header" == *:* ]] || die "Invalid response header: use 'Name: value'"
@@ -220,32 +168,11 @@ if (( ${#RESP_HEADERS[@]} )); then
       || die "Invalid response header: line breaks are not allowed"
   done
 fi
-[[ -n "$LOGFILE" ]] && { _ldir=$(dirname "$LOGFILE"); [[ -w "$_ldir" ]] || die "Cannot write log to: $LOGFILE"; }
 [[ -n "$BIND" && ! "$BIND" =~ ^[0-9a-fA-F.:]+$ ]] && die "Invalid bind address: $BIND"
 
-# ── TLS setup ─────────────────────────────────────────────────────────────────
-if [[ $TLS -eq 1 ]]; then
-  command -v openssl &>/dev/null || die "openssl is required for --tls  (apt install openssl)"
-  _CERTFILE=$(_mktmp /tmp/expose-cert.XXXXXX)
-  _KEYFILE=$(_mktmp /tmp/expose-key.XXXXXX)
-  log "${D}Generating TLS certificate…${R}"
-  openssl req -x509 -newkey rsa:2048 -keyout "$_KEYFILE" -out "$_CERTFILE" \
-    -days 1 -nodes -subj "/CN=expose" 2>/dev/null \
-    || die "Failed to generate TLS certificate"
-fi
-
-# ── Build allow-list string ────────────────────────────────────────────────────
-_EXPOSE_ALLOW=""
-if (( ${#ALLOWED_NETS[@]} )); then
-  _EXPOSE_ALLOW=$(IFS=','; echo "${ALLOWED_NETS[*]}")
-fi
-
 # ── Check port in use ────────────────────────────────────────────────────────
-_port_pid=""
-if [[ "$MODE" != "replay" ]]; then
-  _port_pid=$(ss -tlnp "sport = :$PORT" 2>/dev/null \
-    | awk 'NR>1{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
-fi
+_port_pid=$(ss -tlnp "sport = :$PORT" 2>/dev/null \
+  | awk 'NR>1{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
 if [[ -n "$_port_pid" ]]; then
   _port_cmd=$(ps -p "$_port_pid" -o comm= 2>/dev/null || echo "unknown")
   printf "%s%sPort %s is already in use%s by %s%s%s (pid %s)\n" \
@@ -266,135 +193,10 @@ if [[ -n "$_port_pid" ]]; then
     die "Port $PORT is in use — pick another with -p"
   fi
 fi
-fi
-
-# ── Database viewer ───────────────────────────────────────────────────────────
-database_summary() {
-  local db="$1"
-  sqlite3 -readonly -header -box "$db" "
-    select 'requests' as table_name, count(*) as rows from requests
-    union all
-    select 'fingerprints', count(*) from fingerprints;
-  "
-}
-
-database_tables() {
-  local db="$1"
-  sqlite3 -readonly -separator $'\t' "$db" "
-    select name,
-           case name
-             when 'requests' then (select count(*) from requests)
-             when 'fingerprints' then (select count(*) from fingerprints)
-             else 0
-           end,
-           case name
-             when 'requests' then 'HTTP request history'
-             when 'fingerprints' then 'Browser fingerprint reports'
-             else 'SQLite table'
-           end
-    from sqlite_master
-    where type = 'table' and name not like 'sqlite_%'
-    order by name;
-  "
-}
-
-database_rows() {
-  local db="$1" table="$2"
-  case "$table" in
-    requests)
-      sqlite3 -readonly -separator $'\t' "$db" "
-        select id, time, method, path, ip, mode
-        from requests order by id desc;
-      "
-      ;;
-    fingerprints)
-      sqlite3 -readonly -separator $'\t' "$db" "
-        select id, time, visitor_id, ip, page
-        from fingerprints order by id desc;
-      "
-      ;;
-  esac
-}
-
-database_view() {
-  local db="$1" table selection row_id
-  export EXPOSE_VIEW_DB="$db"
-
-  if [[ $DB_SUMMARY -eq 1 ]]; then
-    database_summary "$db"
-    return
-  fi
-
-  while true; do
-    selection=$(database_tables "$db" | fzf \
-      --delimiter=$'\t' \
-      --with-nth=1,2,3 \
-      --header='TABLE                         ROWS  DESCRIPTION' \
-      --header-lines=0 \
-      --prompt='database › ' \
-      --pointer='›' \
-      --layout=reverse \
-      --height=100% \
-      --border=rounded \
-      --info=inline \
-      --no-multi) || break
-
-    table="${selection%%$'\t'*}"
-    case "$table" in
-      requests)
-        selection=$(database_rows "$db" "$table" | fzf \
-          --delimiter=$'\t' \
-          --with-nth=1,2,3,4,5,6 \
-          --header='ID  TIME      METHOD  PATH  IP  MODE' \
-          --prompt='requests › ' \
-          --pointer='›' \
-          --layout=reverse \
-          --height=100% \
-          --border=rounded \
-          --info=inline \
-          --no-multi \
-          --preview-window='right,55%,wrap' \
-          --preview='sqlite3 -readonly -header -box "$EXPOSE_VIEW_DB" "select * from requests where id={1};"') || continue
-        ;;
-      fingerprints)
-        selection=$(database_rows "$db" "$table" | fzf \
-          --delimiter=$'\t' \
-          --with-nth=1,2,3,4,5 \
-          --header='ID  TIME      VISITOR  IP  PAGE' \
-          --prompt='fingerprints › ' \
-          --pointer='›' \
-          --layout=reverse \
-          --height=100% \
-          --border=rounded \
-          --info=inline \
-          --no-multi \
-          --preview-window='right,60%,wrap' \
-          --preview='sqlite3 -readonly -header -box "$EXPOSE_VIEW_DB" "select * from fingerprints where id={1};"') || continue
-        ;;
-      *)
-        continue
-        ;;
-    esac
-
-    row_id="${selection%%$'\t'*}"
-    [[ "$row_id" =~ ^[0-9]+$ ]] || continue
-    clear
-    sqlite3 -readonly -header -box "$db" "select * from \"$table\" where id=$row_id;"
-    printf '\nPress any key to return…'
-    read -rsn1
-  done
-}
-
-if [[ "$MODE" == "db" ]]; then
-  EXPOSE_NO_BANNER=1
-  database_view "$TARGET"
-  exit
-fi
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 LOCAL_IP=$(get_local_ip)
 _SCHEME="http"
-[[ $TLS -eq 1 ]] && _SCHEME="https"
 _BINDHOST="127.0.0.1"
 [[ "$BIND" != "0.0.0.0" ]] && _BINDHOST="$BIND"
 
@@ -415,10 +217,6 @@ mode_label() {
       echo "${B}redirect${R}  ${D}(${REDIRECT})${R}" ;;
     payload)
       echo "${B}payload${R}  ${CYN}${PAYLOAD}${R}" ;;
-    websocket)
-      echo "${B}websocket${R} echo server" ;;
-    replay)
-      echo "${B}replay${R}  ${CYN}${TARGET}${R}" ;;
   esac
 }
 
@@ -434,12 +232,7 @@ if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
   ${BLU}Me${R}       ${U}${_SCHEME}://${LOCAL_IP}:${PORT}/me${R}$(
     [[ $VERBOSE -eq 1 ]]            && printf '\n  %sVerbose%s  %senabled  (--more)%s'       "$YLW" "$R" "$D" "$R"
     [[ $CATCH -eq 1 ]]              && printf '\n  %sCatch%s    %senabled  (--catch)%s'      "$YLW" "$R" "$D" "$R"
-    [[ $ONCE -eq 1 ]]               && printf '\n  %sOnce%s     %sexit after first request%s' "$YLW" "$R" "$D" "$R"
-    [[ $TLS -eq 1 ]]                && printf '\n  %sTLS%s      %sself-signed cert%s'         "$YLW" "$R" "$D" "$R"
     [[ "$BIND" != "0.0.0.0" ]]      && printf '\n  %sBind%s     %s%s%s'                       "$YLW" "$R" "$D" "$BIND" "$R"
-    [[ -n "$LOGFILE" ]]             && printf '\n  %sLog%s      %s%s%s'                       "$YLW" "$R" "$D" "$LOGFILE" "$R"
-    [[ -n "$_EXPOSE_ALLOW" ]]       && printf '\n  %sAllow%s    %s%s%s'                       "$YLW" "$R" "$D" "$_EXPOSE_ALLOW" "$R"
-    [[ -n "$AUTH" ]]                && printf '\n  %sAuth%s     %s%s:••••  (--auth)%s'        "$YLW" "$R" "$D" "${AUTH%%:*}" "$R"
     [[ -n "$RESP_CODE" ]]           && printf '\n  %sCode%s     %s%s%s'                       "$YLW" "$R" "$D" "$RESP_CODE" "$R"
     (( ${#RESP_HEADERS[@]} ))       && printf '\n  %sHeaders%s  %s%d custom%s'               "$YLW" "$R" "$D" "${#RESP_HEADERS[@]}" "$R"
     [[ $CORS -eq 1 ]]               && printf '\n  %sCORS%s     %senabled%s'                  "$YLW" "$R" "$D" "$R"
@@ -447,7 +240,6 @@ if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
     [[ -n "$PAYLOAD" ]]              && printf '\n  %sPayload%s  %s%s%s'                       "$YLW" "$R" "$D" "$PAYLOAD" "$R"
     [[ $COLLECT -eq 1 ]]            && printf '\n  %sCollect%s  %senabled  (--collect)%s'     "$YLW" "$R" "$D" "$R"
     [[ $DELAY_MS -gt 0 ]]           && printf '\n  %sDelay%s    %s%s ms%s'                     "$YLW" "$R" "$D" "$DELAY_MS" "$R"
-    [[ $WEBSOCKET -eq 1 ]]          && printf '\n  %sWebSocket%s %senabled%s'                 "$YLW" "$R" "$D" "$R"
   )
   ${D}──────────────────────────────────────────${R}
   ${D}Ctrl+C to stop${R}
@@ -461,21 +253,15 @@ fi
 # ── Request counter ───────────────────────────────────────────────────────────
 
 # ── Serve ────────────────────────────────────────────────────────────────────
-# ── Request log file ──────────────────────────────────────────────────────────
-if [[ -n "$LOGFILE" ]]; then
-  _LOGFILE="$LOGFILE"
-  echo '[]' > "$_LOGFILE" || die "Cannot write to log file: $LOGFILE"
-else
-  _LOGFILE=$(_mktmp /tmp/expose-log.XXXXXX)
-  echo '[]' > "$_LOGFILE"
-fi
+# ── Persistent request log ────────────────────────────────────────────────────
+_LOG_DIR="${HOME}/.expose"
+_LOGFILE="${_LOG_DIR}/requests.json"
+mkdir -p "$_LOG_DIR" || die "Cannot create log directory: $_LOG_DIR"
+[[ -f "$_LOGFILE" ]] || echo '[]' > "$_LOGFILE" \
+  || die "Cannot write request log: $_LOGFILE"
 # ── Collect file (JSONL) ──────────────────────────────────────────────────────
 if [[ $COLLECT -eq 1 ]]; then
-  if [[ -n "$LOGFILE" ]]; then
-    _COLLECT_FILE="${LOGFILE%.json}.jsonl"
-  else
-    _COLLECT_FILE=$(_mktmp /tmp/expose-collect.XXXXXX)
-  fi
+  _COLLECT_FILE=$(_mktmp /tmp/expose-collect.XXXXXX)
   : > "$_COLLECT_FILE"
   print_collected() {
     echo
@@ -505,28 +291,6 @@ fi
 # ── Upload support ────────────────────────────────────────────────────────────
 UPLOAD_DIR="${HOME}/Downloads/expose"
 mkdir -p "$UPLOAD_DIR"
-
-# ── Persistent SQLite request log (~/.expose/requests.db) ────────────────────
-_DB_DIR="${HOME}/.expose"
-_DB="${_DB_DIR}/requests.db"
-if command -v python3 &>/dev/null && mkdir -p "$_DB_DIR" 2>/dev/null; then
-  python3 - "$_DB" <<'PYDB' 2>/dev/null
-import sqlite3, sys
-con = sqlite3.connect(sys.argv[1])
-con.execute("""create table if not exists requests(
-  id integer primary key autoincrement,
-  ts real, time text, method text, path text,
-  ip text, port text, ua text, host text,
-  content_type text, content_len text, mode text)""")
-con.execute("""create table if not exists fingerprints(
-  id integer primary key autoincrement,
-  ts real, time text,
-  ip text, port text, ua text,
-  page text, visitor_id text, data text)""")
-con.execute("pragma journal_mode=WAL")
-con.commit(); con.close()
-PYDB
-fi
 
 _UPLOAD_HTML=$(_mktmp /tmp/expose-upload-html.XXXXXX)
 cat > "$_UPLOAD_HTML" << 'UPLOADHTML'
@@ -1194,7 +958,7 @@ themeApply(themeGet());
 q('copy-url').addEventListener('click',()=>copyText(location.origin,'Link copied'));
 
 // ── hero: mode-aware context ──────────────────────────────
-const BADGE={dir:'blu',catch:'vio',payload:'amb',redirect:'amb',websocket:'vio'};
+const BADGE={dir:'blu',catch:'vio',payload:'amb',redirect:'amb'};
 
 fetch('/meta').then(r=>r.json()).then(m=>{
   const hero=q('hero'),badge=q('mode-badge');
@@ -1845,9 +1609,8 @@ loadDisk();
 })();
 </script>
 <script>/* expose — client-side device fingerprint
-   Collects browser/device signals on every page, renders the panel on /me
-   (into <div id="fp">), and reports everything to POST /fp where it is
-   logged to the operator's SQLite database. */
+   Collects browser/device signals and renders the panel on /me
+   (into <div id="fp">). */
 (function(){
   var mount=document.getElementById('fp');
 
@@ -1953,20 +1716,6 @@ loadDisk();
   function finish(id){
     d.visitor_id=id;
     show(id);
-    report();
-  }
-  // ── report to the operator (logged to sqlite via POST /fp) ──
-  function report(){
-    d.page=location.pathname;
-    var payload;
-    try{payload=JSON.stringify(d)}catch(e){return}
-    try{
-      if(navigator.sendBeacon){
-        var ok=navigator.sendBeacon('/fp',new Blob([payload],{type:'application/json'}));
-        if(ok)return;
-      }
-      fetch('/fp',{method:'POST',headers:{'Content-Type':'application/json'},body:payload,keepalive:true}).catch(function(){});
-    }catch(e){}
   }
   if(window.crypto&&crypto.subtle&&crypto.subtle.digest){
     crypto.subtle.digest('SHA-256',new TextEncoder().encode(stable)).then(function(buf){
@@ -1981,9 +1730,8 @@ UPLOADHTML
 _FP_JS=$(_mktmp /tmp/expose-fp-js.XXXXXX)
 cat > "$_FP_JS" << 'FPJS'
 /* expose — client-side device fingerprint
-   Collects browser/device signals on every page, renders the panel on /me
-   (into <div id="fp">), and reports everything to POST /fp where it is
-   logged to the operator's SQLite database. */
+   Collects browser/device signals and renders the panel on /me
+   (into <div id="fp">). */
 (function(){
   var mount=document.getElementById('fp');
 
@@ -2089,20 +1837,6 @@ cat > "$_FP_JS" << 'FPJS'
   function finish(id){
     d.visitor_id=id;
     show(id);
-    report();
-  }
-  // ── report to the operator (logged to sqlite via POST /fp) ──
-  function report(){
-    d.page=location.pathname;
-    var payload;
-    try{payload=JSON.stringify(d)}catch(e){return}
-    try{
-      if(navigator.sendBeacon){
-        var ok=navigator.sendBeacon('/fp',new Blob([payload],{type:'application/json'}));
-        if(ok)return;
-      }
-      fetch('/fp',{method:'POST',headers:{'Content-Type':'application/json'},body:payload,keepalive:true}).catch(function(){});
-    }catch(e){}
   }
   if(window.crypto&&crypto.subtle&&crypto.subtle.digest){
     crypto.subtle.digest('SHA-256',new TextEncoder().encode(stable)).then(function(buf){
@@ -2305,12 +2039,9 @@ PAYLOAD_SRC
 _export_common() {
   export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND" EXPOSE_VERBOSE="$VERBOSE"
   export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
-  export EXPOSE_AUTH="$AUTH" EXPOSE_CATCH="$CATCH" EXPOSE_RESP_CODE="${RESP_CODE:-200}"
+  export EXPOSE_CATCH="$CATCH" EXPOSE_RESP_CODE="${RESP_CODE:-200}"
   export EXPOSE_RESP_HEADERS="$_RESP_HDRS"
   export EXPOSE_LOGFILE="$_LOGFILE"
-  export EXPOSE_ONCE="$ONCE"
-  export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
-  export EXPOSE_BODY_LIMIT="$BODY_LIMIT"
   export EXPOSE_REDIRECT="$REDIRECT"
   export EXPOSE_DELAY_MS="$DELAY_MS"
   export EXPOSE_PAYLOAD="$PAYLOAD"
@@ -2320,23 +2051,18 @@ _export_common() {
   export EXPOSE_FP_JS="$_FP_JS"
   export EXPOSE_ME_HTML="$_ME_HTML"
   export EXPOSE_LOGO_SVG="$_LOGO_SVG"
-  export EXPOSE_DB="$_DB"
-  export EXPOSE_TLS="$TLS" EXPOSE_CERTFILE="${_CERTFILE:-}" EXPOSE_KEYFILE="${_KEYFILE:-}"
 }
 
 # ── Unified HTTP backend ──────────────────────────────────────────────────────
 serve_http() {
   _export_common
   python3 <<'PYEOF'
-import base64
 import datetime
 import email.parser
 import email.policy
 import fcntl
 import html
-import hmac
 import http.server
-import ipaddress
 import json
 import mimetypes
 import os
@@ -2344,8 +2070,6 @@ import re
 import signal
 import socket
 import socketserver
-import sqlite3
-import ssl
 import stat
 import sys
 import threading
@@ -2360,19 +2084,16 @@ upload_dir = os.environ.get("EXPOSE_UPLOAD_DIR", "/tmp/expose-uploads")
 upload_html_path = os.environ.get("EXPOSE_UPLOAD_HTML", "")
 me_html_path = os.environ.get("EXPOSE_ME_HTML", "")
 logo_svg_path = os.environ.get("EXPOSE_LOGO_SVG", "")
-auth_required = os.environ.get("EXPOSE_AUTH", "")
 log_file = os.environ.get("EXPOSE_LOGFILE", "")
 chat_file = os.environ.get("EXPOSE_CHAT_FILE", "")
-allow_nets = [n.strip() for n in os.environ.get("EXPOSE_ALLOW", "").split(",") if n.strip()]
 content_path = os.environ.get("EXPOSE_CONTENT", "")
 content_mime = os.environ.get("EXPOSE_MIME", "application/octet-stream")
 content_name = os.environ.get("EXPOSE_FILENAME", "")
 response_code = int(os.environ.get("EXPOSE_RESP_CODE", "200"))
 redirect_url = os.environ.get("EXPOSE_REDIRECT", "")
 delay_seconds = int(os.environ.get("EXPOSE_DELAY_MS", "0")) / 1000
-body_limit = int(os.environ.get("EXPOSE_BODY_LIMIT", "4096"))
+body_log_limit = 4096
 catch_requests = os.environ.get("EXPOSE_CATCH", "0") == "1"
-serve_once = os.environ.get("EXPOSE_ONCE", "0") == "1"
 collect_file = os.environ.get("EXPOSE_COLLECT_FILE", "")
 custom_headers = []
 for header in os.environ.get("EXPOSE_RESP_HEADERS", "").splitlines():
@@ -2462,6 +2183,7 @@ def _write_log(entry):
             fcntl.flock(f, fcntl.LOCK_EX)
             try: log = json.load(f)
             except: log = []
+            entry["n"] = max((item.get("n", 0) for item in log), default=0) + 1
             log.append(entry)
             if len(log) > 500: log = log[-500:]
             f.seek(0); f.truncate(); json.dump(log, f)
@@ -2478,37 +2200,6 @@ def _write_collect(entry):
             fcntl.flock(collected, fcntl.LOCK_UN)
     except OSError:
         pass
-
-def _write_db(entry):
-    """Append the request to the persistent SQLite log (~/.expose/requests.db)."""
-    db = os.environ.get("EXPOSE_DB", "")
-    if not db: return
-    try:
-        con = sqlite3.connect(db, timeout=5)
-        con.execute("insert into requests(ts,time,method,path,ip,port,ua,host,content_type,content_len,mode) values(?,?,?,?,?,?,?,?,?,?,?)",
-                    (entry.get("ts"), entry.get("time"), entry.get("method"), entry.get("path"),
-                     entry.get("ip"), str(entry.get("port", "")), entry.get("ua"), entry.get("host", ""),
-                     entry.get("content_type", ""), entry.get("content_length", ""),
-                     os.environ.get("EXPOSE_MODE", "")))
-        con.commit(); con.close()
-    except Exception: pass
-
-def _write_fp(raw, ip, port, ua_hdr):
-    """Append a device fingerprint report to the SQLite fingerprints table."""
-    db = os.environ.get("EXPOSE_DB", "")
-    if not db or not raw: return
-    ua = vid = page = ""
-    try:
-        d = json.loads(raw)
-        ua = d.get("user_agent", ""); vid = d.get("visitor_id", ""); page = d.get("page", "")
-    except Exception: pass
-    try:
-        con = sqlite3.connect(db, timeout=5)
-        con.execute("insert into fingerprints(ts,time,ip,port,ua,page,visitor_id,data) values(?,?,?,?,?,?,?,?)",
-                    (time.time(), time.strftime('%H:%M:%S'), ip, port,
-                     ua or ua_hdr, page, vid, raw))
-        con.commit(); con.close()
-    except Exception: pass
 
 def _read_chat():
     """Thread-safe read of the chat JSON file."""
@@ -2546,13 +2237,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header(name, value)
         super().end_headers()
 
-    def finish(self):
-        try:
-            super().finish()
-        finally:
-            if serve_once and _httpd is not None:
-                threading.Thread(target=_httpd.shutdown, daemon=True).start()
-
     def _send(self, status, body=b"", content_type="application/json", headers=()):
         if isinstance(body, str):
             body = body.encode()
@@ -2573,40 +2257,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.rfile.read(length) if length > 0 else b""
 
     def _check_access(self):
-        return not self._auth_fail() and not self._allow_fail()
-
-    def _auth_fail(self):
-        if not auth_required: return False
-        ah = self.headers.get("Authorization", "")
-        if ah.startswith("Basic "):
-            try:
-                decoded = base64.b64decode(ah[6:]).decode()
-                if hmac.compare_digest(decoded, auth_required):
-                    return False
-            except Exception: pass
-        self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="expose"')
-        b = b"401 Unauthorized"
-        self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
-        return True
-
-    def _allow_fail(self):
-        if not allow_nets: return False
-        try:
-            addr = ipaddress.ip_address(self.client_address[0])
-            if any(addr in ipaddress.ip_network(net, strict=False) for net in allow_nets):
-                return False
-        except Exception:
-            pass
-        self.send_response(403)
-        b = b"403 Forbidden"
-        self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
         return True
 
     def do_GET(self):
@@ -2799,9 +2449,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._check_access():
             return
         body = self._read_body()
-        self.request_body = body[:body_limit] if body_limit else b""
+        self.request_body = body[:body_log_limit]
         if catch_requests and body:
-            shown = body[:body_limit] if body_limit else b""
+            shown = body[:body_log_limit]
             sys.stderr.write(f"\n  body ({len(body)} bytes)\n")
             sys.stderr.flush()
             sys.stderr.buffer.write(shown + b"\n")
@@ -2820,16 +2470,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             ct = self.headers.get("Content-Type", "")
             saved = parse_multipart(body, ct)
             result = json.dumps({"saved": saved, "count": len(saved)}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(result)))
-            self.end_headers()
-            self.wfile.write(result)
-        elif self.path == "/fp":
-            raw = body.decode('utf-8', errors='replace')
-            _write_fp(raw, self.client_address[0], str(self.client_address[1]),
-                      self.headers.get("User-Agent", ""))
-            result = json.dumps({"ok": True}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(result)))
@@ -2857,8 +2497,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send(204, b"", "text/plain")
 
     def do_DELETE(self):
-        if self._auth_fail(): return
-        if self._allow_fail(): return
         if self.path.startswith("/upload/files/"):
             import urllib.parse
             name = urllib.parse.unquote(self.path[len("/upload/files/"):])
@@ -2943,7 +2581,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sys.stderr.flush()
 
         # Write to JSON log
-        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat', '/fp'}
+        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat'}
         _path_clean = (self.path or '').split('?')[0]
         if _path_clean not in _skip:
             entry = {"n": request_number, "ts": time.time(), "time": now,
@@ -2962,7 +2600,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 entry["body"] = request_body.decode("utf-8", errors="replace")
             _write_log(entry)
             _write_collect(entry)
-            _write_db(entry)
 
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
@@ -2977,191 +2614,7 @@ with Server((bind_addr, port), Handler) as httpd:
     signal.signal(signal.SIGINT, stop_server)
     signal.signal(signal.SIGTERM, stop_server)
 
-    if os.environ.get("EXPOSE_TLS") == "1":
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(os.environ["EXPOSE_CERTFILE"], os.environ["EXPOSE_KEYFILE"])
-        httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
     httpd.serve_forever()
-PYEOF
-}
-
-# ── Serve: websocket ──────────────────────────────────────────────────────────
-serve_websocket() {
-  export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND"
-  log "WebSocket echo server on ws://${BIND}:${PORT}"
-  python3 <<'PYEOF'
-#!/usr/bin/env python3
-"""WebSocket echo server for expose --websocket"""
-import struct, hashlib, base64, sys, os, socket
-
-PORT = int(os.environ.get('EXPOSE_PORT', 9090))
-BIND = os.environ.get('EXPOSE_BIND', '0.0.0.0')
-
-GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-def accept_key(key):
-    sha1 = hashlib.sha1(key.encode() + GUID).digest()
-    return base64.b64encode(sha1).decode()
-
-def read_frame(sock):
-    data = sock.recv(2)
-    if len(data) < 2:
-        return None, b''
-    opcode = data[0] & 0x0F
-    masked = (data[1] & 0x80) != 0
-    length = data[1] & 0x7F
-    if length == 126:
-        data = sock.recv(2)
-        length = struct.unpack('>H', data)[0]
-    elif length == 127:
-        data = sock.recv(8)
-        length = struct.unpack('>Q', data)[0]
-    mask_key = sock.recv(4) if masked else b''
-    payload = bytearray()
-    while len(payload) < length:
-        chunk = sock.recv(min(length - len(payload), 4096))
-        if not chunk:
-            break
-        payload.extend(chunk)
-    if masked:
-        payload = bytearray(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-    return opcode, bytes(payload)
-
-def send_frame(sock, opcode, payload):
-    frame = bytearray([0x80 | opcode])
-    length = len(payload)
-    if length < 126:
-        frame.append(length)
-    elif length < 65536:
-        frame.append(126)
-        frame.extend(struct.pack('>H', length))
-    else:
-        frame.append(127)
-        frame.extend(struct.pack('>Q', length))
-    frame.extend(payload)
-    sock.sendall(bytes(frame))
-
-def handle_client(conn):
-    try:
-        data = b''
-        while b'\r\n\r\n' not in data:
-            chunk = conn.recv(4096)
-            if not chunk:
-                return
-            data += chunk
-
-        headers = {}
-        for line in data.decode('utf-8', 'replace').split('\r\n')[1:]:
-            if ':' in line:
-                k, v = line.split(':', 1)
-                headers[k.strip().lower()] = v.strip()
-
-        key = headers.get('sec-websocket-key', '')
-        if not key:
-            conn.sendall(b'HTTP/1.1 400 Bad Request\r\n\r\n')
-            return
-
-        accept = accept_key(key)
-        resp = (
-            'HTTP/1.1 101 Switching Protocols\r\n'
-            'Upgrade: websocket\r\n'
-            'Connection: Upgrade\r\n'
-            f'Sec-WebSocket-Accept: {accept}\r\n'
-            '\r\n'
-        )
-        conn.sendall(resp.encode())
-
-        while True:
-            opcode, payload = read_frame(conn)
-            if opcode is None:
-                break
-            if opcode == 0x8:  # Close
-                send_frame(conn, 0x8, b'')
-                break
-            elif opcode == 0x9:  # Ping
-                send_frame(conn, 0xA, payload)  # Pong
-            elif opcode == 0x1:  # Text
-                send_frame(conn, 0x1, b'Echo: ' + payload)
-            elif opcode == 0x2:  # Binary
-                send_frame(conn, 0x2, payload)
-    except Exception:
-        pass
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-def main():
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((BIND, PORT))
-    srv.listen(5)
-    print(f'WebSocket echo server: ws://{BIND}:{PORT}', file=sys.stderr)
-    try:
-        while True:
-            conn, addr = srv.accept()
-            print(f'  {addr[0]}:{addr[1]} connected', file=sys.stderr)
-            handle_client(conn)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        srv.close()
-
-if __name__ == '__main__':
-    main()
-PYEOF
-}
-
-# ── Replay ────────────────────────────────────────────────────────────────────
-do_replay() {
-  local logfile="$1"
-  [[ -f "$logfile" ]] || die "Log file not found: $logfile"
-  python3 - "$logfile" <<'PYEOF'
-import sys, json, http.client, urllib.parse
-
-logfile = sys.argv[1]
-
-with open(logfile) as f:
-    log = json.load(f)
-
-if not log:
-    print("No requests in log")
-    sys.exit(1)
-
-# Replay the last request
-entry = log[-1]
-method = entry.get('method', 'GET')
-path = entry.get('path', '/')
-host = entry.get('host', 'localhost')
-
-# Parse host and optional port, including bracketed IPv6 addresses.
-destination = urllib.parse.urlsplit("//" + host)
-hostname = destination.hostname or "localhost"
-port = destination.port or 80
-
-print(f"Replaying {method} {path} -> {hostname}:{port}")
-
-conn = http.client.HTTPConnection(hostname, port, timeout=10)
-headers = {}
-if entry.get('ua'):
-    headers['User-Agent'] = entry['ua']
-if entry.get('accept'):
-    headers['Accept'] = entry['accept']
-if entry.get('content_type'):
-    headers['Content-Type'] = entry['content_type']
-
-body = entry.get('body', '') if entry.get('body') else None
-try:
-    conn.request(method, path, body=body, headers=headers)
-    resp = conn.getresponse()
-    print(f"Response: {resp.status} {resp.reason}")
-    print(resp.read().decode('utf-8', 'replace')[:2000])
-except Exception as e:
-    print(f"Error: {e}")
-    sys.exit(1)
-finally:
-    conn.close()
 PYEOF
 }
 
@@ -3192,6 +2645,4 @@ case "$MODE" in
     export EXPOSE_CONTENT="$_CONTENT_FILE" EXPOSE_LEN="${#_PAYLOAD_CONTENT}" EXPOSE_MIME="text/plain; charset=utf-8"
     serve_http
     ;;
-  websocket) serve_websocket ;;
-  replay)   do_replay "$TARGET" ;;
 esac

@@ -58,7 +58,7 @@ Validate early, fail fast with `die()`:
 ```bash
 [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) \
   || die "Invalid port: $PORT (must be 1–65535)"
-[[ -n "$AUTH" && "$AUTH" != *:* ]] && die "Invalid auth format: use user:pass"
+[[ -n "$BIND" && ! "$BIND" =~ ^[0-9a-fA-F.:]+$ ]] && die "Invalid bind address: $BIND"
 ```
 
 ## Cleanup & Temp Files

@@ -102,7 +102,6 @@ PY
     "$SRC/lib/usage.sh" \
     "$SRC/lib/args.sh" \
     "$SRC/lib/validate.sh" \
-    "$SRC/lib/database.sh" \
     "$SRC/lib/banner.sh"
   do
     printf '\n'

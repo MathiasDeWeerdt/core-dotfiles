@@ -1,12 +1,9 @@
-import base64
 import datetime
 import email.parser
 import email.policy
 import fcntl
 import html
-import hmac
 import http.server
-import ipaddress
 import json
 import mimetypes
 import os
@@ -14,8 +11,6 @@ import re
 import signal
 import socket
 import socketserver
-import sqlite3
-import ssl
 import stat
 import sys
 import threading
@@ -30,19 +25,16 @@ upload_dir = os.environ.get("EXPOSE_UPLOAD_DIR", "/tmp/expose-uploads")
 upload_html_path = os.environ.get("EXPOSE_UPLOAD_HTML", "")
 me_html_path = os.environ.get("EXPOSE_ME_HTML", "")
 logo_svg_path = os.environ.get("EXPOSE_LOGO_SVG", "")
-auth_required = os.environ.get("EXPOSE_AUTH", "")
 log_file = os.environ.get("EXPOSE_LOGFILE", "")
 chat_file = os.environ.get("EXPOSE_CHAT_FILE", "")
-allow_nets = [n.strip() for n in os.environ.get("EXPOSE_ALLOW", "").split(",") if n.strip()]
 content_path = os.environ.get("EXPOSE_CONTENT", "")
 content_mime = os.environ.get("EXPOSE_MIME", "application/octet-stream")
 content_name = os.environ.get("EXPOSE_FILENAME", "")
 response_code = int(os.environ.get("EXPOSE_RESP_CODE", "200"))
 redirect_url = os.environ.get("EXPOSE_REDIRECT", "")
 delay_seconds = int(os.environ.get("EXPOSE_DELAY_MS", "0")) / 1000
-body_limit = int(os.environ.get("EXPOSE_BODY_LIMIT", "4096"))
+body_log_limit = 4096
 catch_requests = os.environ.get("EXPOSE_CATCH", "0") == "1"
-serve_once = os.environ.get("EXPOSE_ONCE", "0") == "1"
 collect_file = os.environ.get("EXPOSE_COLLECT_FILE", "")
 custom_headers = []
 for header in os.environ.get("EXPOSE_RESP_HEADERS", "").splitlines():
@@ -132,6 +124,7 @@ def _write_log(entry):
             fcntl.flock(f, fcntl.LOCK_EX)
             try: log = json.load(f)
             except: log = []
+            entry["n"] = max((item.get("n", 0) for item in log), default=0) + 1
             log.append(entry)
             if len(log) > 500: log = log[-500:]
             f.seek(0); f.truncate(); json.dump(log, f)
@@ -148,37 +141,6 @@ def _write_collect(entry):
             fcntl.flock(collected, fcntl.LOCK_UN)
     except OSError:
         pass
-
-def _write_db(entry):
-    """Append the request to the persistent SQLite log (~/.expose/requests.db)."""
-    db = os.environ.get("EXPOSE_DB", "")
-    if not db: return
-    try:
-        con = sqlite3.connect(db, timeout=5)
-        con.execute("insert into requests(ts,time,method,path,ip,port,ua,host,content_type,content_len,mode) values(?,?,?,?,?,?,?,?,?,?,?)",
-                    (entry.get("ts"), entry.get("time"), entry.get("method"), entry.get("path"),
-                     entry.get("ip"), str(entry.get("port", "")), entry.get("ua"), entry.get("host", ""),
-                     entry.get("content_type", ""), entry.get("content_length", ""),
-                     os.environ.get("EXPOSE_MODE", "")))
-        con.commit(); con.close()
-    except Exception: pass
-
-def _write_fp(raw, ip, port, ua_hdr):
-    """Append a device fingerprint report to the SQLite fingerprints table."""
-    db = os.environ.get("EXPOSE_DB", "")
-    if not db or not raw: return
-    ua = vid = page = ""
-    try:
-        d = json.loads(raw)
-        ua = d.get("user_agent", ""); vid = d.get("visitor_id", ""); page = d.get("page", "")
-    except Exception: pass
-    try:
-        con = sqlite3.connect(db, timeout=5)
-        con.execute("insert into fingerprints(ts,time,ip,port,ua,page,visitor_id,data) values(?,?,?,?,?,?,?,?)",
-                    (time.time(), time.strftime('%H:%M:%S'), ip, port,
-                     ua or ua_hdr, page, vid, raw))
-        con.commit(); con.close()
-    except Exception: pass
 
 def _read_chat():
     """Thread-safe read of the chat JSON file."""
@@ -216,13 +178,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header(name, value)
         super().end_headers()
 
-    def finish(self):
-        try:
-            super().finish()
-        finally:
-            if serve_once and _httpd is not None:
-                threading.Thread(target=_httpd.shutdown, daemon=True).start()
-
     def _send(self, status, body=b"", content_type="application/json", headers=()):
         if isinstance(body, str):
             body = body.encode()
@@ -243,40 +198,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.rfile.read(length) if length > 0 else b""
 
     def _check_access(self):
-        return not self._auth_fail() and not self._allow_fail()
-
-    def _auth_fail(self):
-        if not auth_required: return False
-        ah = self.headers.get("Authorization", "")
-        if ah.startswith("Basic "):
-            try:
-                decoded = base64.b64decode(ah[6:]).decode()
-                if hmac.compare_digest(decoded, auth_required):
-                    return False
-            except Exception: pass
-        self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="expose"')
-        b = b"401 Unauthorized"
-        self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
-        return True
-
-    def _allow_fail(self):
-        if not allow_nets: return False
-        try:
-            addr = ipaddress.ip_address(self.client_address[0])
-            if any(addr in ipaddress.ip_network(net, strict=False) for net in allow_nets):
-                return False
-        except Exception:
-            pass
-        self.send_response(403)
-        b = b"403 Forbidden"
-        self.send_header("Content-Type", "text/plain")
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
         return True
 
     def do_GET(self):
@@ -469,9 +390,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self._check_access():
             return
         body = self._read_body()
-        self.request_body = body[:body_limit] if body_limit else b""
+        self.request_body = body[:body_log_limit]
         if catch_requests and body:
-            shown = body[:body_limit] if body_limit else b""
+            shown = body[:body_log_limit]
             sys.stderr.write(f"\n  body ({len(body)} bytes)\n")
             sys.stderr.flush()
             sys.stderr.buffer.write(shown + b"\n")
@@ -490,16 +411,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             ct = self.headers.get("Content-Type", "")
             saved = parse_multipart(body, ct)
             result = json.dumps({"saved": saved, "count": len(saved)}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(result)))
-            self.end_headers()
-            self.wfile.write(result)
-        elif self.path == "/fp":
-            raw = body.decode('utf-8', errors='replace')
-            _write_fp(raw, self.client_address[0], str(self.client_address[1]),
-                      self.headers.get("User-Agent", ""))
-            result = json.dumps({"ok": True}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(result)))
@@ -527,8 +438,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send(204, b"", "text/plain")
 
     def do_DELETE(self):
-        if self._auth_fail(): return
-        if self._allow_fail(): return
         if self.path.startswith("/upload/files/"):
             import urllib.parse
             name = urllib.parse.unquote(self.path[len("/upload/files/"):])
@@ -613,7 +522,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sys.stderr.flush()
 
         # Write to JSON log
-        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat', '/fp'}
+        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat'}
         _path_clean = (self.path or '').split('?')[0]
         if _path_clean not in _skip:
             entry = {"n": request_number, "ts": time.time(), "time": now,
@@ -632,7 +541,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 entry["body"] = request_body.decode("utf-8", errors="replace")
             _write_log(entry)
             _write_collect(entry)
-            _write_db(entry)
 
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
@@ -647,8 +555,4 @@ with Server((bind_addr, port), Handler) as httpd:
     signal.signal(signal.SIGINT, stop_server)
     signal.signal(signal.SIGTERM, stop_server)
 
-    if os.environ.get("EXPOSE_TLS") == "1":
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(os.environ["EXPOSE_CERTFILE"], os.environ["EXPOSE_KEYFILE"])
-        httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
     httpd.serve_forever()
