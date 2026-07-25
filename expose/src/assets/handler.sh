@@ -395,20 +395,28 @@ elif printf '%s' "$PTH" | grep -q '^/upload/files/' && [ "$MTH" = "DELETE" ]; th
     printf 'HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#BODY}" "$BODY"
   fi
 elif [ "$PTH" = "/chat" ] && [ "$MTH" = "GET" ]; then
-  if [ -f "${EXPOSE_CHAT_FILE:-}" ]; then
-    BODY=$(cat "$EXPOSE_CHAT_FILE" 2>/dev/null || echo '[]')
-  else
-    BODY='[]'
-  fi
-  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
+  BODY=$(cat "${EXPOSE_CHAT_FILE:-}" 2>/dev/null || echo '[]')
+  BLEN=$(printf '%s' "$BODY" | wc -c)
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
 elif [ "$PTH" = "/chat" ] && [ "$MTH" = "POST" ]; then
   if [ -n "${EXPOSE_CHAT_FILE:-}" ] && [ -n "$REQ_BODY" ]; then
-    printf '%s' "$REQ_BODY" >> "${EXPOSE_CHAT_FILE}.raw" 2>/dev/null
-    BODY='{"ok":true}'
+    BODY=$(printf '%s' "$REQ_BODY" | python3 -c "
+import json,sys,time
+cf=sys.argv[1]; msg=sys.stdin.read().strip()
+try:
+  with open(cf) as f: msgs=json.load(f)
+except: msgs=[]
+if msg:
+  msgs.append({'time':time.strftime('%H:%M:%S'),'msg':msg,'n':len(msgs)+1})
+if len(msgs)>200: msgs=msgs[-200:]
+with open(cf,'w') as f: json.dump(msgs,f)
+print(json.dumps({'ok':True,'count':len(msgs)}))
+" "$EXPOSE_CHAT_FILE" 2>/dev/null || echo '{"ok":false,"error":"server"}')
   else
     BODY='{"ok":false,"error":"empty"}'
   fi
-  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
+  BLEN=$(printf '%s' "$BODY" | wc -c)
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
 else
   BODY='Not Found'
   printf 'HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
