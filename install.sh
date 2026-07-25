@@ -647,6 +647,7 @@ if [[ -f "$DOTFILES/expose/build.sh" ]]; then
   info "Building expose..."
   bash "$DOTFILES/expose/build.sh"
   cp "$DOTFILES/expose/dist/expose" "$DOTFILES/local-bin/.local/bin/expose"
+  cp "$DOTFILES/expose/dist/expose-online" "$DOTFILES/local-bin/.local/bin/expose-online"
 fi
 
 # Ensure local-bin executables are executable
