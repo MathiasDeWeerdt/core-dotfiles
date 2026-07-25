@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>expose / me</title>
+  <script>
+    try {
+      const theme = localStorage.getItem("expose-theme");
+      if (theme && theme !== "auto") document.documentElement.dataset.theme = theme;
+    } catch (_) {}
+  </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0c10;
+      --surface: #10141b;
+      --border: #1f2632;
+      --text: #e8ebf1;
+      --dim: #9aa3b2;
+      --accent: #34d399;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f4f6f9;
+      --surface: #fff;
+      --border: #dfe3ea;
+      --text: #182230;
+      --dim: #556173;
+      --accent: #059669;
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme]) {
+        color-scheme: light;
+        --bg: #f4f6f9;
+        --surface: #fff;
+        --border: #dfe3ea;
+        --text: #182230;
+        --dim: #556173;
+        --accent: #059669;
+      }
+    }
+    body {
+      max-width: 720px;
+      margin: 2.5rem auto;
+      padding: 0 1rem;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.6 system-ui, sans-serif;
+    }
+    h1 {
+      display: flex;
+      align-items: center;
+      gap: .65rem;
+      margin-bottom: 1.2rem;
+      color: var(--dim);
+      font-size: .95rem;
+      font-weight: 600;
+    }
+    h1 b, td:first-child, .fpid b { color: var(--accent); }
+    .logo {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--text);
+    }
+    .logo svg { width: 29px; height: 24px; }
+    h2 {
+      margin: 1.8rem 0 .8rem;
+      color: var(--dim);
+      font-size: .78rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    table {
+      width: 100%;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-collapse: separate;
+      border-spacing: 0;
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    td {
+      padding: .55rem .85rem;
+      border-bottom: 1px solid var(--border);
+      font: 12.5px ui-monospace, monospace;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { width: 11rem; white-space: nowrap; }
+    td:last-child { word-break: break-all; }
+    .fpid, .fpnote { color: var(--dim); }
+    .fbtn {
+      margin-top: .7rem;
+      padding: .45rem .8rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--dim);
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1><span class="logo" aria-hidden="true">{{LOGO}}</span><span><b>expose</b> / me</span></h1>
+  <table>{{ROWS}}</table>
+  <div id="fp"></div>
+  <script>{{FPJS}}</script>
+</body>
+</html>

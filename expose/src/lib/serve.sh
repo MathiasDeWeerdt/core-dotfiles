@@ -1,6 +1,4 @@
 # ── Serve ────────────────────────────────────────────────────────────────────
-_COUNTERFILE=$(_mktmp /tmp/expose-counter.XXXXXX)
-echo 0 > "$_COUNTERFILE"
 # ── Request log file ──────────────────────────────────────────────────────────
 if [[ -n "$LOGFILE" ]]; then
   _LOGFILE="$LOGFILE"
@@ -17,7 +15,12 @@ if [[ $COLLECT -eq 1 ]]; then
     _COLLECT_FILE=$(_mktmp /tmp/expose-collect.XXXXXX)
   fi
   : > "$_COLLECT_FILE"
-  trap "echo; echo '${GRN}Collected requests:${R} ${_COLLECT_FILE}'; wc -l < '${_COLLECT_FILE}' | xargs printf '${GRN}Total:${R} %s\n'" EXIT
+  print_collected() {
+    echo
+    printf '%sCollected requests:%s %s\n' "$GRN" "$R" "$_COLLECT_FILE"
+    printf '%sTotal:%s %s\n' "$GRN" "$R" "$(wc -l < "$_COLLECT_FILE")"
+  }
+  trap 'print_collected; cleanup' EXIT
 fi
 
 # ── Chat file ──
@@ -68,26 +71,20 @@ cat > "$_UPLOAD_HTML" << 'UPLOADHTML'
 @@INJECT:assets/web/upload.html@@
 UPLOADHTML
 
-_UPLOAD_PY=$(_mktmp /tmp/expose-upload-py.XXXXXX)
-cat > "$_UPLOAD_PY" << 'UPLOADPY'
-@@INJECT:assets/upload.py@@
-UPLOADPY
-
 _FP_JS=$(_mktmp /tmp/expose-fp-js.XXXXXX)
 cat > "$_FP_JS" << 'FPJS'
 @@INJECT:assets/web/fp.js@@
 FPJS
 
-# ── Handler script for socat (text & file modes) ─────────────────────────────
-make_handler() {
-  local h
-  h=$(_mktmp /tmp/expose-handler.XXXXXX)
-  cat > "$h" <<'HANDLER'
-@@INJECT:assets/handler.sh@@
-HANDLER
-  chmod +x "$h"
-  echo "$h"
-}
+_ME_HTML=$(_mktmp /tmp/expose-me-html.XXXXXX)
+cat > "$_ME_HTML" << 'MEHTML'
+@@INJECT:assets/web/me.html@@
+MEHTML
+
+_LOGO_SVG=$(_mktmp /tmp/expose-logo-svg.XXXXXX)
+cat > "$_LOGO_SVG" << 'LOGOSVG'
+@@INJECT:assets/web/logo.svg@@
+LOGOSVG
 
 # ── Payload resolver ──────────────────────────────────────────────────────────
 resolve_payload() {
@@ -100,12 +97,12 @@ PAYLOAD_SRC
 
 # ── Common exports ────────────────────────────────────────────────────────────
 _export_common() {
-  export EXPOSE_VERBOSE="$VERBOSE" EXPOSE_COUNTER="$_COUNTERFILE"
-  export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_PY="$_UPLOAD_PY" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
+  export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND" EXPOSE_VERBOSE="$VERBOSE"
+  export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
   export EXPOSE_AUTH="$AUTH" EXPOSE_CATCH="$CATCH" EXPOSE_RESP_CODE="${RESP_CODE:-200}"
   export EXPOSE_RESP_HEADERS="$_RESP_HDRS"
   export EXPOSE_LOGFILE="$_LOGFILE"
-  export EXPOSE_ONCE="$ONCE" EXPOSE_SOCAT_PIDFILE="$_socatpf"
+  export EXPOSE_ONCE="$ONCE"
   export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
   export EXPOSE_BODY_LIMIT="$BODY_LIMIT"
   export EXPOSE_REDIRECT="$REDIRECT"
@@ -115,94 +112,24 @@ _export_common() {
   export EXPOSE_COLLECT_FILE="$_COLLECT_FILE"
   export EXPOSE_CHAT_FILE="$_CHAT_FILE"
   export EXPOSE_FP_JS="$_FP_JS"
+  export EXPOSE_ME_HTML="$_ME_HTML"
+  export EXPOSE_LOGO_SVG="$_LOGO_SVG"
   export EXPOSE_DB="$_DB"
+  export EXPOSE_TLS="$TLS" EXPOSE_CERTFILE="${_CERTFILE:-}" EXPOSE_KEYFILE="${_KEYFILE:-}"
 }
 
-# ── Serve: text ───────────────────────────────────────────────────────────────
-serve_text() {
-  local cf
-  cf=$(_mktmp /tmp/expose-content.XXXXXX)
-  printf '%s' "$1" > "$cf"
-
-  local _socatpf
-  _socatpf=$(_mktmp /tmp/expose-socatpid.XXXXXX)
-
-  export EXPOSE_CONTENT="$cf" EXPOSE_LEN="${#1}" EXPOSE_MIME="text/plain; charset=utf-8"
+# ── Unified HTTP backend ──────────────────────────────────────────────────────
+serve_http() {
   _export_common
-
-  local _listen
-  if [[ $TLS -eq 1 ]]; then
-    _listen="OPENSSL-LISTEN:${PORT},bind=${BIND},reuseaddr,fork,cert=${_CERTFILE},key=${_KEYFILE},verify=0"
-  else
-    _listen="TCP-LISTEN:${PORT},bind=${BIND},reuseaddr,fork"
-  fi
-
-  socat "$_listen" SYSTEM:"$(make_handler)" &
-  local _spid=$!
-  echo "$_spid" > "$_socatpf"
-  wait "$_spid" || true
-}
-
-# ── Serve: file ──────────────────────────────────────────────────────────────
-serve_file() {
-  local fp mime sz
-  fp=$(realpath "$1")
-  mime=$(file -b --mime-type "$fp" 2>/dev/null || echo "application/octet-stream")
-  sz=$(stat -c'%s' "$fp" 2>/dev/null || wc -c < "$fp")
-
-  local _socatpf
-  _socatpf=$(_mktmp /tmp/expose-socatpid.XXXXXX)
-
-  export EXPOSE_CONTENT="$fp" EXPOSE_LEN="$sz" EXPOSE_MIME="$mime"
-  export EXPOSE_FILENAME="$(basename "$fp")"
-  _export_common
-
-  local _listen
-  if [[ $TLS -eq 1 ]]; then
-    _listen="OPENSSL-LISTEN:${PORT},bind=${BIND},reuseaddr,fork,cert=${_CERTFILE},key=${_KEYFILE},verify=0"
-  else
-    _listen="TCP-LISTEN:${PORT},bind=${BIND},reuseaddr,fork"
-  fi
-
-  socat "$_listen" SYSTEM:"$(make_handler)" &
-  local _spid=$!
-  echo "$_spid" > "$_socatpf"
-  wait "$_spid" || true
-}
-
-# ── Serve: directory ──────────────────────────────────────────────────────────
-serve_dir() {
-  export EXPOSE_PORT="$PORT" EXPOSE_VERBOSE="$VERBOSE"
-  export EXPOSE_UPLOAD_DIR="$UPLOAD_DIR" EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML"
-  export EXPOSE_AUTH="$AUTH"
-  export EXPOSE_LOGFILE="$_LOGFILE"
-  export EXPOSE_BIND="$BIND"
-  export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
-  export EXPOSE_CHAT_FILE="$_CHAT_FILE"
-  export EXPOSE_FP_JS="$_FP_JS"
-  export EXPOSE_DB="$_DB"
   python3 <<'PYEOF'
 @@INJECT:assets/server.py@@
 PYEOF
 }
 
-# ── Serve: redirect ───────────────────────────────────────────────────────────
-serve_redirect() {
-  serve_text ""
-}
-
-# ── Serve: payload ────────────────────────────────────────────────────────────
-serve_payload() {
-  local content
-  content=$(resolve_payload "$PAYLOAD")
-  [[ -z "$content" ]] && die "Unknown payload: $PAYLOAD. Run expose --help for list."
-  serve_text "$content"
-}
-
 # ── Serve: websocket ──────────────────────────────────────────────────────────
 serve_websocket() {
   export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND"
-  info "WebSocket echo server on ws://${BIND}:${PORT}"
+  log "WebSocket echo server on ws://${BIND}:${PORT}"
   python3 <<'PYEOF'
 @@INJECT:assets/websocket.py@@
 PYEOF
@@ -212,7 +139,7 @@ PYEOF
 do_replay() {
   local logfile="$1"
   [[ -f "$logfile" ]] || die "Log file not found: $logfile"
-  python3 <<'PYEOF'
+  python3 - "$logfile" <<'PYEOF'
 import sys, json, http.client, urllib.parse
 
 logfile = sys.argv[1]
@@ -230,13 +157,10 @@ method = entry.get('method', 'GET')
 path = entry.get('path', '/')
 host = entry.get('host', 'localhost')
 
-# Parse host:port from host header
-if ':' in host:
-    hostname, port = host.split(':', 1)
-    port = int(port)
-else:
-    hostname = host
-    port = 80
+# Parse host and optional port, including bracketed IPv6 addresses.
+destination = urllib.parse.urlsplit("//" + host)
+hostname = destination.hostname or "localhost"
+port = destination.port or 80
 
 print(f"Replaying {method} {path} -> {hostname}:{port}")
 
@@ -257,21 +181,39 @@ try:
     print(resp.read().decode('utf-8', 'replace')[:2000])
 except Exception as e:
     print(f"Error: {e}")
+    sys.exit(1)
 finally:
     conn.close()
 PYEOF
-  python3 - "$TARGET"
 }
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 export EXPOSE_MODE="$MODE"
 case "$MODE" in
-  text)     serve_text "$TARGET" ;;
-  catch)    serve_text "" ;;
-  file)     serve_file "$TARGET" ;;
-  dir)      serve_dir ;;
-  redirect) serve_redirect ;;
-  payload)  serve_payload ;;
+  text|catch|redirect|dir)
+    if [[ "$MODE" == "text" ]]; then
+      _CONTENT_FILE=$(_mktmp /tmp/expose-content.XXXXXX)
+      printf '%s' "$TARGET" > "$_CONTENT_FILE"
+      export EXPOSE_CONTENT="$_CONTENT_FILE" EXPOSE_LEN="${#TARGET}" EXPOSE_MIME="text/plain; charset=utf-8"
+    fi
+    serve_http
+    ;;
+  file)
+    _CONTENT_FILE=$(realpath "$TARGET")
+    export EXPOSE_CONTENT="$_CONTENT_FILE"
+    export EXPOSE_LEN="$(stat -c'%s' "$_CONTENT_FILE" 2>/dev/null || wc -c < "$_CONTENT_FILE")"
+    export EXPOSE_MIME="$(file -b --mime-type "$_CONTENT_FILE" 2>/dev/null || echo "application/octet-stream")"
+    export EXPOSE_FILENAME="$(basename "$_CONTENT_FILE")"
+    serve_http
+    ;;
+  payload)
+    _PAYLOAD_CONTENT=$(resolve_payload "$PAYLOAD") \
+      || die "Unknown payload: $PAYLOAD. Run expose --help for list."
+    _CONTENT_FILE=$(_mktmp /tmp/expose-content.XXXXXX)
+    printf '%s' "$_PAYLOAD_CONTENT" > "$_CONTENT_FILE"
+    export EXPOSE_CONTENT="$_CONTENT_FILE" EXPOSE_LEN="${#_PAYLOAD_CONTENT}" EXPOSE_MIME="text/plain; charset=utf-8"
+    serve_http
+    ;;
   websocket) serve_websocket ;;
   replay)   do_replay "$TARGET" ;;
 esac

@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 
 SRC=src
 OUT=dist/expose
+ONLINE_OUT=dist/expose-online
 
 mkdir -p dist
 
@@ -16,19 +17,22 @@ resolve_html() {
   python3 - "$SRC/assets/web/upload.html" \
              "$SRC/assets/web/upload.css" \
              "$SRC/assets/web/upload.js" \
-             "$SRC/assets/web/fp.js" << 'PY'
+             "$SRC/assets/web/fp.js" \
+             "$SRC/assets/web/logo.svg" << 'PY'
 import sys
 
-html_path, css_path, js_path, fp_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+html_path, css_path, js_path, fp_path, logo_path = sys.argv[1:6]
 
 with open(html_path) as f: html = f.read()
 with open(css_path)  as f: css  = f.read()
 with open(js_path)   as f: js   = f.read()
 with open(fp_path)   as f: fp   = f.read()
+with open(logo_path) as f: logo = f.read().strip()
 
 html = html.replace('<style>@@CSS@@</style>', '<style>' + css + '</style>')
 html = html.replace('<script>@@JS@@</script>', '<script>' + js  + '</script>')
 html = html.replace('<script>@@FPJS@@</script>', '<script>' + fp  + '</script>')
+html = html.replace('@@LOGO@@', logo)
 print(html, end='')
 PY
 }
@@ -50,24 +54,27 @@ def load_asset(rel_path):
         return f.read().rstrip('\n')
 
 # Resolve @@INJECT:assets/web/upload.html@@ — this one needs CSS+JS first
-import subprocess, os
+import subprocess
 html_resolved = subprocess.check_output(
     ['python3', '-c', '''
 import sys
-html_path, css_path, js_path, fp_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+html_path, css_path, js_path, fp_path, logo_path = sys.argv[1:6]
 with open(html_path) as f: html = f.read()
 with open(css_path)  as f: css  = f.read()
 with open(js_path)   as f: js   = f.read()
 with open(fp_path)   as f: fp   = f.read()
+with open(logo_path) as f: logo = f.read().strip()
 html = html.replace("<style>@@CSS@@</style>", "<style>" + css + "</style>")
 html = html.replace("<script>@@JS@@</script>", "<script>" + js  + "</script>")
 html = html.replace("<script>@@FPJS@@</script>", "<script>" + fp  + "</script>")
+html = html.replace("@@LOGO@@", logo)
 print(html, end="")
 ''',
     src_root + '/assets/web/upload.html',
     src_root + '/assets/web/upload.css',
     src_root + '/assets/web/upload.js',
     src_root + '/assets/web/fp.js',
+    src_root + '/assets/web/logo.svg',
     ],
     text=True
 )
@@ -95,6 +102,7 @@ PY
     "$SRC/lib/usage.sh" \
     "$SRC/lib/args.sh" \
     "$SRC/lib/validate.sh" \
+    "$SRC/lib/database.sh" \
     "$SRC/lib/banner.sh"
   do
     printf '\n'
@@ -107,6 +115,9 @@ PY
 } > "$OUT"
 
 chmod +x "$OUT"
+cp "$SRC/expose-online.sh" "$ONLINE_OUT"
+chmod +x "$ONLINE_OUT"
 
 SIZE=$(wc -c < "$OUT")
 echo "  OK  $OUT  (${SIZE} bytes)"
+echo "  OK  $ONLINE_OUT"

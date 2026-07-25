@@ -70,12 +70,12 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 ::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:8px;border:2px solid var(--bg)}
 ::-webkit-scrollbar-track{background:transparent}
 
-/* icon defaults (stroke icons); logo uses fills from markup */
+/* icon defaults */
 .btn svg,.iconbtn svg,.ic,.drop-ic,.ov-box svg{
   width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
   stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;
 }
-.logo svg{width:22px;height:22px}
+.logo svg{width:27px;height:23px}
 
 /* ambient glow */
 .glow{position:fixed;inset:0;pointer-events:none;z-index:0;
@@ -93,7 +93,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 }
 .top-in{display:flex;align-items:center;justify-content:space-between;height:56px;gap:12px}
 .brand{display:flex;align-items:center;gap:10px;min-width:0}
-.logo{display:grid;place-items:center;width:32px;height:32px;color:var(--acc);
+.logo{display:grid;place-items:center;width:34px;height:34px;color:var(--txt);
   background:linear-gradient(145deg,var(--accsoft),rgba(52,211,153,.03));
   border:1px solid var(--acc-bd);border-radius:9px;
   box-shadow:0 0 18px rgba(52,211,153,.14) inset,0 0 14px rgba(52,211,153,.08);

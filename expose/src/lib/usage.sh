@@ -11,6 +11,7 @@ ${B}USAGE${R}
     expose [opts] ${CYN}--payload <name>${R} Serve a built-in pentest payload
     expose [opts] ${CYN}--websocket${R}      WebSocket echo server
     expose ${CYN}--replay <logfile>${R}      Replay the last logged request
+    expose ${CYN}db [database]${R}           Browse the request database
 
 ${B}OPTIONS${R}
     -p, --port ${CYN}<port>${R}     Listen port  (default: ${PORT})
@@ -60,5 +61,7 @@ ${B}EXAMPLES${R}
     expose --cors --code 200 '{"ok":true}'
     expose --delay 500 "slow response"
     expose --replay ./session.json
+    expose db
+    expose db --summary
 EOF
 }

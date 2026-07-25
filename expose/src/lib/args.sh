@@ -23,10 +23,20 @@ while [[ $# -gt 0 ]]; do
     --delay)     [[ -n "${2:-}" ]] || die "Missing milliseconds after $1"; DELAY_MS="$2"; shift 2 ;;
     --websocket) WEBSOCKET=1; MODE="websocket"; shift ;;
     --replay)    [[ -n "${2:-}" ]] || die "Missing logfile after $1"; MODE="replay"; TARGET="$2"; shift 2 ;;
+    --summary)   [[ "$MODE" == "db" ]] || die "--summary is only valid with 'expose db'"; DB_SUMMARY=1; shift ;;
+    db)          MODE="db"; TARGET="${HOME}/.expose/requests.db"; shift ;;
     .)           MODE="dir"; shift ;;
     -)           MODE="stdin"; shift ;;
     -*)          die "Unknown option: $1" ;;
-    *)           MODE="text"; TARGET="$1"; shift ;;
+    *)
+      if [[ "$MODE" == "db" && "$TARGET" == "${HOME}/.expose/requests.db" ]]; then
+        TARGET="$1"
+      else
+        MODE="text"
+        TARGET="$1"
+      fi
+      shift
+      ;;
   esac
 done
 
