@@ -1,0 +1,10 @@
+<svg class="expose-mark" viewBox="0 0 64 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M7 15.5 23.5 6 40 15.5v19L23.5 44 7 34.5v-19Z"
+        stroke="currentColor" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="m16 19 14 8-14 8V19Z" fill="var(--acc, #10b981)"/>
+  <path d="m38 17 11-6M40 26h15M38 35l11 6"
+        stroke="var(--acc, #10b981)" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="52" cy="9.5" r="3" fill="currentColor"/>
+  <circle cx="58" cy="26" r="3" fill="currentColor"/>
+  <circle cx="52" cy="42.5" r="3" fill="currentColor"/>
+</svg>

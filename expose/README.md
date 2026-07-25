@@ -8,7 +8,7 @@ gives you a web server with verbose request logging, basic auth, TLS, IP
 allow-lists, file uploads (drag & drop web UI), and built-in reverse-shell
 payloads.
 
-**Version:** 1.3 · **Default port:** 9090 · **License:** personal toolkit
+**Version:** 2.0 · **Default port:** 9090 · **License:** personal toolkit
 
 ## Features
 
@@ -33,8 +33,7 @@ payloads.
 | Dependency | Needed for |
 |------------|------------|
 | `bash`     | everything |
-| `socat`    | all modes except directory mode |
-| `python3`  | directory mode, uploads, request logging, IP allow-list |
+| `python3`  | HTTP serving, uploads, request logging, IP allow-lists, and WebSockets |
 | `openssl`  | `--tls` only |
 | `ss`, `file`, `mktemp` | standard utilities (pre-flight checks, MIME detection) |
 
@@ -42,7 +41,7 @@ payloads.
 
 ```bash
 make build      # assemble src/ into the single-file binary dist/expose
-make install    # install to /usr/local/bin/expose (sudo)
+make install    # install expose and expose-online to /usr/local/bin (sudo)
 make uninstall  # remove it again
 make clean      # delete dist/
 make run ARGS='"hello"'   # build + run in one step
@@ -60,6 +59,7 @@ echo "secret" | expose -                # serve stdin
 expose --catch                          # webhook catcher (dumps bodies)
 expose --payload powershell-reverse     # serve a reverse-shell one-liner
 expose --redirect https://evil.com      # 302 redirect everything
+expose db                               # browse persistent request history
 ```
 
 Stop with `Ctrl+C`. The startup banner shows the local and network URLs.
@@ -88,6 +88,16 @@ Stop with `Ctrl+C`. The startup banner shows the local and network URLs.
 | `--websocket` | WebSocket echo server (experimental) |
 | `--replay <log>` | Replay the last request from a JSON log file |
 | `-h, --help` | Show help |
+
+### Database viewer
+
+`expose db` opens `~/.expose/requests.db` in a read-only terminal browser.
+Choose between requests and browser fingerprints, search with `fzf`, and
+preview complete records without leaving the viewer. Press `Esc` to move back
+or exit.
+
+Use `expose db --summary` for a non-interactive row-count summary, or
+`expose db ./other.db` to select another expose database.
 
 ### Built-in payloads
 
@@ -136,5 +146,6 @@ expose --collect --log calls.jsonl --catch
 ## Development
 
 The binary is generated — edit `src/` and rebuild with `make build`; never edit
-`dist/expose` directly. See [AGENTS.md](AGENTS.md) for the architecture, build
-system, and contribution conventions.
+`dist/expose` directly. Run `make test` for the integration suite. See
+[AGENTS.md](AGENTS.md) for the architecture, build system, and contribution
+conventions.

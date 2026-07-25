@@ -12,6 +12,7 @@ All development happens under `src/`. The `dist/` folder is build output only �
 ```
 src/
 ├── globals.sh              # Top-level variables (VERSION, PORT, MODE, …)
+├── expose-online.sh        # SSH tunnel wrapper, copied to dist/
 ├── lib/
 │   ├── colors.sh           # Terminal color detection
 │   ├── helpers.sh          # log, die, _mktmp, cleanup, traps
@@ -21,13 +22,12 @@ src/
 │   ├── banner.sh           # Startup banner
 │   └── serve.sh            # Runtime serve logic (contains @@INJECT@@ markers)
 └── assets/
-    ├── handler.sh          # socat per-connection HTTP handler
-    ├── upload.py           # Multipart upload processor
-    ├── server.py           # Python HTTP directory server
+    ├── server.py           # Unified Python HTTP backend
     └── web/
         ├── upload.html     # HTML skeleton (inject markers: @@CSS@@ / @@JS@@)
         ├── upload.css      # All styles — edited here, injected at build time
-        └── upload.js       # All client JS — edited here, injected at build time
+        ├── upload.js       # All client JS — edited here, injected at build time
+        └── me.html         # Request/fingerprint page template
 ```
 
 ## Build System
@@ -38,7 +38,7 @@ The build process is: `build.sh` → `dist/<tool>` → `make install` → `/usr/
 
 ```
 make build      # runs build.sh → dist/expose
-make install    # build + sudo install -m 755 dist/expose /usr/local/bin/expose
+make install    # install dist/expose and dist/expose-online to /usr/local/bin
 make uninstall  # sudo rm -f /usr/local/bin/expose
 make clean      # rm -rf dist/
 make run        # build + ./dist/expose $(ARGS)

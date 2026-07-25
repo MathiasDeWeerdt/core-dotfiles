@@ -1,6 +1,6 @@
 ---
 description: "Use when writing, editing, or reviewing bash/sh scripts in this security toolkit. Covers strict mode, validation, error handling, color output, section headers, and cleanup patterns."
-applyTo: "src/**/*.sh, src/assets/handler.sh, build.sh"
+applyTo: "src/**/*.sh, build.sh"
 ---
 
 # Bash Security Toolkit Guidelines

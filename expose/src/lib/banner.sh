@@ -18,10 +18,19 @@ mode_label() {
       echo "${B}file${R}  ${CYN}$(realpath "$TARGET")${R}  ${D}(${mime}, ${sz} bytes)${R}" ;;
     dir)
       echo "${B}directory${R}  ${CYN}$(pwd)${R}" ;;
+    redirect)
+      echo "${B}redirect${R}  ${D}(${REDIRECT})${R}" ;;
+    payload)
+      echo "${B}payload${R}  ${CYN}${PAYLOAD}${R}" ;;
+    websocket)
+      echo "${B}websocket${R} echo server" ;;
+    replay)
+      echo "${B}replay${R}  ${CYN}${TARGET}${R}" ;;
   esac
 }
 
-cat >&2 <<EOF
+if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
+  cat >&2 <<EOF
 
   ${B}${GRN}▲ expose${R}  ${D}v${VERSION}${R}
   ${D}──────────────────────────────────────────${R}
@@ -52,7 +61,8 @@ cat >&2 <<EOF
 
 EOF
 
-log "${GRN}Waiting for connections…${R}"
-echo >&2
+  log "${GRN}Waiting for connections…${R}"
+  echo >&2
+fi
 
 # ── Request counter ───────────────────────────────────────────────────────────

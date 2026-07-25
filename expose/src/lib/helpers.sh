@@ -15,11 +15,15 @@ _mktmp() { local f; f=$(mktemp "$1"); _TMPFILES+=("$f"); echo "$f"; }
 
 cleanup() {
   [[ -n "$_CLEANUP_DONE" ]] && return; _CLEANUP_DONE=1
-  echo >&2
-  log "${YLW}Shutting down…${R}"
+  if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
+    echo >&2
+    log "${YLW}Shutting down…${R}"
+  fi
   for f in "${_TMPFILES[@]+"${_TMPFILES[@]}"}"; do rm -f "$f" 2>/dev/null; done
-  [[ -n "${LOGFILE:-}" ]] && log "${BLU}Log saved to ${U}${LOGFILE}${R}"
-  log "${GRN}Stopped.${R}"
+  if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
+    [[ -n "${LOGFILE:-}" ]] && log "${BLU}Log saved to ${U}${LOGFILE}${R}"
+    log "${GRN}Stopped.${R}"
+  fi
 }
 
 trap 'cleanup; exit 0' INT TERM
