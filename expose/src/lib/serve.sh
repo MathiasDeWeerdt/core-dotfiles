@@ -86,6 +86,7 @@ _export_common() {
   export EXPOSE_PAYLOAD="$PAYLOAD"
   export EXPOSE_COLLECT="$COLLECT"
   export EXPOSE_COLLECT_FILE="$_COLLECT_FILE"
+  export EXPOSE_CHAT_FILE="$_CHAT_FILE"
 }
 
 # ── Serve: text ───────────────────────────────────────────────────────────────

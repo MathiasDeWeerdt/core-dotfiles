@@ -30,6 +30,16 @@ cleanup() {
 }
 trap cleanup INT TERM
 
+# ── Pre-flight: free local port ───────────────────────────────────────────────
+_local_pid=$(ss -tlnp "sport = :${TUNNEL_LPORT}" 2>/dev/null \
+  | awk 'NR>1{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
+if [ -n "$_local_pid" ]; then
+  _local_cmd=$(ps -p "$_local_pid" -o comm= 2>/dev/null || echo "unknown")
+  echo -e "${DIM}Killing ${_local_cmd} (pid ${_local_pid}) on port ${TUNNEL_LPORT}${NC}"
+  kill "$_local_pid" 2>/dev/null || true
+  sleep 0.3
+fi
+
 # ── Start expose ──────────────────────────────────────────────────────────────
 echo -e "${GREEN}Starting expose on localhost:${TUNNEL_LPORT}...${NC}"
 expose --bind 127.0.0.1 -p "$TUNNEL_LPORT" "$@" &
@@ -40,6 +50,13 @@ if ! kill -0 $EXPOSE_PID 2>/dev/null; then
   echo -e "${YLW}expose failed to start${NC}"
   exit 1
 fi
+
+# ── Pre-flight: free remote port ─────────────────────────────────────────────
+echo -e "${DIM}Cleaning up remote port ${TUNNEL_RPORT}...${NC}"
+ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+  -p "$TUNNEL_PORT" "${TUNNEL_USER}@${TUNNEL_HOST}" \
+  "ss -tlnp 'sport = :${TUNNEL_RPORT}' 2>/dev/null | grep -q ':${TUNNEL_RPORT}' && fuser -k ${TUNNEL_RPORT}/tcp 2>/dev/null; true" \
+  2>/dev/null || true
 
 # ── SSH tunnel ────────────────────────────────────────────────────────────────
 echo -e "${GREEN}Tunnel:${NC} localhost:${TUNNEL_LPORT} → ${TUNNEL_HOST}:${TUNNEL_RPORT} (via SSH :${TUNNEL_PORT})"
@@ -66,6 +83,12 @@ while [ $_STOPPED -eq 0 ]; do
     echo -e "${YLW}expose died, exiting.${NC}"
     exit 1
   fi
+
+  # ── Free remote port before reconnecting ─────
+  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+    -p "$TUNNEL_PORT" "${TUNNEL_USER}@${TUNNEL_HOST}" \
+    "ss -tlnp 'sport = :${TUNNEL_RPORT}' 2>/dev/null | grep -q ':${TUNNEL_RPORT}' && fuser -k ${TUNNEL_RPORT}/tcp 2>/dev/null; true" \
+    2>/dev/null || true
 
   echo -e "${YLW}Tunnel dropped, reconnecting in 3s...${NC}"
   sleep 3
