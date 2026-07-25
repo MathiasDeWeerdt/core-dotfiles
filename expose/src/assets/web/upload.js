@@ -91,7 +91,7 @@ fetch('/meta').then(r=>r.json()).then(m=>{
   if(m.mode==='text'){
     hp.textContent='text ('+fmt(m.size)+')';
     fetch('/content').then(r=>r.text()).then(t=>{
-      ctx.innerHTML='<div class="ctx-lbl">response</div><pre class="ctx-text">'+esc(t)+'</pre>';
+      ctx.innerHTML='<div class="ctx-lbl">response</div><pre class="ctx-text">'+esc(t)+'</pre><button class="ctx-copy" onclick="var p=this.previousElementSibling;navigator.clipboard.writeText(p.textContent).then(function(){this.textContent=\'Copied!\';setTimeout(function(){this.textContent=\'Copy\'},1200)}.bind(this))">Copy</button>';
       ctx.classList.add('vis')});
   }else if(m.mode==='file'){
     hp.textContent=m.name;
@@ -270,4 +270,33 @@ function _loadDir(path){
   }
   setInterval(poll,2000);
   poll();
+})();
+
+// ── Shared clipboard (chat) ──
+(function(){
+  const cp=q('chat-panel');
+  if(!cp)return;
+  const cbody=q('chat-body'), cin=q('chat-input'), csend=q('chat-send');
+  let lastN=0;
+
+  function refresh(){
+    fetch('/chat').then(r=>r.json()).then(msgs=>{
+      if(!msgs.length)return;
+      const added=msgs.filter(m=>m.n>lastN);
+      if(!added.length)return;
+      lastN=msgs[msgs.length-1].n;
+      added.forEach(m=>{
+        const d=document.createElement('div');d.className='cm';
+        d.innerHTML='<span class="ct">'+esc(m.time)+'</span><span class="cn">#'+m.n+'</span><span class="cx">'+esc(m.msg)+'</span>';
+        cbody.appendChild(d)});
+      cbody.scrollTop=cbody.scrollHeight})}
+
+  function send(){
+    const v=cin.value.trim();
+    if(!v)return;
+    fetch('/chat',{method:'POST',body:v}).then(r=>r.json()).then(()=>{cin.value='';refresh()}).catch(()=>{})}
+
+  csend.addEventListener('click',send);
+  cin.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();send()}});
+  setInterval(refresh,2000);refresh()
 })();

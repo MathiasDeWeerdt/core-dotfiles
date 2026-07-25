@@ -16,6 +16,13 @@ while [[ $# -gt 0 ]]; do
     --auth)      [[ -n "${2:-}" ]] || die "Missing user:pass after $1"; AUTH="$2"; shift 2 ;;
     --code)      [[ -n "${2:-}" ]] || die "Missing status code after $1"; RESP_CODE="$2"; shift 2 ;;
     --header)    [[ -n "${2:-}" ]] || die "Missing header after $1"; RESP_HEADERS+=("$2"); shift 2 ;;
+    --cors)      CORS=1; shift ;;
+    --redirect)  [[ -n "${2:-}" ]] || die "Missing URL after $1"; REDIRECT="$2"; MODE="redirect"; shift 2 ;;
+    --payload)   [[ -n "${2:-}" ]] || die "Missing payload name after $1"; PAYLOAD="$2"; MODE="payload"; shift 2 ;;
+    --collect)   COLLECT=1; shift ;;
+    --delay)     [[ -n "${2:-}" ]] || die "Missing milliseconds after $1"; DELAY_MS="$2"; shift 2 ;;
+    --websocket) WEBSOCKET=1; MODE="websocket"; shift ;;
+    --replay)    [[ -n "${2:-}" ]] || die "Missing logfile after $1"; MODE="replay"; TARGET="$2"; shift 2 ;;
     .)           MODE="dir"; shift ;;
     -)           MODE="stdin"; shift ;;
     -*)          die "Unknown option: $1" ;;
@@ -32,5 +39,9 @@ fi
 # Catch mode: force verbose, default to catch mode if no other mode
 [[ $CATCH -eq 1 ]] && VERBOSE=1
 [[ $CATCH -eq 1 && -z "$MODE" ]] && MODE="catch"
+
+# Collect mode: force verbose, default to catch mode if no other mode
+[[ $COLLECT -eq 1 ]] && VERBOSE=1
+[[ $COLLECT -eq 1 && -z "$MODE" ]] && MODE="catch"
 
 [[ -n "$MODE" ]] || { usage; exit 1; }

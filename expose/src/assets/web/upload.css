@@ -103,6 +103,7 @@ header .path{font-family:var(--code);font-size:.6875rem;color:var(--dim2);letter
   background:color-mix(in srgb,var(--bg) 50%,#fff);border:1px solid var(--rule);
   padding:.75rem 1rem;white-space:pre-wrap;word-break:break-all;
   max-height:16rem;overflow-y:auto;line-height:1.6}
+.ctx-copy{font-family:var(--ui);font-size:.6875rem;background:var(--ink);color:var(--bg);border:none;padding:.25rem .75rem;border-radius:3px;cursor:pointer;margin-top:.5rem;transition:background .12s}.ctx-copy:hover{background:var(--accent)}
 .ctx-file{display:flex;align-items:baseline;gap:.5rem;padding:.5rem 0;
   border-bottom:1px solid var(--rule)}
 .ctx-file .fn{flex:1;font-family:var(--code);font-size:.8125rem;color:var(--ink);font-weight:600;
@@ -196,3 +197,16 @@ footer{margin-top:auto;padding:1rem;text-align:center;font-size:.625rem;
   white-space:pre-wrap;word-break:break-all;max-height:8rem;overflow-y:auto;
   scrollbar-width:thin;scrollbar-color:#3a3830 transparent}
 .le-hl{background:#4a3a10;color:#e8d070}
+
+/* ── chat ── */
+.chat-panel{border:1px solid var(--rule);border-radius:6px;overflow:hidden;margin-top:.5rem}
+.chat-body{padding:.75rem;max-height:16rem;overflow-y:auto;display:flex;flex-direction:column;gap:.25rem}
+.cm{display:flex;align-items:baseline;gap:.5rem;font-size:.75rem;padding:.15rem 0}
+.ct{color:var(--dim);font-family:var(--code);font-size:.625rem;flex-shrink:0}
+.cn{color:var(--dim2);font-family:var(--code);font-size:.625rem;flex-shrink:0;min-width:2rem;text-align:right}
+.cx{color:var(--ink);word-break:break-all;line-height:1.4}
+.chat-bar{display:flex;border-top:1px solid var(--rule)}
+.chat-input{flex:1;background:var(--br);border:none;color:var(--ink);font-family:var(--ui);font-size:.8125rem;padding:.6rem .75rem;outline:none}
+.chat-input::placeholder{color:var(--dim2)}
+.chat-send{background:var(--ink);color:var(--bg);border:none;font-family:var(--ui);font-size:.75rem;font-weight:600;padding:.6rem 1rem;cursor:pointer;transition:background .12s}
+.chat-send:hover{background:var(--accent)}

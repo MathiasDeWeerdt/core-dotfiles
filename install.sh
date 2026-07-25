@@ -642,6 +642,16 @@ section "11/11 — Dotfiles (stow)"
 
 cd "$DOTFILES"
 
+# Build expose before stowing
+if [[ -f "$DOTFILES/expose/build.sh" ]]; then
+  info "Building expose..."
+  bash "$DOTFILES/expose/build.sh"
+  cp "$DOTFILES/expose/dist/expose" "$DOTFILES/local-bin/.local/bin/expose"
+fi
+
+# Ensure local-bin executables are executable
+chmod +x "$DOTFILES/local-bin/.local/bin/"* 2>/dev/null || true
+
 STOW_PACKAGES=(zsh p10k foot tmux git fonts local-bin flameshot memory)
 
 info "Stowing dotfiles..."
