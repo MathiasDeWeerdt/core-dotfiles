@@ -68,7 +68,7 @@ themeApply(themeGet());
 q('copy-url').addEventListener('click',()=>copyText(location.origin,'Link copied'));
 
 // ── hero: mode-aware context ──────────────────────────────
-const BADGE={dir:'blu',catch:'vio',payload:'amb',redirect:'amb',websocket:'vio'};
+const BADGE={dir:'blu',catch:'vio',payload:'amb',redirect:'amb'};
 
 fetch('/meta').then(r=>r.json()).then(m=>{
   const hero=q('hero'),badge=q('mode-badge');

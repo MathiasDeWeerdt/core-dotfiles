@@ -21,7 +21,6 @@ cleanup() {
   fi
   for f in "${_TMPFILES[@]+"${_TMPFILES[@]}"}"; do rm -f "$f" 2>/dev/null; done
   if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
-    [[ -n "${LOGFILE:-}" ]] && log "${BLU}Log saved to ${U}${LOGFILE}${R}"
     log "${GRN}Stopped.${R}"
   fi
 }

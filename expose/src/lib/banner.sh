@@ -1,7 +1,6 @@
 # ── Banner ────────────────────────────────────────────────────────────────────
 LOCAL_IP=$(get_local_ip)
 _SCHEME="http"
-[[ $TLS -eq 1 ]] && _SCHEME="https"
 _BINDHOST="127.0.0.1"
 [[ "$BIND" != "0.0.0.0" ]] && _BINDHOST="$BIND"
 
@@ -22,10 +21,6 @@ mode_label() {
       echo "${B}redirect${R}  ${D}(${REDIRECT})${R}" ;;
     payload)
       echo "${B}payload${R}  ${CYN}${PAYLOAD}${R}" ;;
-    websocket)
-      echo "${B}websocket${R} echo server" ;;
-    replay)
-      echo "${B}replay${R}  ${CYN}${TARGET}${R}" ;;
   esac
 }
 
@@ -41,12 +36,7 @@ if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
   ${BLU}Me${R}       ${U}${_SCHEME}://${LOCAL_IP}:${PORT}/me${R}$(
     [[ $VERBOSE -eq 1 ]]            && printf '\n  %sVerbose%s  %senabled  (--more)%s'       "$YLW" "$R" "$D" "$R"
     [[ $CATCH -eq 1 ]]              && printf '\n  %sCatch%s    %senabled  (--catch)%s'      "$YLW" "$R" "$D" "$R"
-    [[ $ONCE -eq 1 ]]               && printf '\n  %sOnce%s     %sexit after first request%s' "$YLW" "$R" "$D" "$R"
-    [[ $TLS -eq 1 ]]                && printf '\n  %sTLS%s      %sself-signed cert%s'         "$YLW" "$R" "$D" "$R"
     [[ "$BIND" != "0.0.0.0" ]]      && printf '\n  %sBind%s     %s%s%s'                       "$YLW" "$R" "$D" "$BIND" "$R"
-    [[ -n "$LOGFILE" ]]             && printf '\n  %sLog%s      %s%s%s'                       "$YLW" "$R" "$D" "$LOGFILE" "$R"
-    [[ -n "$_EXPOSE_ALLOW" ]]       && printf '\n  %sAllow%s    %s%s%s'                       "$YLW" "$R" "$D" "$_EXPOSE_ALLOW" "$R"
-    [[ -n "$AUTH" ]]                && printf '\n  %sAuth%s     %s%s:••••  (--auth)%s'        "$YLW" "$R" "$D" "${AUTH%%:*}" "$R"
     [[ -n "$RESP_CODE" ]]           && printf '\n  %sCode%s     %s%s%s'                       "$YLW" "$R" "$D" "$RESP_CODE" "$R"
     (( ${#RESP_HEADERS[@]} ))       && printf '\n  %sHeaders%s  %s%d custom%s'               "$YLW" "$R" "$D" "${#RESP_HEADERS[@]}" "$R"
     [[ $CORS -eq 1 ]]               && printf '\n  %sCORS%s     %senabled%s'                  "$YLW" "$R" "$D" "$R"
@@ -54,7 +44,6 @@ if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
     [[ -n "$PAYLOAD" ]]              && printf '\n  %sPayload%s  %s%s%s'                       "$YLW" "$R" "$D" "$PAYLOAD" "$R"
     [[ $COLLECT -eq 1 ]]            && printf '\n  %sCollect%s  %senabled  (--collect)%s'     "$YLW" "$R" "$D" "$R"
     [[ $DELAY_MS -gt 0 ]]           && printf '\n  %sDelay%s    %s%s ms%s'                     "$YLW" "$R" "$D" "$DELAY_MS" "$R"
-    [[ $WEBSOCKET -eq 1 ]]          && printf '\n  %sWebSocket%s %senabled%s'                 "$YLW" "$R" "$D" "$R"
   )
   ${D}──────────────────────────────────────────${R}
   ${D}Ctrl+C to stop${R}

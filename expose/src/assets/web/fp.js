@@ -1,7 +1,6 @@
 /* expose — client-side device fingerprint
-   Collects browser/device signals on every page, renders the panel on /me
-   (into <div id="fp">), and reports everything to POST /fp where it is
-   logged to the operator's SQLite database. */
+   Collects browser/device signals and renders the panel on /me
+   (into <div id="fp">). */
 (function(){
   var mount=document.getElementById('fp');
 
@@ -107,20 +106,6 @@
   function finish(id){
     d.visitor_id=id;
     show(id);
-    report();
-  }
-  // ── report to the operator (logged to sqlite via POST /fp) ──
-  function report(){
-    d.page=location.pathname;
-    var payload;
-    try{payload=JSON.stringify(d)}catch(e){return}
-    try{
-      if(navigator.sendBeacon){
-        var ok=navigator.sendBeacon('/fp',new Blob([payload],{type:'application/json'}));
-        if(ok)return;
-      }
-      fetch('/fp',{method:'POST',headers:{'Content-Type':'application/json'},body:payload,keepalive:true}).catch(function(){});
-    }catch(e){}
   }
   if(window.crypto&&crypto.subtle&&crypto.subtle.digest){
     crypto.subtle.digest('SHA-256',new TextEncoder().encode(stable)).then(function(buf){
