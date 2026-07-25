@@ -16,11 +16,17 @@ payloads.
 - **Request inspection** — one-line or verbose logging (all headers, reverse DNS, parsed User-Agent)
 - **Request catcher** (`--catch`) — dump full headers + body, webhook-tester style
 - **Uploads** — every mode serves a drag & drop upload page; received files land in `~/Downloads/expose`
+- **Themes** — dark + light UI; follows your OS theme automatically, manual override in the header
+- **Device fingerprinting** — `/me` shows what the visitor's browser leaks: GPU, canvas fingerprint, timezone, screen, CPU/memory, storage APIs… plus a stable SHA-256 visitor id and copy-as-JSON
+- **Smart request viewer** — request bodies are auto-decoded (JSON pretty-print, JWT header+payload, form-urlencoded) and credential-looking bodies are flagged with a red `creds` chip
+- **CLI one-liners** — copy-ready commands per OS (Linux/macOS/Windows) for uploading files, posting to chat, and downloading shared content: curl, wget, nc, socat, python (stdlib + requests), httpie, PowerShell, certutil, bitsadmin
+- **Reverse shells** — revshells.com-style card with editable LHOST/LPORT: bash `/dev/tcp`, zsh `ztcp`, nc (`-e` + mkfifo), python3, socat for Linux/macOS; PowerShell (+ AMSI-bypass variant) and ncat for Windows; plus listener commands (nc / rlwrap / socat)
+- **Persistent request log** — every request is appended to `~/.expose/requests.db` (SQLite, WAL) with timestamp, method, path, client, UA and mode; survives restarts. Every page visit also reports a **device fingerprint** (browser + device signals, stable visitor id) into the `fingerprints` table. Internal API polling is excluded. Query with `sqlite3 ~/.expose/requests.db 'select * from fingerprints'`
 - **Access control** — HTTP Basic Auth, source IP/CIDR allow-list, bind address
 - **TLS** — HTTPS with an auto-generated self-signed certificate
 - **Response shaping** — custom status code, custom headers, CORS, artificial delay, 302 redirect mode
 - **Pentest payloads** — built-in PHP / PowerShell / Python / bash reverse shells and a certutil download cradle
-- **Extras** — `/me` request-echo page, JSON request log API, mini chat endpoint, WebSocket echo server (experimental), one-shot mode (`--once`)
+- **Extras** — `/me` request-echo + device-fingerprint page, JSON request log API, mini chat, new-request sound alert, request stats view, WebSocket echo server (experimental), one-shot mode (`--once`)
 
 ## Requirements
 
@@ -101,7 +107,7 @@ content on `/content`, or 404):
 | `GET /upload/files` | JSON list of received files |
 | `GET /upload/files/<name>` | Download a received file |
 | `DELETE /upload/files/<name>` | Delete a received file |
-| `GET /me` | Echo the client's request info (HTML, or JSON with `Accept: application/json`) |
+| `GET /me` | Echo the client's request info + client-side device fingerprint (HTML, or JSON with `Accept: application/json`) |
 | `GET /log?since=<n>` | JSON request log (last 500 entries; `since` filters by entry number) |
 | `POST /log/clear` | Clear the request log |
 | `GET /meta` | JSON metadata about the current mode |

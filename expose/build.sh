@@ -15,17 +15,20 @@ echo "Building $OUT …"
 resolve_html() {
   python3 - "$SRC/assets/web/upload.html" \
              "$SRC/assets/web/upload.css" \
-             "$SRC/assets/web/upload.js" << 'PY'
+             "$SRC/assets/web/upload.js" \
+             "$SRC/assets/web/fp.js" << 'PY'
 import sys
 
-html_path, css_path, js_path = sys.argv[1], sys.argv[2], sys.argv[3]
+html_path, css_path, js_path, fp_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 with open(html_path) as f: html = f.read()
 with open(css_path)  as f: css  = f.read()
 with open(js_path)   as f: js   = f.read()
+with open(fp_path)   as f: fp   = f.read()
 
 html = html.replace('<style>@@CSS@@</style>', '<style>' + css + '</style>')
 html = html.replace('<script>@@JS@@</script>', '<script>' + js  + '</script>')
+html = html.replace('<script>@@FPJS@@</script>', '<script>' + fp  + '</script>')
 print(html, end='')
 PY
 }
@@ -51,17 +54,20 @@ import subprocess, os
 html_resolved = subprocess.check_output(
     ['python3', '-c', '''
 import sys
-html_path, css_path, js_path = sys.argv[1], sys.argv[2], sys.argv[3]
+html_path, css_path, js_path, fp_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(html_path) as f: html = f.read()
 with open(css_path)  as f: css  = f.read()
 with open(js_path)   as f: js   = f.read()
+with open(fp_path)   as f: fp   = f.read()
 html = html.replace("<style>@@CSS@@</style>", "<style>" + css + "</style>")
 html = html.replace("<script>@@JS@@</script>", "<script>" + js  + "</script>")
+html = html.replace("<script>@@FPJS@@</script>", "<script>" + fp  + "</script>")
 print(html, end="")
 ''',
     src_root + '/assets/web/upload.html',
     src_root + '/assets/web/upload.css',
     src_root + '/assets/web/upload.js',
+    src_root + '/assets/web/fp.js',
     ],
     text=True
 )
