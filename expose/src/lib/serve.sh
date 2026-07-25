@@ -41,6 +41,28 @@ fi
 UPLOAD_DIR="${HOME}/Downloads/expose"
 mkdir -p "$UPLOAD_DIR"
 
+# ── Persistent SQLite request log (~/.expose/requests.db) ────────────────────
+_DB_DIR="${HOME}/.expose"
+_DB="${_DB_DIR}/requests.db"
+if command -v python3 &>/dev/null && mkdir -p "$_DB_DIR" 2>/dev/null; then
+  python3 - "$_DB" <<'PYDB' 2>/dev/null
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("""create table if not exists requests(
+  id integer primary key autoincrement,
+  ts real, time text, method text, path text,
+  ip text, port text, ua text, host text,
+  content_type text, content_len text, mode text)""")
+con.execute("""create table if not exists fingerprints(
+  id integer primary key autoincrement,
+  ts real, time text,
+  ip text, port text, ua text,
+  page text, visitor_id text, data text)""")
+con.execute("pragma journal_mode=WAL")
+con.commit(); con.close()
+PYDB
+fi
+
 _UPLOAD_HTML=$(_mktmp /tmp/expose-upload-html.XXXXXX)
 cat > "$_UPLOAD_HTML" << 'UPLOADHTML'
 @@INJECT:assets/web/upload.html@@
@@ -50,6 +72,11 @@ _UPLOAD_PY=$(_mktmp /tmp/expose-upload-py.XXXXXX)
 cat > "$_UPLOAD_PY" << 'UPLOADPY'
 @@INJECT:assets/upload.py@@
 UPLOADPY
+
+_FP_JS=$(_mktmp /tmp/expose-fp-js.XXXXXX)
+cat > "$_FP_JS" << 'FPJS'
+@@INJECT:assets/web/fp.js@@
+FPJS
 
 # ── Handler script for socat (text & file modes) ─────────────────────────────
 make_handler() {
@@ -87,6 +114,8 @@ _export_common() {
   export EXPOSE_COLLECT="$COLLECT"
   export EXPOSE_COLLECT_FILE="$_COLLECT_FILE"
   export EXPOSE_CHAT_FILE="$_CHAT_FILE"
+  export EXPOSE_FP_JS="$_FP_JS"
+  export EXPOSE_DB="$_DB"
 }
 
 # ── Serve: text ───────────────────────────────────────────────────────────────
@@ -150,6 +179,8 @@ serve_dir() {
   export EXPOSE_BIND="$BIND"
   export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
   export EXPOSE_CHAT_FILE="$_CHAT_FILE"
+  export EXPOSE_FP_JS="$_FP_JS"
+  export EXPOSE_DB="$_DB"
   python3 <<'PYEOF'
 @@INJECT:assets/server.py@@
 PYEOF

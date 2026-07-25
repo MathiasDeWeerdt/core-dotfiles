@@ -193,7 +193,7 @@ fi
 # ── Write to JSON log file ──
 if [ -n "${EXPOSE_LOGFILE:-}" ]; then
   case "$PTH" in
-    /log|/log\?*|/log/clear|/meta|/upload/files|/me) ;; # skip internal API
+    /log|/log\?*|/log/clear|/meta|/upload/files|/me|/chat|/fp) ;; # skip internal API
     *)
   printf '%s' "$REQ_BODY" | python3 -c "
 import json,sys,os,time
@@ -215,6 +215,17 @@ except: log=[]
 log.append(e)
 if len(log)>500: log=log[-500:]
 with open(lf,'w') as f: json.dump(log,f)
+try:
+  import sqlite3
+  db=os.environ.get('EXPOSE_DB','')
+  if db:
+    con=sqlite3.connect(db,timeout=5)
+    con.execute('insert into requests(ts,time,method,path,ip,port,ua,host,content_type,content_len,mode) values(?,?,?,?,?,?,?,?,?,?,?)',
+                (e['ts'],e['time'],e['method'],e['path'],e['ip'],str(e['port']),
+                 e['ua'],e['host'],e['content_type'],e['content_len'],
+                 os.environ.get('EXPOSE_MODE','')))
+    con.commit(); con.close()
+except: pass
 " "$N" "$TIME" "$MTH" "$PTH" "$HTTPVER" "$PEER" "$PEER_PORT" \
   "$UA" "$HOST_HDR" "$ACCEPT" "$ACCEPT_LANG" "$ACCEPT_ENC" "$REFERER" \
   "$COOKIE" "$ORIGIN" "$DNT_HDR" "$CONTENT_TYPE" "${CONTENT_LEN:--}" \
@@ -259,6 +270,7 @@ _PTHBASE="${PTH%%\?*}"
 _PTHQUERY="${PTH#*\?}"
 [ "$_PTHQUERY" = "$PTH" ] && _PTHQUERY=""
 if [ "$_PTHBASE" = "/me" ] && [ "$MTH" = "GET" ]; then
+  FPJS=$(cat "${EXPOSE_FP_JS:-/dev/null}" 2>/dev/null)
   _ACCEPT_HDR=$(printf '%s' "${ACCEPT:-}" | tr '[:upper:]' '[:lower:]')
   case "$_ACCEPT_HDR" in
     *application/json*|*json*)
@@ -286,7 +298,7 @@ ip=sys.argv[1]; port=sys.argv[2]; method=sys.argv[3]; httpver=sys.argv[4]
 host=sys.argv[5]; ua=sys.argv[6]; accept=sys.argv[7]; accept_lang=sys.argv[8]
 accept_enc=sys.argv[9]; referer=sys.argv[10]; origin=sys.argv[11]; cookie=sys.argv[12]
 dnt=sys.argv[13]; xff=sys.argv[14]; connection=sys.argv[15]
-auth=sys.argv[16]; ct=sys.argv[17]
+auth=sys.argv[16]; ct=sys.argv[17]; fp=sys.argv[18]
 fields=[('IP',ip+':'+port),('Method',method+' '+httpver),('Host',host),
         ('User-Agent',ua),('Accept',accept),('Accept-Language',accept_lang),
         ('Accept-Encoding',accept_enc),('Referer',referer),('Origin',origin),
@@ -295,22 +307,35 @@ fields=[('IP',ip+':'+port),('Method',method+' '+httpver),('Host',host),
 rows=''.join('<tr><td>'+html.escape(k)+'</td><td>'+html.escape(v)+'</td></tr>'
              for k,v in fields if v and v!='-')
 print('<html><head><meta charset=\"utf-8\"><title>expose / me</title>'
-      '<style>body{font:14px/1.6 ui-monospace,monospace;background:#1a1917;color:#c8c5be;'
-      'max-width:700px;margin:2rem auto;padding:0 1rem}'
-      'h1{font-size:1rem;color:#84817a;margin-bottom:1.5rem;font-weight:400}'
-      'h1 b{color:#c8c5be}'
-      'table{border-collapse:collapse;width:100%}'
-      'td{padding:.35rem .6rem;border-bottom:1px solid #2a2820;font-size:.8125rem}'
-      'td:first-child{color:#5c8abf;width:10rem;white-space:nowrap}'
-      'td:last-child{color:#c8c5be;word-break:break-all}'
+      '<script>try{var __t=localStorage.getItem(\"expose-theme\");if(__t&&__t!==\"auto\")document.documentElement.dataset.theme=__t}catch(_){}</script>'
+      '<style>:root{color-scheme:dark;--bg:#0a0c10;--srf:#10141b;--brd:#1f2632;--txt:#e8ebf1;--dim:#9aa3b2;--acc:#34d399}'
+      ':root[data-theme=light]{color-scheme:light;--bg:#f4f6f9;--srf:#ffffff;--brd:#dfe3ea;--txt:#182230;--dim:#556173;--acc:#059669}'
+      '@media (prefers-color-scheme:light){:root:not([data-theme]){color-scheme:light;--bg:#f4f6f9;--srf:#ffffff;--brd:#dfe3ea;--txt:#182230;--dim:#556173;--acc:#059669}}'
+      'body{font:14px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt);'
+      'max-width:720px;margin:2.5rem auto;padding:0 1rem}'
+      'h1{font-size:.95rem;color:var(--dim);margin-bottom:1.2rem;font-weight:600}'
+      'h1 b{color:var(--acc)}'
+      'h2{font-size:.78rem;color:var(--dim);margin:1.8rem 0 .8rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em}'
+      'table{border-collapse:separate;border-spacing:0;width:100%;background:var(--srf);border:1px solid var(--brd);border-radius:12px;overflow:hidden}'
+      'td{padding:.55rem .85rem;border-bottom:1px solid var(--brd);font:12.5px ui-monospace,Menlo,Consolas,monospace}'
+      'tr:last-child td{border-bottom:0}'
+      'td:first-child{color:var(--acc);width:11rem;white-space:nowrap}'
+      'td:last-child{color:var(--txt);word-break:break-all}'
+      '.fpid{margin-top:.9rem;font:12.5px ui-monospace,Menlo,Consolas,monospace;color:var(--dim)}'
+      '.fpid b{color:var(--acc)}'
+      '.fpnote{margin:.8rem 0 0;font-size:12px;color:var(--dim)}'
+      '.fbtn{margin-top:.7rem;background:var(--srf);border:1px solid var(--brd);color:var(--dim);border-radius:8px;padding:.45rem .8rem;font:12.5px -apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer}'
+      '.fbtn:hover{color:var(--txt)}'
       '</style></head><body>'
       '<h1><b>expose</b> / me</h1>'
       '<table>'+rows+'</table>'
+      '<div id=\"fp\"></div>'
+      '<script>'+fp+'</script>'
       '</body></html>')
 " "$PEER" "$PEER_PORT" "$MTH" "$HTTPVER" \
   "$HOST_HDR" "$UA" "$ACCEPT" "$ACCEPT_LANG" "$ACCEPT_ENC" \
   "$REFERER" "$ORIGIN" "$COOKIE" "$DNT_HDR" "$XFF" "$CONNECTION" \
-  "$AUTH_HDR" "$CONTENT_TYPE")
+  "$AUTH_HDR" "$CONTENT_TYPE" "$FPJS")
       BLEN=$(printf '%s' "$BODY" | wc -c)
       printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
       ;;
@@ -417,6 +442,28 @@ print(json.dumps({'ok':True,'count':len(msgs)}))
   fi
   BLEN=$(printf '%s' "$BODY" | wc -c)
   printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
+elif [ "$PTH" = "/fp" ] && [ "$MTH" = "POST" ]; then
+  # Device fingerprint report — append to the sqlite fingerprints table
+  printf '%s' "$REQ_BODY" | python3 -c "
+import sqlite3,sys,os,time,json
+raw=sys.stdin.read()
+ua='';vid='';page=''
+try:
+  d=json.loads(raw)
+  ua=d.get('user_agent','');vid=d.get('visitor_id','');page=d.get('page','')
+except: pass
+db=os.environ.get('EXPOSE_DB','')
+if db:
+  try:
+    con=sqlite3.connect(db,timeout=5)
+    con.execute('insert into fingerprints(ts,time,ip,port,ua,page,visitor_id,data) values(?,?,?,?,?,?,?,?)',
+                (time.time(),time.strftime('%H:%M:%S'),sys.argv[1],sys.argv[2],
+                 ua or sys.argv[3],page,vid,raw))
+    con.commit();con.close()
+  except: pass
+" "$PEER" "$PEER_PORT" "$UA" &
+  BODY='{"ok":true}'
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
 else
   BODY='Not Found'
   printf 'HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"

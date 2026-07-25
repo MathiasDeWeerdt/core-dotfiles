@@ -37,9 +37,13 @@ no escaping needed):
 
 - `@@INJECT:assets/<path>@@` inside heredocs in `serve.sh` — embeds
   `handler.sh`, `upload.py`, `server.py`, `websocket.py`, `payloads.sh`,
-  `web/upload.html`
-- `@@CSS@@` / `@@JS@@` inside `src/assets/web/upload.html` — inlines the
-  stylesheet and client JS into a single HTML page
+  `web/upload.html`, `web/fp.js`
+- `@@CSS@@` / `@@JS@@` / `@@FPJS@@` inside `src/assets/web/upload.html` — inlines
+  the stylesheet, client JS, and fingerprint script into a single HTML page
+- `web/fp.js` is also inlined into `/me` at runtime via the `EXPOSE_FP_JS` env
+  var (tempfile path exported by `serve.sh`). It collects browser/device
+  signals on every page and reports them to `POST /fp`, which appends to the
+  `fingerprints` table in `EXPOSE_DB` (`/fp` is on the internal-API skip-list)
 
 ### Runtime dispatch
 
@@ -61,8 +65,11 @@ payload | websocket | replay); `serve.sh`'s final `case` dispatches:
 The parent process passes all configuration to `handler.sh` through `EXPOSE_*`
 environment variables, exported by `_export_common()` in `serve.sh`
 (`EXPOSE_CONTENT`, `EXPOSE_LEN`, `EXPOSE_MIME`, `EXPOSE_AUTH`, `EXPOSE_ALLOW`,
-`EXPOSE_LOGFILE`, `EXPOSE_COUNTER`, `EXPOSE_ONCE`, …). `server.py` and
-`upload.py` read the same convention. **When adding an option: add the global
+`EXPOSE_LOGFILE`, `EXPOSE_COUNTER`, `EXPOSE_ONCE`, `EXPOSE_DB`,
+`EXPOSE_FP_JS`, …). `server.py` and `upload.py` read the same convention.
+`EXPOSE_DB` points at `~/.expose/requests.db` — a persistent SQLite request
+log (schema created at startup in `serve.sh`, WAL mode, inserts happen in the
+same code paths as the JSON log, so the internal-API skip-list applies). **When adding an option: add the global
 in `globals.sh`, parse it in `args.sh`, validate in `validate.sh`, show it in
 `banner.sh` and `usage.sh`, export it in `_export_common()`, consume it in the
 handler.**

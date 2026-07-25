@@ -1,63 +1,164 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>expose / upload</title>
-<style>@@CSS@@</style></head><body>
+<title>expose</title>
+<script>try{var __t=localStorage.getItem('expose-theme');if(__t&&__t!=='auto')document.documentElement.dataset.theme=__t}catch(_){}</script>
+<style>@@CSS@@</style></head>
+<body>
 
-<div class="shell">
-  <header>
-    <span class="id"><b>expose</b></span>
-    <span class="pipe">/</span>
-    <span class="path" id="hpath">&hellip;</span>
-  </header>
+<div class="glow" aria-hidden="true"></div>
 
-  <div class="ctx" id="ctx"></div>
-
-  <div class="sep"><span>upload</span></div>
-
-  <div class="drop" id="drop">
-    <p>Drop files or <a id="browse">select</a></p>
-    <input type="file" id="fi" multiple>
-  </div>
-
-  <div class="queue" id="queue"></div>
-  <div class="qn" id="qn"></div>
-
-  <div class="acts" id="acts">
-    <button class="abtn" id="send">Send</button>
-    <button class="aclr" id="clr">clear</button>
-  </div>
-
-  <div class="prog" id="prog"><i id="bar"></i></div>
-  <div class="msg" id="msg"></div>
-
-  <div class="div" id="divider"><span>on disk</span></div>
-  <div class="disk" id="disk"></div>
-  <div class="dn" id="dn"></div>
-</div>
-
-<div class="chat-panel" id="chat-panel">
-  <div class="chat-body" id="chat-body"></div>
-  <div class="chat-bar">
-    <input class="chat-input" id="chat-input" type="text" placeholder="message..." autocomplete="off" spellcheck="false">
-    <button class="chat-send" id="chat-send">send</button>
-  </div>
-</div>
-
-<footer>expose &mdash; uploads save to ~/Downloads/expose</footer>
-
-<div class="lp collapsed" id="lp">
-  <div class="lp-bar" id="lp-bar">
-    <span class="lp-title">log</span>
-    <span class="lp-badge" id="lp-badge"></span>
-    <input class="lp-search" id="lp-search" type="text" placeholder="filter&hellip;" autocomplete="off" spellcheck="false">
-    <div class="lp-acts">
-      <button class="lp-btn" id="lp-pause" title="Pause polling">pause</button>
-      <button class="lp-btn" id="lp-export" title="Copy log as JSON">export</button>
-      <button class="lp-btn" id="lp-clear" title="Clear log">clear</button>
+<header class="top">
+  <div class="wrap top-in">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l8.5 15h-17L12 3z" fill="currentColor" opacity=".92"/><path d="M12 10.5l3.8 6.7H8.2l3.8-6.7z" fill="#0a0c10"/></svg></span>
+      <span class="word">expose</span>
+      <span class="badge" id="mode-badge">&hellip;</span>
+    </div>
+    <div class="top-acts">
+      <button class="btn ghost sm" id="theme-toggle" title="Theme: auto (system)">
+        <svg viewBox="0 0 24 24" id="theme-ic"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button class="btn ghost sm" id="copy-url" title="Copy this page's URL">
+        <svg viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7.1 0l2.4-2.4a5 5 0 0 0-7.1-7.1l-1.2 1.2"/><path d="M14 10a5 5 0 0 0-7.1 0l-2.4 2.4a5 5 0 0 0 7.1 7.1l1.2-1.2"/></svg>
+        <span>Copy link</span>
+      </button>
+      <button class="btn ghost sm" id="chat-toggle" title="Toggle chat">
+        <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8c-1.4 0-2.8-.4-3.9-1L3 20l1.1-5.1A8 8 0 1 1 21 12z"/></svg>
+        <span>Chat</span>
+        <i class="dot" id="chat-dot" hidden></i>
+      </button>
     </div>
   </div>
-  <div class="lp-body" id="lp-body">
-    <div class="lp-empty" id="lp-empty">waiting for requests&hellip;</div>
+</header>
+
+<main class="wrap">
+
+  <!-- Mode-aware hero: filled by JS -->
+  <section class="card hero" id="hero" hidden></section>
+
+  <!-- Upload -->
+  <section class="card" id="upload-card">
+    <div class="card-h">
+      <h2>Send files</h2>
+      <span class="hint">anything dropped here lands on this machine</span>
+    </div>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Drop files or browse">
+      <svg class="drop-ic" viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      <p class="drop-t">Drag &amp; drop files here, or <button class="linklike" id="browse" type="button">browse</button></p>
+      <p class="drop-s">multiple files welcome</p>
+      <input type="file" id="fi" multiple hidden>
+    </div>
+    <div class="queue" id="queue"></div>
+    <div class="up-acts" id="up-acts" hidden>
+      <button class="btn primary" id="send">
+        <svg viewBox="0 0 24 24"><path d="M12 19V5m0 0l-5 5m5-5l5 5"/></svg>
+        Send <span id="send-n"></span>
+      </button>
+      <button class="btn ghost" id="clr">Clear</button>
+    </div>
+    <div class="prog" id="prog" hidden><i id="bar"></i></div>
+    <div class="up-msg" id="msg" role="status"></div>
+  </section>
+
+  <!-- Received files -->
+  <section class="card" id="recv-card">
+    <div class="card-h">
+      <h2>Received</h2>
+      <span class="hint" id="recv-n"></span>
+    </div>
+    <div class="disk" id="disk"></div>
+  </section>
+
+  <!-- CLI one-liners -->
+  <section class="card collapsed" id="cli-card">
+    <div class="card-h cli-h" id="cli-h">
+      <h2>Send from the command line</h2>
+      <span class="hint">no browser on the other machine? copy a one-liner</span>
+      <div class="os-pills" id="os-pills">
+        <button class="os-pill active" data-os="linux">Linux</button>
+        <button class="os-pill" data-os="macos">macOS</button>
+        <button class="os-pill" data-os="windows">Windows</button>
+      </div>
+      <button class="iconbtn" id="cli-chev" aria-label="Toggle commands"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    </div>
+    <div id="cmds"></div>
+  </section>
+
+  <!-- Reverse shells -->
+  <section class="card collapsed" id="rs-card">
+    <div class="card-h rs-h" id="rs-h">
+      <h2>Reverse shells</h2>
+      <span class="hint">connect back to your listener &mdash; one click to copy</span>
+      <div class="os-pills" id="rs-pills">
+        <button class="os-pill active" data-os="linux">Linux</button>
+        <button class="os-pill" data-os="macos">macOS</button>
+        <button class="os-pill" data-os="windows">Windows</button>
+      </div>
+      <button class="iconbtn" id="rs-chev" aria-label="Toggle reverse shells"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    </div>
+    <div id="rs-body">
+      <div class="rs-cfg">
+        <label>LHOST <input class="rs-in" id="rs-host" type="text" autocomplete="off" spellcheck="false"></label>
+        <label>LPORT <input class="rs-in" id="rs-port" type="text" autocomplete="off" spellcheck="false"></label>
+        <span class="hint">substituted into every command</span>
+      </div>
+      <div id="rcmds"></div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span>served by <b>expose</b></span><span class="fsep">&middot;</span>
+    <span>received files land in <code>~/Downloads/expose</code></span><span class="fsep">&middot;</span>
+    <a href="/me">/me</a>
+  </footer>
+
+</main>
+
+<!-- Chat panel -->
+<aside class="chat" id="chat">
+  <div class="chat-h">
+    <h3>Chat</h3>
+    <span class="hint">everyone on this page sees this</span>
+    <button class="iconbtn" id="chat-close" aria-label="Close chat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="chat-body" id="chat-body"></div>
+  <div class="chat-bar">
+    <input id="chat-input" type="text" placeholder="Message&hellip;" autocomplete="off" spellcheck="false">
+    <button class="btn primary sm" id="chat-send" aria-label="Send message"><svg viewBox="0 0 24 24"><path d="M5 12h14m0 0l-6-6m6 6l-6 6"/></svg></button>
+  </div>
+</aside>
+
+<!-- Request log drawer -->
+<section class="log collapsed" id="log">
+  <div class="log-bar" id="log-bar" role="button" tabindex="0" aria-label="Toggle request log">
+    <span class="live" id="live" title="Polling for requests"></span>
+    <h3>Requests</h3>
+    <span class="count" id="log-badge"></span>
+    <input class="log-search" id="log-search" type="text" placeholder="Filter&hellip;" autocomplete="off" spellcheck="false">
+    <div class="log-acts">
+      <button class="btn ghost sm" id="log-sound" title="Sound on new request"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg></button>
+      <button class="btn ghost sm" id="log-pause">pause</button>
+      <button class="btn ghost sm" id="log-export">export</button>
+      <button class="btn ghost sm" id="log-clear">clear</button>
+      <button class="iconbtn" id="log-chev" aria-label="Collapse"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    </div>
+  </div>
+  <div class="log-body" id="log-body">
+    <div class="log-empty" id="log-empty">waiting for requests&hellip;</div>
+  </div>
+</section>
+
+<!-- Stats popover -->
+<div class="stats" id="stats" hidden></div>
+
+<!-- Full-page drop overlay -->
+<div class="overlay" id="overlay" hidden>
+  <div class="ov-box">
+    <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+    <p>Drop to upload</p>
   </div>
 </div>
 
-<script>@@JS@@</script></body></html>
+<div class="toast" id="toast" role="status"></div>
+
+<script>@@JS@@</script>
+<script>@@FPJS@@</script></body></html>

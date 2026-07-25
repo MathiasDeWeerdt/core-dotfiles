@@ -1,4 +1,4 @@
-import http.server, socketserver, sys, datetime, os, socket, re, json, time, ipaddress, threading, fcntl
+import http.server, socketserver, sys, datetime, os, socket, re, json, time, ipaddress, threading, fcntl, sqlite3
 
 port = int(os.environ["EXPOSE_PORT"])
 bind_addr = os.environ.get("EXPOSE_BIND", "0.0.0.0")
@@ -9,6 +9,11 @@ auth_required = os.environ.get("EXPOSE_AUTH", "")
 log_file = os.environ.get("EXPOSE_LOGFILE", "")
 chat_file = os.environ.get("EXPOSE_CHAT_FILE", "")
 allow_nets = [n.strip() for n in os.environ.get("EXPOSE_ALLOW", "").split(",") if n.strip()]
+try:
+    with open(os.environ.get("EXPOSE_FP_JS", ""), "r") as _f:
+        fp_js = _f.read()
+except Exception:
+    fp_js = ""
 os.makedirs(upload_dir, exist_ok=True)
 req_counter = 0
 _httpd = None
@@ -91,6 +96,37 @@ def _write_log(entry):
             f.seek(0); f.truncate(); json.dump(log, f)
             fcntl.flock(f, fcntl.LOCK_UN)
     except: pass
+
+def _write_db(entry):
+    """Append the request to the persistent SQLite log (~/.expose/requests.db)."""
+    db = os.environ.get("EXPOSE_DB", "")
+    if not db: return
+    try:
+        con = sqlite3.connect(db, timeout=5)
+        con.execute("insert into requests(ts,time,method,path,ip,port,ua,host,content_type,content_len,mode) values(?,?,?,?,?,?,?,?,?,?,?)",
+                    (entry.get("ts"), entry.get("time"), entry.get("method"), entry.get("path"),
+                     entry.get("ip"), str(entry.get("port", "")), entry.get("ua"), entry.get("host", ""),
+                     entry.get("content_type", ""), entry.get("content_length", ""),
+                     os.environ.get("EXPOSE_MODE", "")))
+        con.commit(); con.close()
+    except Exception: pass
+
+def _write_fp(raw, ip, port, ua_hdr):
+    """Append a device fingerprint report to the SQLite fingerprints table."""
+    db = os.environ.get("EXPOSE_DB", "")
+    if not db or not raw: return
+    ua = vid = page = ""
+    try:
+        d = json.loads(raw)
+        ua = d.get("user_agent", ""); vid = d.get("visitor_id", ""); page = d.get("page", "")
+    except Exception: pass
+    try:
+        con = sqlite3.connect(db, timeout=5)
+        con.execute("insert into fingerprints(ts,time,ip,port,ua,page,visitor_id,data) values(?,?,?,?,?,?,?,?)",
+                    (time.time(), time.strftime('%H:%M:%S'), ip, port,
+                     ua or ua_hdr, page, vid, raw))
+        con.commit(); con.close()
+    except Exception: pass
 
 def _read_chat():
     """Thread-safe read of the chat JSON file."""
@@ -279,16 +315,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     for k, v in fields if v and v != "-")
                 body = (
                     "<html><head><meta charset='utf-8'><title>expose / me</title>"
-                    "<style>body{font:14px/1.6 ui-monospace,monospace;background:#1a1917;color:#c8c5be;"
-                    "max-width:700px;margin:2rem auto;padding:0 1rem}"
-                    "h1{font-size:1rem;color:#84817a;margin-bottom:1.5rem;font-weight:400}"
-                    "h1 b{color:#c8c5be}table{border-collapse:collapse;width:100%}"
-                    "td{padding:.35rem .6rem;border-bottom:1px solid #2a2820;font-size:.8125rem}"
-                    "td:first-child{color:#5c8abf;width:10rem;white-space:nowrap}"
-                    "td:last-child{color:#c8c5be;word-break:break-all}"
+                    "<script>try{var __t=localStorage.getItem(\"expose-theme\");if(__t&&__t!==\"auto\")document.documentElement.dataset.theme=__t}catch(_){}</script>"
+                    "<style>:root{color-scheme:dark;--bg:#0a0c10;--srf:#10141b;--brd:#1f2632;--txt:#e8ebf1;--dim:#9aa3b2;--acc:#34d399}"
+                    ":root[data-theme=light]{color-scheme:light;--bg:#f4f6f9;--srf:#ffffff;--brd:#dfe3ea;--txt:#182230;--dim:#556173;--acc:#059669}"
+                    "@media (prefers-color-scheme:light){:root:not([data-theme]){color-scheme:light;--bg:#f4f6f9;--srf:#ffffff;--brd:#dfe3ea;--txt:#182230;--dim:#556173;--acc:#059669}}"
+                    "body{font:14px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt);"
+                    "max-width:720px;margin:2.5rem auto;padding:0 1rem}"
+                    "h1{font-size:.95rem;color:var(--dim);margin-bottom:1.2rem;font-weight:600}"
+                    "h1 b{color:var(--acc)}"
+                    "h2{font-size:.78rem;color:var(--dim);margin:1.8rem 0 .8rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em}"
+                    "table{border-collapse:separate;border-spacing:0;width:100%;background:var(--srf);border:1px solid var(--brd);border-radius:12px;overflow:hidden}"
+                    "td{padding:.55rem .85rem;border-bottom:1px solid var(--brd);font:12.5px ui-monospace,Menlo,Consolas,monospace}"
+                    "tr:last-child td{border-bottom:0}"
+                    "td:first-child{color:var(--acc);width:11rem;white-space:nowrap}"
+                    "td:last-child{color:var(--txt);word-break:break-all}"
+                    ".fpid{margin-top:.9rem;font:12.5px ui-monospace,Menlo,Consolas,monospace;color:var(--dim)}"
+                    ".fpid b{color:var(--acc)}"
+                    ".fpnote{margin:.8rem 0 0;font-size:12px;color:var(--dim)}"
+                    ".fbtn{margin-top:.7rem;background:var(--srf);border:1px solid var(--brd);color:var(--dim);border-radius:8px;padding:.45rem .8rem;font:12.5px -apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer}"
+                    ".fbtn:hover{color:var(--txt)}"
                     "</style></head><body>"
                     "<h1><b>expose</b> / me</h1>"
-                    f"<table>{rows}</table></body></html>"
+                    f"<table>{rows}</table>"
+                    "<div id='fp'></div>"
+                    "<script>" + fp_js + "</script>"
+                    "</body></html>"
                 ).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -334,6 +385,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             body = self.rfile.read(cl)
             saved = parse_multipart(body, ct)
             result = json.dumps({"saved": saved, "count": len(saved)}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(result)))
+            self.end_headers()
+            self.wfile.write(result)
+        elif self.path == "/fp":
+            cl = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(cl).decode('utf-8', errors='replace')
+            _write_fp(raw, self.client_address[0], str(self.client_address[1]),
+                      self.headers.get("User-Agent", ""))
+            result = json.dumps({"ok": True}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(result)))
@@ -442,7 +504,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sys.stderr.flush()
 
         # Write to JSON log
-        _skip = {'/log', '/log/clear', '/meta', '/upload/files'}
+        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat', '/fp'}
         _path_clean = (self.path or '').split('?')[0]
         if _path_clean not in _skip:
             entry = {"n": req_counter, "ts": time.time(), "time": now,
@@ -457,6 +519,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     v = self.headers.get(k)
                     if v: entry[k.lower().replace("-","_")] = v
             _write_log(entry)
+            _write_db(entry)
 
 class Server(socketserver.TCPServer):
     allow_reuse_address = True
