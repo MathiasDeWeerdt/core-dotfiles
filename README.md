@@ -62,6 +62,7 @@ cd ~/Documents/core-dotfiles && ./install.sh
 - **Docker** — Engine + buildx + compose, user in `docker` group
 - **QEMU** — full stack with `virt-manager` GUI + `quickemu`
 - **Firewall** — `ufw` enabled (deny incoming, allow outgoing) + `gufw` GUI
+- **Preload** — adaptive readahead daemon for faster app startup
 
 ### Virtual machines
 Run `./scripts/quickemu-lab.sh create` to provision:
@@ -79,8 +80,7 @@ All thin-provisioned qcow2, user-mode NAT networking (stable across WiFi/Etherne
 ### Custom tooling
 - `expose` — serve files/dirs over HTTP with request inspection (full source in `expose/`)
 - `flameshot-gui` — screenshot → clipboard in one shot
-- `killport <port>` — kill whatever's listening on a port
-- `dev` — launch pre-configured tmux dev session
+- Nautilus right-click → **Open in Terminal** opens foot (via `nautilus-open-any-terminal`)
 
 ### Global agent memory
 A single `~/.memory.md` feeds identity, preferences, and development philosophy
@@ -91,7 +91,7 @@ into all coding agents (Claude Code via `@import`, Codex/Pi/OpenCode via global
 
 ```
 core-dotfiles/
-├── install.sh                   # Bootstrap (610 lines, 11 steps)
+├── install.sh                   # Bootstrap (703 lines, 12 steps)
 ├── update.sh                    # Upgrade everything in one shot
 ├── env.example                  # Copy to env, customize
 ├── README.md

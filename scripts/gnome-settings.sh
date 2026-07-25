@@ -20,6 +20,14 @@ info "Mouse → flat (no acceleration)"
 gsettings set org.gnome.desktop.peripherals.mouse accel-profile flat
 log "Mouse: $(gsettings get org.gnome.desktop.peripherals.mouse accel-profile)"
 
+# Alt+Tab → switch windows (no app grouping)
+info "Alt+Tab → individual windows"
+gsettings set org.gnome.desktop.wm.keybindings switch-applications "['<Super>Tab']"
+gsettings set org.gnome.desktop.wm.keybindings switch-applications-backward "['<Shift><Super>Tab']"
+gsettings set org.gnome.desktop.wm.keybindings switch-windows "['<Alt>Tab']"
+gsettings set org.gnome.desktop.wm.keybindings switch-windows-backward "['<Shift><Alt>Tab']"
+log "Alt+Tab: individual windows, Super+Tab: app grouping"
+
 # Default terminal → foot (Nautilus "Open in Console")
 info "Terminal → foot"
 gsettings set org.gnome.desktop.default-applications.terminal exec foot
@@ -27,6 +35,13 @@ gsettings set org.gnome.desktop.default-applications.terminal exec-arg ''
 # nautilus-open-any-terminal extension: set foot as the context-menu terminal
 if command -v nautilus &>/dev/null; then
     gsettings set com.github.stunkymonkey.nautilus-open-any-terminal terminal foot 2>/dev/null || true
+    gsettings set com.github.stunkymonkey.nautilus-open-any-terminal use-generic-terminal-name true 2>/dev/null || true
+    # Hide built-in "Open in Console" (GNOME Console) — foot is the only terminal now
+    mkdir -p ~/.local/share/applications
+    cat > ~/.local/share/applications/org.gnome.Console.desktop <<'NAUT_DESKTOP'
+[Desktop Entry]
+NoDisplay=true
+NAUT_DESKTOP
     nautilus -q 2>/dev/null || true  # restart to apply
 fi
 log "Terminal: foot"
