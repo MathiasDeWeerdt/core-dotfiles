@@ -66,6 +66,9 @@ assert_eq "hello" "$(request_once /content hello)"
 assert_eq '{"mode": "text", "size": 5}' "$(request_once /meta hello)"
 upload_page=$(request_once / hello)
 [[ "$upload_page" == *'class="expose-mark"'* ]]
+[[ "$upload_page" == *'class="sidebar"'* ]]
+[[ "$upload_page" == *'id="overview"'* ]]
+[[ "$upload_page" == *'id="traffic"'* ]]
 me_page=$(request_once /me hello)
 [[ "$me_page" == *'class="expose-mark"'* ]]
 [[ "$me_page" != *'{{LOGO}}'* ]]

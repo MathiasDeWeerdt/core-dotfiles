@@ -294,7 +294,11 @@ mkdir -p "$UPLOAD_DIR"
 
 _UPLOAD_HTML=$(_mktmp /tmp/expose-upload-html.XXXXXX)
 cat > "$_UPLOAD_HTML" << 'UPLOADHTML'
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>expose</title>
 <script>try{var __t=localStorage.getItem('expose-theme');if(__t&&__t!=='auto')document.documentElement.dataset.theme=__t}catch(_){}</script>
 <style>/* expose — web UI */
@@ -720,15 +724,69 @@ body.log-open .chat{bottom:calc(min(46vh,440px) + 14px)}
 .cmd-best{flex:none;font:700 8.5px var(--mono);letter-spacing:.05em;color:var(--acc);
   border:1px solid var(--acc-bd);border-radius:4px;padding:1px 4px;
   background:var(--accsoft);white-space:nowrap;text-transform:uppercase}
-</style></head>
+
+/* ── Dashboard shell ─────────────────────────────────────────────────────── */
+body{padding-bottom:0;font-size:13px;background:var(--bg)}
+:root{--shell-top:48px;--shell-side:216px;--card-bg:var(--srf);--r-card:8px;--sh:none}
+.top{height:var(--shell-top);display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--srf);backdrop-filter:none;-webkit-backdrop-filter:none}
+.top .brand{color:var(--txt)}.top .logo{width:28px;height:28px;border:0;border-radius:0;background:none;box-shadow:none;color:var(--acc)}
+.top .logo svg{width:20px;height:18px}.top .word{font:600 14px/1 var(--mono)}.top-spacer{flex:1}.hamburger{display:none}
+.status-chip,.url-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--brd);border-radius:6px;background:var(--srf2);color:var(--dim);font-size:12px;padding:4px 9px}
+.status-chip{border-radius:99px}.status-chip i,.session-state i,.side-dot{width:7px;height:7px;border-radius:50%;background:var(--acc);display:inline-block;flex:none}
+.url-chip svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8}.url-chip:hover{color:var(--txt);background:var(--srf3)}
+.app-shell{display:flex;min-height:calc(100vh - var(--shell-top))}
+.sidebar{width:var(--shell-side);height:calc(100vh - var(--shell-top));position:sticky;top:var(--shell-top);flex:none;display:flex;flex-direction:column;background:var(--srf);border-right:1px solid var(--brd);z-index:30}
+.sidebar nav{display:flex;flex-direction:column;gap:2px;padding:8px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-left:2px solid transparent;border-radius:6px;color:var(--dim);font-size:13px}
+.nav-item>span{width:17px;text-align:center;color:var(--fnt);font:600 13px var(--mono)}
+.nav-item:hover{background:var(--srf2);color:var(--txt);text-decoration:none}.nav-item.active{border-left-color:var(--acc);background:var(--accsoft);color:var(--txt)}.nav-item.active>span{color:var(--acc)}
+.sidebar-foot{margin-top:auto;border-top:1px solid var(--brd);padding:12px;display:flex;flex-direction:column;gap:7px;color:var(--fnt);font-size:11.5px}
+.sidebar-foot span{display:flex;align-items:center;gap:7px}.sidebar-foot code{align-self:flex-start;background:none;border:0;padding:0;color:var(--fnt)}.nav-backdrop{display:none}
+.workspace{flex:1;min-width:0;max-width:1280px;padding:20px 24px 48px;display:flex;flex-direction:column;gap:32px}
+.view-section{scroll-margin-top:64px}.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:14px}
+.page-head h1{font-size:16px;font-weight:650;line-height:1.3}.page-head p{font:12px/1.4 var(--mono);color:var(--fnt);margin-top:2px}
+.card{border-radius:8px;box-shadow:none;padding:16px}.card-h{margin-bottom:12px}
+.session-strip{display:flex;align-items:center;flex-wrap:wrap;gap:9px 14px;padding:10px 14px;margin-bottom:14px;border:1px solid var(--brd);border-radius:8px;background:var(--srf);font-size:12.5px}
+.session-state{display:inline-flex;align-items:center;gap:7px}.session-mode{color:var(--dim)}.session-mode strong{color:var(--txt)}
+.session-divider{width:1px;height:18px;background:var(--brd2)}.session-url{display:inline-flex;align-items:center;gap:7px;min-width:0}
+.session-url small{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--fnt)}.session-url code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-spacer{flex:1}.session-uptime{color:var(--fnt)}.session-uptime code{color:var(--dim)}
+.stat-strip{display:flex;overflow:hidden;margin-bottom:16px;border:1px solid var(--brd);border-radius:8px;background:var(--srf)}
+.stat-strip>div{display:flex;flex:1;min-width:120px;flex-direction:column;gap:2px;padding:10px 16px;border-left:1px solid var(--brd)}
+.stat-strip>div:first-child{border-left:0}.stat-strip small{font-size:10.5px;letter-spacing:.045em;text-transform:uppercase;color:var(--fnt)}.stat-strip strong{font:500 14px var(--mono)}
+.overview-grid{display:grid;grid-template-columns:2fr 1fr;gap:16px;align-items:start}.overview-stack{display:flex;flex-direction:column;gap:16px;min-width:0}
+.panel{overflow:hidden;border:1px solid var(--brd);border-radius:8px;background:var(--srf)}.panel-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--brd)}
+.panel-head h2{font-size:13px;font-weight:650}.panel-head a,.panel-head>span{margin-left:auto;font-size:11.5px;color:var(--fnt)}.panel-body{padding:4px 0}
+.mini-row{display:flex;align-items:center;gap:9px;min-width:0;padding:7px 12px;border-bottom:1px solid var(--brd);font-size:12px}.mini-row:last-child{border-bottom:0}.mini-row:hover{background:var(--srf2)}
+.mini-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mini-row .meta{color:var(--fnt);font:11px var(--mono);flex:none}
+.mini-row .method{width:38px;color:var(--blu);font:600 10.5px var(--mono)}.mini-row .status{font:600 11px var(--mono)}
+.mini-row .status.ok{color:var(--acc)}.mini-row .status.warn{color:var(--amb)}.mini-row .status.err{color:var(--red)}.empty-line{display:block;padding:16px 12px;color:var(--fnt);font-size:12px}
+.files-grid{display:grid;grid-template-columns:minmax(320px,.85fr) minmax(380px,1.15fr);gap:16px;align-items:start}#shared-content .hero{margin:0}
+.chat-panel,.log{position:static;width:auto;max-width:none;height:auto!important;border:1px solid var(--brd);border-radius:8px;background:var(--srf);box-shadow:none;overflow:hidden}
+.chat-body{height:300px}.chat-panel[hidden]{display:none!important}.log{left:auto;right:auto;bottom:auto;z-index:auto}.log.collapsed{height:44px!important}.log:not(.collapsed){height:auto!important}
+.log-body{height:min(55vh,520px);min-height:260px}.log-bar{background:var(--srf)}.log-search{max-width:360px}body.log-open{padding-bottom:0}.stats{bottom:20px}.foot{padding:4px 0 0}
+@media(max-width:1100px){.overview-grid,.files-grid{grid-template-columns:1fr}}
+@media(max-width:900px){
+  .hamburger{display:grid}.url-chip{display:none}
+  .sidebar{position:fixed;top:var(--shell-top);bottom:0;left:0;height:auto;transform:translateX(-100%);transition:transform .16s ease;box-shadow:0 10px 32px rgba(0,0,0,.45)}
+  .sidebar.open{transform:translateX(0)}.nav-backdrop.show{display:block;position:fixed;inset:var(--shell-top) 0 0;z-index:20;background:rgba(0,0,0,.55)}
+  .workspace{padding:16px 14px 40px}
+}
+@media(max-width:640px){
+  .top #chat-toggle span{display:none}.status-chip{display:none}.stat-strip{overflow-x:auto}.stat-strip>div{flex:0 0 135px}
+  .session-divider{display:none}.session-url{order:5;width:100%}.session-url code{max-width:calc(100vw - 130px)}
+  .log-bar{flex-wrap:wrap;height:auto;padding:9px}.log-search{order:4;max-width:none;width:100%}.log-acts{margin-left:auto}
+}
+</style>
+</head>
 <body>
 
-<div class="glow" aria-hidden="true"></div>
-
 <header class="top">
-  <div class="wrap top-in">
-    <div class="brand">
-      <span class="logo" aria-hidden="true"><svg class="expose-mark" viewBox="0 0 64 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <button class="iconbtn hamburger" id="nav-toggle" aria-label="Open navigation">
+    <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+  </button>
+  <a class="brand" href="#overview" aria-label="Expose overview">
+    <span class="logo" aria-hidden="true"><svg class="expose-mark" viewBox="0 0 64 52" fill="none" xmlns="http://www.w3.org/2000/svg">
   <path d="M7 15.5 23.5 6 40 15.5v19L23.5 44 7 34.5v-19Z"
         stroke="currentColor" stroke-width="3.5" stroke-linejoin="round"/>
   <path d="m16 19 14 8-14 8V19Z" fill="var(--acc, #10b981)"/>
@@ -738,154 +796,201 @@ body.log-open .chat{bottom:calc(min(46vh,440px) + 14px)}
   <circle cx="58" cy="26" r="3" fill="currentColor"/>
   <circle cx="52" cy="42.5" r="3" fill="currentColor"/>
 </svg></span>
-      <span class="word">expose</span>
-      <span class="badge" id="mode-badge">&hellip;</span>
-    </div>
-    <div class="top-acts">
-      <button class="btn ghost sm" id="theme-toggle" title="Theme: auto (system)">
-        <svg viewBox="0 0 24 24" id="theme-ic"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
-      </button>
-      <button class="btn ghost sm" id="copy-url" title="Copy this page's URL">
-        <svg viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7.1 0l2.4-2.4a5 5 0 0 0-7.1-7.1l-1.2 1.2"/><path d="M14 10a5 5 0 0 0-7.1 0l-2.4 2.4a5 5 0 0 0 7.1 7.1l1.2-1.2"/></svg>
-        <span>Copy link</span>
-      </button>
-      <button class="btn ghost sm" id="chat-toggle" title="Toggle chat">
-        <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8c-1.4 0-2.8-.4-3.9-1L3 20l1.1-5.1A8 8 0 1 1 21 12z"/></svg>
-        <span>Chat</span>
-        <i class="dot" id="chat-dot" hidden></i>
-      </button>
-    </div>
-  </div>
+    <span class="word">expose</span>
+  </a>
+  <span class="status-chip"><i></i>Running</span>
+  <button class="url-chip" id="copy-url" title="Copy session URL">
+    <span class="mono" id="top-url"></span>
+    <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+  </button>
+  <div class="top-spacer"></div>
+  <button class="btn ghost sm" id="chat-toggle" title="Toggle chat">
+    <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8c-1.4 0-2.8-.4-3.9-1L3 20l1.1-5.1A8 8 0 1 1 21 12z"/></svg>
+    <span>Chat</span><i class="dot" id="chat-dot" hidden></i>
+  </button>
+  <button class="btn ghost sm" id="theme-toggle" title="Theme: auto (system)">
+    <svg viewBox="0 0 24 24" id="theme-ic"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
+  </button>
 </header>
 
-<main class="wrap">
-
-  <!-- Mode-aware hero: filled by JS -->
-  <section class="card hero" id="hero" hidden></section>
-
-  <!-- Upload -->
-  <section class="card" id="upload-card">
-    <div class="card-h">
-      <h2>Send files</h2>
-      <span class="hint">anything dropped here lands on this machine</span>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <nav>
+      <a class="nav-item active" href="#overview" data-section="overview"><span>⌗</span>Overview</a>
+      <a class="nav-item" href="#files" data-section="files"><span>□</span>Files</a>
+      <a class="nav-item" href="#commands" data-section="commands"><span>›_</span>Commands</a>
+      <a class="nav-item" href="#shells" data-section="shells"><span>↗</span>Reverse shells</a>
+      <a class="nav-item" href="#chat" data-section="chat"><span>◇</span>Chat</a>
+      <a class="nav-item" href="#traffic" data-section="traffic"><span>⌁</span>Traffic</a>
+      <a class="nav-item" href="/me"><span>◎</span>Client info</a>
+    </nav>
+    <div class="sidebar-foot">
+      <span><i class="side-dot"></i>HTTP session live</span>
+      <code>v2.0</code>
     </div>
-    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Drop files or browse">
-      <svg class="drop-ic" viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-      <p class="drop-t">Drag &amp; drop files here, or <button class="linklike" id="browse" type="button">browse</button></p>
-      <p class="drop-s">multiple files welcome</p>
-      <input type="file" id="fi" multiple hidden>
-    </div>
-    <div class="queue" id="queue"></div>
-    <div class="up-acts" id="up-acts" hidden>
-      <button class="btn primary" id="send">
-        <svg viewBox="0 0 24 24"><path d="M12 19V5m0 0l-5 5m5-5l5 5"/></svg>
-        Send <span id="send-n"></span>
-      </button>
-      <button class="btn ghost" id="clr">Clear</button>
-    </div>
-    <div class="prog" id="prog" hidden><i id="bar"></i></div>
-    <div class="up-msg" id="msg" role="status"></div>
-  </section>
+  </aside>
+  <div class="nav-backdrop" id="nav-backdrop" hidden></div>
 
-  <!-- Received files -->
-  <section class="card" id="recv-card">
-    <div class="card-h">
-      <h2>Received</h2>
-      <span class="hint" id="recv-n"></span>
-    </div>
-    <div class="disk" id="disk"></div>
-  </section>
-
-  <!-- CLI one-liners -->
-  <section class="card collapsed" id="cli-card">
-    <div class="card-h cli-h" id="cli-h">
-      <h2>Send from the command line</h2>
-      <span class="hint">no browser on the other machine? copy a one-liner</span>
-      <div class="os-pills" id="os-pills">
-        <button class="os-pill active" data-os="linux">Linux</button>
-        <button class="os-pill" data-os="macos">macOS</button>
-        <button class="os-pill" data-os="windows">Windows</button>
+  <main class="workspace">
+    <section class="view-section overview-section" id="overview">
+      <div class="page-head">
+        <div><h1>Overview</h1><p>Live session status and recent activity</p></div>
+        <span class="badge" id="mode-badge">&hellip;</span>
       </div>
-      <button class="iconbtn" id="cli-chev" aria-label="Toggle commands"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
-    </div>
-    <div id="cmds"></div>
-  </section>
 
-  <!-- Reverse shells -->
-  <section class="card collapsed" id="rs-card">
-    <div class="card-h rs-h" id="rs-h">
-      <h2>Reverse shells</h2>
-      <span class="hint">connect back to your listener &mdash; one click to copy</span>
-      <div class="os-pills" id="rs-pills">
-        <button class="os-pill active" data-os="linux">Linux</button>
-        <button class="os-pill" data-os="macos">macOS</button>
-        <button class="os-pill" data-os="windows">Windows</button>
+      <div class="session-strip">
+        <span class="session-state"><i></i>Running</span>
+        <span class="session-mode">Serving <strong id="overview-mode">—</strong></span>
+        <span class="session-divider"></span>
+        <span class="session-url"><small>URL</small><code id="overview-url"></code></span>
+        <button class="iconbtn" id="overview-copy" title="Copy session URL">
+          <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        </button>
+        <span class="session-spacer"></span>
+        <span class="session-uptime">Uptime <code id="uptime">00:00:00</code></span>
       </div>
-      <button class="iconbtn" id="rs-chev" aria-label="Toggle reverse shells"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
-    </div>
-    <div id="rs-body">
-      <div class="rs-cfg">
-        <label>LHOST <input class="rs-in" id="rs-host" type="text" autocomplete="off" spellcheck="false"></label>
-        <label>LPORT <input class="rs-in" id="rs-port" type="text" autocomplete="off" spellcheck="false"></label>
-        <span class="hint">substituted into every command</span>
+
+      <div class="stat-strip">
+        <div><small>Unique visitors</small><strong id="overview-visitors">0</strong></div>
+        <div><small>Total requests</small><strong id="overview-requests">0</strong></div>
+        <div><small>Received files</small><strong id="overview-files">0</strong></div>
+        <div><small>Stored data</small><strong id="overview-bytes">0 B</strong></div>
+        <div><small>Chat messages</small><strong id="overview-chat">0</strong></div>
       </div>
-      <div id="rcmds"></div>
-    </div>
-  </section>
 
-  <footer class="foot">
-    <span>served by <b>expose</b></span><span class="fsep">&middot;</span>
-    <span>received files land in <code>~/Downloads/expose</code></span><span class="fsep">&middot;</span>
-    <a href="/me">/me</a>
-  </footer>
+      <div class="overview-grid">
+        <div class="overview-stack">
+          <section class="panel" id="shared-panel">
+            <div class="panel-head"><h2>Shared content</h2><a href="#shared-content">Open</a></div>
+            <div class="panel-body" id="overview-shared"><span class="empty-line">Loading session details…</span></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>Received files</h2><a href="#files">View all</a></div>
+            <div class="panel-body" id="overview-file-list"><span class="empty-line">No files received yet</span></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>Latest chat</h2><a href="#chat">Open chat</a></div>
+            <div class="panel-body" id="overview-chat-list"><span class="empty-line">No messages yet</span></div>
+          </section>
+        </div>
+        <div class="overview-stack">
+          <section class="panel">
+            <div class="panel-head"><h2>Visitors</h2><span id="overview-visitor-label">0 observed</span></div>
+            <div class="panel-body" id="overview-visitor-list"><span class="empty-line">Waiting for visitors…</span></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><h2>Recent traffic</h2><a href="#traffic">View all</a></div>
+            <div class="panel-body" id="overview-traffic-list"><span class="empty-line">Waiting for requests…</span></div>
+          </section>
+        </div>
+      </div>
+    </section>
 
-</main>
+    <section class="view-section" id="shared-content">
+      <div class="page-head"><div><h1>Shared content</h1><p>The text, file, directory, redirect, or payload served by this session</p></div></div>
+      <section class="card hero" id="hero" hidden></section>
+    </section>
 
-<!-- Chat panel -->
-<aside class="chat" id="chat">
-  <div class="chat-h">
-    <h3>Chat</h3>
-    <span class="hint">everyone on this page sees this</span>
-    <button class="iconbtn" id="chat-close" aria-label="Close chat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-  </div>
-  <div class="chat-body" id="chat-body"></div>
-  <div class="chat-bar">
-    <input id="chat-input" type="text" placeholder="Message&hellip;" autocomplete="off" spellcheck="false">
-    <button class="btn primary sm" id="chat-send" aria-label="Send message"><svg viewBox="0 0 24 24"><path d="M5 12h14m0 0l-6-6m6 6l-6 6"/></svg></button>
-  </div>
-</aside>
+    <section class="view-section" id="files">
+      <div class="page-head"><div><h1>Files</h1><p>Upload to the host and manage received files</p></div></div>
+      <div class="files-grid">
+        <section class="card" id="upload-card">
+          <div class="card-h"><h2>Send files</h2><span class="hint">files land in ~/Downloads/expose</span></div>
+          <div class="drop" id="drop" tabindex="0" role="button" aria-label="Drop files or browse">
+            <svg class="drop-ic" viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+            <p class="drop-t">Drag &amp; drop files here, or <button class="linklike" id="browse" type="button">browse</button></p>
+            <p class="drop-s">multiple files welcome</p>
+            <input type="file" id="fi" multiple hidden>
+          </div>
+          <div class="queue" id="queue"></div>
+          <div class="up-acts" id="up-acts" hidden>
+            <button class="btn primary" id="send"><svg viewBox="0 0 24 24"><path d="M12 19V5m0 0l-5 5m5-5l5 5"/></svg>Send <span id="send-n"></span></button>
+            <button class="btn ghost" id="clr">Clear</button>
+          </div>
+          <div class="prog" id="prog" hidden><i id="bar"></i></div>
+          <div class="up-msg" id="msg" role="status"></div>
+        </section>
+        <section class="card" id="recv-card">
+          <div class="card-h"><h2>Received</h2><span class="hint" id="recv-n"></span></div>
+          <div class="disk" id="disk"></div>
+        </section>
+      </div>
+    </section>
 
-<!-- Request log drawer -->
-<section class="log collapsed" id="log">
-  <div class="log-bar" id="log-bar" role="button" tabindex="0" aria-label="Toggle request log">
-    <span class="live" id="live" title="Polling for requests"></span>
-    <h3>Requests</h3>
-    <span class="count" id="log-badge"></span>
-    <input class="log-search" id="log-search" type="text" placeholder="Filter&hellip;" autocomplete="off" spellcheck="false">
-    <div class="log-acts">
-      <button class="btn ghost sm" id="log-sound" title="Sound on new request"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg></button>
-      <button class="btn ghost sm" id="log-pause">pause</button>
-      <button class="btn ghost sm" id="log-export">export</button>
-      <button class="btn ghost sm" id="log-clear">clear</button>
-      <button class="iconbtn" id="log-chev" aria-label="Collapse"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
-    </div>
-  </div>
-  <div class="log-body" id="log-body">
-    <div class="log-empty" id="log-empty">waiting for requests&hellip;</div>
-  </div>
-</section>
+    <section class="view-section" id="commands">
+      <div class="page-head"><div><h1>Commands</h1><p>Copy-ready transfer and interaction commands by operating system</p></div></div>
+      <section class="card collapsed" id="cli-card">
+        <div class="card-h cli-h" id="cli-h">
+          <h2>Send from the command line</h2>
+          <span class="hint">upload, chat, and download without a browser</span>
+          <div class="os-pills" id="os-pills">
+            <button class="os-pill active" data-os="linux">Linux</button>
+            <button class="os-pill" data-os="macos">macOS</button>
+            <button class="os-pill" data-os="windows">Windows</button>
+          </div>
+          <button class="iconbtn" id="cli-chev" aria-label="Toggle commands"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+        </div>
+        <div id="cmds"></div>
+      </section>
+    </section>
 
-<!-- Stats popover -->
-<div class="stats" id="stats" hidden></div>
+    <section class="view-section" id="shells">
+      <div class="page-head"><div><h1>Reverse shells</h1><p>Generate commands for explicitly authorized testing</p></div></div>
+      <section class="card collapsed" id="rs-card">
+        <div class="card-h rs-h" id="rs-h">
+          <h2>Reverse shells</h2>
+          <span class="hint">LHOST and LPORT are substituted into every command</span>
+          <div class="os-pills" id="rs-pills">
+            <button class="os-pill active" data-os="linux">Linux</button>
+            <button class="os-pill" data-os="macos">macOS</button>
+            <button class="os-pill" data-os="windows">Windows</button>
+          </div>
+          <button class="iconbtn" id="rs-chev" aria-label="Toggle reverse shells"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+        </div>
+        <div id="rs-body">
+          <div class="rs-cfg">
+            <label>LHOST <input class="rs-in" id="rs-host" type="text" autocomplete="off" spellcheck="false"></label>
+            <label>LPORT <input class="rs-in" id="rs-port" type="text" autocomplete="off" spellcheck="false"></label>
+            <span class="hint">substituted into every command</span>
+          </div>
+          <div id="rcmds"></div>
+        </div>
+      </section>
+    </section>
 
-<!-- Full-page drop overlay -->
-<div class="overlay" id="overlay" hidden>
-  <div class="ov-box">
-    <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-    <p>Drop to upload</p>
-  </div>
+    <section class="view-section" id="chat">
+      <div class="page-head"><div><h1>Chat</h1><p>Messages shared by everyone connected to this session</p></div></div>
+      <section class="chat-panel">
+        <div class="chat-h"><h3>Session chat</h3><span class="hint">everyone on this page sees this</span><button class="iconbtn" id="chat-close" aria-label="Hide chat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+        <div class="chat-body" id="chat-body"></div>
+        <div class="chat-bar"><input id="chat-input" type="text" placeholder="Message…" autocomplete="off" spellcheck="false"><button class="btn primary sm" id="chat-send" aria-label="Send message"><svg viewBox="0 0 24 24"><path d="M5 12h14m0 0l-6-6m6 6l-6 6"/></svg>Send</button></div>
+      </section>
+    </section>
+
+    <section class="view-section" id="traffic">
+      <div class="page-head"><div><h1>Traffic</h1><p>Live request log with filtering, request details, and export</p></div></div>
+      <section class="log" id="log">
+        <div class="log-bar" id="log-bar" role="button" tabindex="0" aria-label="Toggle request log">
+          <span class="live" id="live" title="Polling for requests"></span><h3>Requests</h3><span class="count" id="log-badge"></span>
+          <input class="log-search" id="log-search" type="text" placeholder="Filter…" autocomplete="off" spellcheck="false">
+          <div class="log-acts">
+            <button class="btn ghost sm" id="log-sound" title="Sound on new request"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg></button>
+            <button class="btn ghost sm" id="log-pause">pause</button>
+            <button class="btn ghost sm" id="log-export">export</button>
+            <button class="btn ghost sm" id="log-clear">clear</button>
+            <button class="iconbtn" id="log-chev" aria-label="Collapse"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+          </div>
+        </div>
+        <div class="log-body" id="log-body"><div class="log-empty" id="log-empty">waiting for requests…</div></div>
+      </section>
+    </section>
+
+    <footer class="foot"><span>served by <b>expose</b></span><span class="fsep">&middot;</span><span>requests persist in <code>~/.expose/requests.json</code></span><span class="fsep">&middot;</span><a href="/me">client info</a></footer>
+  </main>
 </div>
 
+<div class="stats" id="stats" hidden></div>
+<div class="overlay" id="overlay" hidden><div class="ov-box"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg><p>Drop to upload</p></div></div>
 <div class="toast" id="toast" role="status"></div>
 
 <script>'use strict';
@@ -956,6 +1061,96 @@ themeApply(themeGet());
 
 // ── header actions ────────────────────────────────────────
 q('copy-url').addEventListener('click',()=>copyText(location.origin,'Link copied'));
+q('top-url').textContent=location.origin;
+q('overview-url').textContent=location.origin;
+q('overview-copy').addEventListener('click',()=>copyText(location.origin,'Session URL copied'));
+
+// ── dashboard shell ───────────────────────────────────────
+(function(){
+  const sidebar=q('sidebar'),backdrop=q('nav-backdrop'),toggle=q('nav-toggle');
+  function closeNav(){sidebar.classList.remove('open');backdrop.classList.remove('show');backdrop.hidden=true}
+  toggle.addEventListener('click',()=>{
+    const open=!sidebar.classList.contains('open');
+    sidebar.classList.toggle('open',open);backdrop.classList.toggle('show',open);backdrop.hidden=!open});
+  backdrop.addEventListener('click',closeNav);
+  document.querySelectorAll('.nav-item[data-section]').forEach(link=>link.addEventListener('click',()=>{
+    if(link.dataset.section==='chat'&&q('chat').hidden)q('chat-toggle').click();
+    if(link.dataset.section==='traffic')q('log').classList.remove('collapsed');
+    closeNav()}));
+  const links=[...document.querySelectorAll('.nav-item[data-section]')];
+  const sections=links.map(link=>q(link.dataset.section)).filter(Boolean);
+  if('IntersectionObserver'in window){
+    const observer=new IntersectionObserver(items=>{
+      const visible=items.filter(item=>item.isIntersecting).sort((a,b)=>b.intersectionRatio-a.intersectionRatio)[0];
+      if(!visible)return;
+      links.forEach(link=>link.classList.toggle('active',link.dataset.section===visible.target.id));
+    },{rootMargin:'-20% 0px -65% 0px',threshold:[0,.1,.5]});
+    sections.forEach(section=>observer.observe(section));
+  }
+})();
+
+const dashboardStarted=Date.now();
+setInterval(()=>{
+  const elapsed=Math.floor((Date.now()-dashboardStarted)/1000);
+  q('uptime').textContent=[elapsed/3600|0,(elapsed%3600)/60|0,elapsed%60|0]
+    .map(value=>String(value).padStart(2,'0')).join(':');
+},1000);
+
+function dashboardRow(parts){return'<div class="mini-row">'+parts.join('')+'</div>'}
+function dashboardEmpty(text){return'<span class="empty-line">'+esc(text)+'</span>'}
+function refreshDashboard(){
+  Promise.all([
+    fetch('/meta').then(r=>r.json()),
+    fetch('/upload/files').then(r=>r.json()),
+    fetch('/log').then(r=>r.json()),
+    fetch('/chat').then(r=>r.json())
+  ]).then(([meta,files,entries,messages])=>{
+    const mode=meta.mode||'text',ips=[...new Set(entries.map(entry=>entry.ip).filter(Boolean))];
+    q('overview-mode').textContent=mode;
+    q('overview-visitors').textContent=ips.length;
+    q('overview-visitor-label').textContent=ips.length+' observed';
+    q('overview-requests').textContent=entries.length;
+    q('overview-files').textContent=files.length;
+    q('overview-bytes').textContent=fmt(files.reduce((total,file)=>total+(file.size||0),0));
+    q('overview-chat').textContent=messages.length;
+
+    let shared='<span class="badge '+(BADGE[mode]||'')+'">'+esc(mode)+'</span>';
+    if(mode==='file')shared+='<span class="grow mono">'+esc(meta.name||'file')+'</span><span class="meta">'+fmt(meta.size||0)+'</span>';
+    else if(mode==='dir')shared+='<span class="grow mono">'+esc(meta.path||'directory')+'</span>';
+    else if(meta.size!=null)shared+='<span class="grow mono">/content</span><span class="meta">'+fmt(meta.size)+'</span>';
+    q('overview-shared').innerHTML=dashboardRow([shared]);
+
+    q('overview-file-list').innerHTML=files.length?files.slice(0,5).map(file=>dashboardRow([
+      '<span class="grow mono">'+esc(file.name)+'</span>',
+      '<span class="meta">'+fmt(file.size)+'</span>',
+      '<span class="meta">'+ago(file.mtime)+'</span>'
+    ])).join(''):dashboardEmpty('No files received yet');
+
+    q('overview-chat-list').innerHTML=messages.length?messages.slice(-3).reverse().map(message=>dashboardRow([
+      '<span class="meta">'+esc(message.time)+'</span>',
+      '<span class="grow">'+esc(message.msg)+'</span>'
+    ])).join(''):dashboardEmpty('No messages yet');
+
+    const byIp={};
+    entries.forEach(entry=>{if(entry.ip)byIp[entry.ip]=(byIp[entry.ip]||0)+1});
+    q('overview-visitor-list').innerHTML=ips.length?ips.slice(0,6).map(ip=>dashboardRow([
+      '<span class="side-dot"></span><span class="grow mono">'+esc(ip)+'</span>',
+      '<span class="meta">'+byIp[ip]+' req</span>'
+    ])).join(''):dashboardEmpty('Waiting for visitors…');
+
+    q('overview-traffic-list').innerHTML=entries.length?entries.slice(-7).reverse().map(entry=>{
+      const code=String(entry.code||''),cls=code[0]==='2'?'ok':code[0]==='3'||code[0]==='4'?'warn':'err';
+      return dashboardRow([
+        '<span class="meta">'+esc(entry.time||'')+'</span>',
+        '<span class="method">'+esc(entry.method||'')+'</span>',
+        '<span class="grow mono">'+esc(entry.path||'')+'</span>',
+        '<span class="status '+cls+'">'+esc(code)+'</span>'
+      ]);
+    }).join(''):dashboardEmpty('Waiting for requests…');
+  }).catch(()=>{});
+}
+setInterval(refreshDashboard,2000);
+refreshDashboard();
 
 // ── hero: mode-aware context ──────────────────────────────
 const BADGE={dir:'blu',catch:'vio',payload:'amb',redirect:'amb'};
@@ -1724,7 +1919,9 @@ loadDisk();
     }).catch(function(){finish('unavailable')});
   }else finish('unavailable');
 })();
-</script></body></html>
+</script>
+</body>
+</html>
 UPLOADHTML
 
 _FP_JS=$(_mktmp /tmp/expose-fp-js.XXXXXX)

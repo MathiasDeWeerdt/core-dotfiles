@@ -69,7 +69,8 @@ handler.**
 ### Shared HTTP surface
 
 `server.py` implements the shared built-in routes: `/` + `/upload` (upload
-UI), `POST /upload` (multipart → `~/Downloads/expose`),
+dashboard with sidebar navigation and live overview), `POST /upload`
+(multipart → `~/Downloads/expose`),
 `/upload/files[/<name>]`, `/me`, `/log?since=n` + `/log/clear`, `/meta`,
 `/chat`, plus `/content` outside directory mode. The request log is JSON,
 capped at 500 entries; chat is capped at 200 messages.
