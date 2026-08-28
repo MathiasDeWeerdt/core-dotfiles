@@ -66,6 +66,96 @@ themeApply(themeGet());
 
 // ── header actions ────────────────────────────────────────
 q('copy-url').addEventListener('click',()=>copyText(location.origin,'Link copied'));
+q('top-url').textContent=location.origin;
+q('overview-url').textContent=location.origin;
+q('overview-copy').addEventListener('click',()=>copyText(location.origin,'Session URL copied'));
+
+// ── dashboard shell ───────────────────────────────────────
+(function(){
+  const sidebar=q('sidebar'),backdrop=q('nav-backdrop'),toggle=q('nav-toggle');
+  function closeNav(){sidebar.classList.remove('open');backdrop.classList.remove('show');backdrop.hidden=true}
+  toggle.addEventListener('click',()=>{
+    const open=!sidebar.classList.contains('open');
+    sidebar.classList.toggle('open',open);backdrop.classList.toggle('show',open);backdrop.hidden=!open});
+  backdrop.addEventListener('click',closeNav);
+  document.querySelectorAll('.nav-item[data-section]').forEach(link=>link.addEventListener('click',()=>{
+    if(link.dataset.section==='chat'&&q('chat').hidden)q('chat-toggle').click();
+    if(link.dataset.section==='traffic')q('log').classList.remove('collapsed');
+    closeNav()}));
+  const links=[...document.querySelectorAll('.nav-item[data-section]')];
+  const sections=links.map(link=>q(link.dataset.section)).filter(Boolean);
+  if('IntersectionObserver'in window){
+    const observer=new IntersectionObserver(items=>{
+      const visible=items.filter(item=>item.isIntersecting).sort((a,b)=>b.intersectionRatio-a.intersectionRatio)[0];
+      if(!visible)return;
+      links.forEach(link=>link.classList.toggle('active',link.dataset.section===visible.target.id));
+    },{rootMargin:'-20% 0px -65% 0px',threshold:[0,.1,.5]});
+    sections.forEach(section=>observer.observe(section));
+  }
+})();
+
+const dashboardStarted=Date.now();
+setInterval(()=>{
+  const elapsed=Math.floor((Date.now()-dashboardStarted)/1000);
+  q('uptime').textContent=[elapsed/3600|0,(elapsed%3600)/60|0,elapsed%60|0]
+    .map(value=>String(value).padStart(2,'0')).join(':');
+},1000);
+
+function dashboardRow(parts){return'<div class="mini-row">'+parts.join('')+'</div>'}
+function dashboardEmpty(text){return'<span class="empty-line">'+esc(text)+'</span>'}
+function refreshDashboard(){
+  Promise.all([
+    fetch('/meta').then(r=>r.json()),
+    fetch('/upload/files').then(r=>r.json()),
+    fetch('/log').then(r=>r.json()),
+    fetch('/chat').then(r=>r.json())
+  ]).then(([meta,files,entries,messages])=>{
+    const mode=meta.mode||'text',ips=[...new Set(entries.map(entry=>entry.ip).filter(Boolean))];
+    q('overview-mode').textContent=mode;
+    q('overview-visitors').textContent=ips.length;
+    q('overview-visitor-label').textContent=ips.length+' observed';
+    q('overview-requests').textContent=entries.length;
+    q('overview-files').textContent=files.length;
+    q('overview-bytes').textContent=fmt(files.reduce((total,file)=>total+(file.size||0),0));
+    q('overview-chat').textContent=messages.length;
+
+    let shared='<span class="badge '+(BADGE[mode]||'')+'">'+esc(mode)+'</span>';
+    if(mode==='file')shared+='<span class="grow mono">'+esc(meta.name||'file')+'</span><span class="meta">'+fmt(meta.size||0)+'</span>';
+    else if(mode==='dir')shared+='<span class="grow mono">'+esc(meta.path||'directory')+'</span>';
+    else if(meta.size!=null)shared+='<span class="grow mono">/content</span><span class="meta">'+fmt(meta.size)+'</span>';
+    q('overview-shared').innerHTML=dashboardRow([shared]);
+
+    q('overview-file-list').innerHTML=files.length?files.slice(0,5).map(file=>dashboardRow([
+      '<span class="grow mono">'+esc(file.name)+'</span>',
+      '<span class="meta">'+fmt(file.size)+'</span>',
+      '<span class="meta">'+ago(file.mtime)+'</span>'
+    ])).join(''):dashboardEmpty('No files received yet');
+
+    q('overview-chat-list').innerHTML=messages.length?messages.slice(-3).reverse().map(message=>dashboardRow([
+      '<span class="meta">'+esc(message.time)+'</span>',
+      '<span class="grow">'+esc(message.msg)+'</span>'
+    ])).join(''):dashboardEmpty('No messages yet');
+
+    const byIp={};
+    entries.forEach(entry=>{if(entry.ip)byIp[entry.ip]=(byIp[entry.ip]||0)+1});
+    q('overview-visitor-list').innerHTML=ips.length?ips.slice(0,6).map(ip=>dashboardRow([
+      '<span class="side-dot"></span><span class="grow mono">'+esc(ip)+'</span>',
+      '<span class="meta">'+byIp[ip]+' req</span>'
+    ])).join(''):dashboardEmpty('Waiting for visitors…');
+
+    q('overview-traffic-list').innerHTML=entries.length?entries.slice(-7).reverse().map(entry=>{
+      const code=String(entry.code||''),cls=code[0]==='2'?'ok':code[0]==='3'||code[0]==='4'?'warn':'err';
+      return dashboardRow([
+        '<span class="meta">'+esc(entry.time||'')+'</span>',
+        '<span class="method">'+esc(entry.method||'')+'</span>',
+        '<span class="grow mono">'+esc(entry.path||'')+'</span>',
+        '<span class="status '+cls+'">'+esc(code)+'</span>'
+      ]);
+    }).join(''):dashboardEmpty('Waiting for requests…');
+  }).catch(()=>{});
+}
+setInterval(refreshDashboard,2000);
+refreshDashboard();
 
 // ── hero: mode-aware context ──────────────────────────────
 const BADGE={dir:'blu',catch:'vio',payload:'amb',redirect:'amb'};

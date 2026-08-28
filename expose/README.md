@@ -15,6 +15,7 @@ drop web UI), and built-in reverse-shell payloads.
 - **Request inspection** — one-line or verbose logging (all headers, reverse DNS, parsed User-Agent)
 - **Request catcher** (`--catch`) — dump full headers + body, webhook-tester style
 - **Uploads** — every mode serves a drag & drop upload page; received files land in `~/Downloads/expose`
+- **Operator dashboard** — responsive sidebar navigation with session status, request/visitor totals, received-file and chat previews, and recent traffic
 - **Themes** — dark + light UI; follows your OS theme automatically, manual override in the header
 - **Device fingerprinting** — `/me` shows what the visitor's browser leaks: GPU, canvas fingerprint, timezone, screen, CPU/memory, storage APIs… plus a stable SHA-256 visitor id and copy-as-JSON
 - **Smart request viewer** — request bodies are auto-decoded (JSON pretty-print, JWT header+payload, form-urlencoded) and credential-looking bodies are flagged with a red `creds` chip
