@@ -17,3 +17,6 @@ env
 
 # Secrets (ensure no API keys leak)
 *.secret
+
+# Local agent runtime state
+.omo/
