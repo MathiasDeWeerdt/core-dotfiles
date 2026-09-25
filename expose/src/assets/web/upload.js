@@ -64,107 +64,60 @@ q('theme-toggle').addEventListener('click',()=>{
 });
 themeApply(themeGet());
 
-// ── header actions ────────────────────────────────────────
+// ── navigation ───────────────────────────────────────────
 q('copy-url').addEventListener('click',()=>copyText(location.origin,'Link copied'));
-q('top-url').textContent=location.origin;
 q('overview-url').textContent=location.origin;
-q('overview-copy').addEventListener('click',()=>copyText(location.origin,'Session URL copied'));
+const sections=[...document.querySelectorAll('.view-section')];
+const navLinks=[...document.querySelectorAll('.nav-item[data-section]')];
+function showView(id,focus=false){
+  if(!sections.some(section=>section.id===id))id='overview';
+  sections.forEach(section=>section.hidden=section.id!==id);
+  navLinks.forEach(link=>{
+    const active=link.dataset.section===id;
+    link.classList.toggle('active',active);
+    if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+  });
+  q('stats').hidden=true;
+  if(id==='chat')q('chat-dot').hidden=true;
+  document.title=q(id).querySelector('h1').textContent+' · expose';
+  if(focus){q('workspace').focus({preventScroll:true});window.scrollTo(0,0)}
+}
+function route(focus=false){
+  const hash=location.hash.slice(1);
+  if(hash==='workspace'){q('workspace').focus();return}
+  const id=hash.startsWith('browse=')||hash.startsWith('/')||hash==='shared-content'?'overview':hash;
+  showView(id||'overview',focus);
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')q('stats').hidden=true});
+window.addEventListener('hashchange',()=>route(true));
+route();
 
-// ── dashboard shell ───────────────────────────────────────
-(function(){
-  const sidebar=q('sidebar'),backdrop=q('nav-backdrop'),toggle=q('nav-toggle');
-  function closeNav(){sidebar.classList.remove('open');backdrop.classList.remove('show');backdrop.hidden=true}
-  toggle.addEventListener('click',()=>{
-    const open=!sidebar.classList.contains('open');
-    sidebar.classList.toggle('open',open);backdrop.classList.toggle('show',open);backdrop.hidden=!open});
-  backdrop.addEventListener('click',closeNav);
-  document.querySelectorAll('.nav-item[data-section]').forEach(link=>link.addEventListener('click',()=>{
-    if(link.dataset.section==='chat'&&q('chat').hidden)q('chat-toggle').click();
-    if(link.dataset.section==='traffic')q('log').classList.remove('collapsed');
-    closeNav()}));
-  const links=[...document.querySelectorAll('.nav-item[data-section]')];
-  const sections=links.map(link=>q(link.dataset.section)).filter(Boolean);
-  if('IntersectionObserver'in window){
-    const observer=new IntersectionObserver(items=>{
-      const visible=items.filter(item=>item.isIntersecting).sort((a,b)=>b.intersectionRatio-a.intersectionRatio)[0];
-      if(!visible)return;
-      links.forEach(link=>link.classList.toggle('active',link.dataset.section===visible.target.id));
-    },{rootMargin:'-20% 0px -65% 0px',threshold:[0,.1,.5]});
-    sections.forEach(section=>observer.observe(section));
-  }
-})();
-
-const dashboardStarted=Date.now();
-setInterval(()=>{
-  const elapsed=Math.floor((Date.now()-dashboardStarted)/1000);
-  q('uptime').textContent=[elapsed/3600|0,(elapsed%3600)/60|0,elapsed%60|0]
-    .map(value=>String(value).padStart(2,'0')).join(':');
-},1000);
-
-function dashboardRow(parts){return'<div class="mini-row">'+parts.join('')+'</div>'}
-function dashboardEmpty(text){return'<span class="empty-line">'+esc(text)+'</span>'}
 function refreshDashboard(){
   Promise.all([
-    fetch('/meta').then(r=>r.json()),
-    fetch('/upload/files').then(r=>r.json()),
-    fetch('/log').then(r=>r.json()),
-    fetch('/chat').then(r=>r.json())
-  ]).then(([meta,files,entries,messages])=>{
-    const mode=meta.mode||'text',ips=[...new Set(entries.map(entry=>entry.ip).filter(Boolean))];
-    q('overview-mode').textContent=mode;
-    q('overview-visitors').textContent=ips.length;
-    q('overview-visitor-label').textContent=ips.length+' observed';
+    fetch('/upload/files').then(r=>{if(!r.ok)throw Error();return r.json()}),
+    fetch('/log').then(r=>{if(!r.ok)throw Error();return r.json()})
+  ]).then(([files,entries])=>{
+    q('connection').textContent='Connected';q('connection').classList.remove('offline');
+    q('overview-visitors').textContent=new Set(entries.map(entry=>entry.ip).filter(Boolean)).size;
     q('overview-requests').textContent=entries.length;
     q('overview-files').textContent=files.length;
-    q('overview-bytes').textContent=fmt(files.reduce((total,file)=>total+(file.size||0),0));
-    q('overview-chat').textContent=messages.length;
-
-    let shared='<span class="badge '+(BADGE[mode]||'')+'">'+esc(mode)+'</span>';
-    if(mode==='file')shared+='<span class="grow mono">'+esc(meta.name||'file')+'</span><span class="meta">'+fmt(meta.size||0)+'</span>';
-    else if(mode==='dir')shared+='<span class="grow mono">'+esc(meta.path||'directory')+'</span>';
-    else if(meta.size!=null)shared+='<span class="grow mono">/content</span><span class="meta">'+fmt(meta.size)+'</span>';
-    q('overview-shared').innerHTML=dashboardRow([shared]);
-
-    q('overview-file-list').innerHTML=files.length?files.slice(0,5).map(file=>dashboardRow([
-      '<span class="grow mono">'+esc(file.name)+'</span>',
-      '<span class="meta">'+fmt(file.size)+'</span>',
-      '<span class="meta">'+ago(file.mtime)+'</span>'
-    ])).join(''):dashboardEmpty('No files received yet');
-
-    q('overview-chat-list').innerHTML=messages.length?messages.slice(-3).reverse().map(message=>dashboardRow([
-      '<span class="meta">'+esc(message.time)+'</span>',
-      '<span class="grow">'+esc(message.msg)+'</span>'
-    ])).join(''):dashboardEmpty('No messages yet');
-
-    const byIp={};
-    entries.forEach(entry=>{if(entry.ip)byIp[entry.ip]=(byIp[entry.ip]||0)+1});
-    q('overview-visitor-list').innerHTML=ips.length?ips.slice(0,6).map(ip=>dashboardRow([
-      '<span class="side-dot"></span><span class="grow mono">'+esc(ip)+'</span>',
-      '<span class="meta">'+byIp[ip]+' req</span>'
-    ])).join(''):dashboardEmpty('Waiting for visitors…');
-
-    q('overview-traffic-list').innerHTML=entries.length?entries.slice(-7).reverse().map(entry=>{
+    q('overview-traffic-list').innerHTML=entries.length?entries.slice(-5).reverse().map(entry=>{
       const code=String(entry.code||''),cls=code[0]==='2'?'ok':code[0]==='3'||code[0]==='4'?'warn':'err';
-      return dashboardRow([
-        '<span class="meta">'+esc(entry.time||'')+'</span>',
-        '<span class="method">'+esc(entry.method||'')+'</span>',
-        '<span class="grow mono">'+esc(entry.path||'')+'</span>',
-        '<span class="status '+cls+'">'+esc(code)+'</span>'
-      ]);
-    }).join(''):dashboardEmpty('Waiting for requests…');
-  }).catch(()=>{});
+      return '<div class="mini-row"><span class="meta">'+esc(entry.time||'')+'</span>'+
+        '<span class="method">'+esc(entry.method||'')+'</span>'+
+        '<span class="grow mono">'+esc(entry.path||'')+'</span>'+
+        '<span class="status '+cls+'">'+esc(code)+'</span></div>';
+    }).join(''):'<p class="empty-line">Requests will appear here when someone connects.</p>';
+  }).catch(()=>{q('connection').textContent='Reconnecting…';q('connection').classList.add('offline')});
 }
 setInterval(refreshDashboard,2000);
 refreshDashboard();
 
 // ── hero: mode-aware context ──────────────────────────────
-const BADGE={dir:'blu',catch:'vio',payload:'amb',redirect:'amb'};
-
-fetch('/meta').then(r=>r.json()).then(m=>{
+fetch('/meta').then(r=>{if(!r.ok)throw Error();return r.json()}).then(m=>{
   const hero=q('hero'),badge=q('mode-badge');
   const mode=m.mode||'text';
   badge.textContent=mode;
-  if(BADGE[mode])badge.classList.add(BADGE[mode]);
   hero.hidden=false;
 
   if(mode==='file'){
@@ -181,12 +134,13 @@ fetch('/meta').then(r=>r.json()).then(m=>{
     hero.innerHTML='<div class="hero-lbl">Sharing a directory</div>'+
       '<div class="dir-host" title="Directory on this machine">'+esc(m.path||'')+'</div>'+
       '<div class="crumbs" id="crumbs"></div><div id="direntries"></div>';
-    loadDir(location.hash.slice(1)||'/');
+    const hash=location.hash.slice(1);
+    loadDir(hash.startsWith('browse=')?decodeURIComponent(hash.slice(7)):hash.startsWith('/')?hash:'/');
 
   }else if(mode==='catch'){
     hero.innerHTML='<div class="hero-catch"><span class="radar">'+I.act+'</span>'+
       '<h3>Request catcher is live</h3>'+
-      '<p>Point a webhook or send any request here — full headers and body show up in the request log below and in the operator&rsquo;s terminal.</p>'+
+      '<p>Point a webhook or send any request here — inspect the headers and body in Traffic.</p>'+
       '<span class="curl-chip"><span id="curl-sample"></span>'+
       '<button class="iconbtn" id="h-curl" title="Copy curl command">'+I.copy+'</button></span></div>';
     const sample='curl -X POST '+location.origin+' -d \'{"hello":"world"}\'';
@@ -197,19 +151,19 @@ fetch('/meta').then(r=>r.json()).then(m=>{
     // text / payload / redirect / anything else that serves /content
     const label=mode==='text'?'Sharing text':mode==='payload'?'Sharing a payload':'Serving '+mode;
     fetch('/content').then(r=>r.text()).then(t=>{
-      if(!t){hero.hidden=true;return}
+      if(!t){hero.innerHTML='<p class="empty-line">No text shared in this session.</p>';return}
       hero.innerHTML='<div class="hero-lbl">'+esc(label)+'</div>'+
         '<pre class="hero-text" id="h-text"></pre>'+
         '<div class="hero-acts"><button class="btn ghost" id="h-copy">'+I.copy+'Copy</button></div>';
       q('h-text').textContent=t;
       q('h-copy').addEventListener('click',()=>copyText(t,'Copied to clipboard'));
-    }).catch(()=>{hero.hidden=true});
+    }).catch(()=>{hero.innerHTML='<p class="empty-line">Could not load shared content. Reload to try again.</p>'});
   }
-}).catch(()=>{});
+}).catch(()=>{q('mode-badge').textContent='Unavailable';q('hero').innerHTML='<p class="empty-line">Could not load this session. Check your connection and reload.</p>'});
 
 // ── directory browser ─────────────────────────────────────
 function loadDir(path){
-  history.replaceState(null,'','#'+path);
+  if(path!=='/'||location.hash.startsWith('#browse='))history.replaceState(null,'','#browse='+encodeURIComponent(path));
   fetch('/ls'+(path==='/'?'':path)).then(r=>r.json()).then(d=>{
     const cr=q('crumbs'),el=q('direntries');
     if(cr){
@@ -256,7 +210,7 @@ let F=[];
 const drop=q('drop'),fi=q('fi'),queue=q('queue'),upActs=q('up-acts'),
       sendBtn=q('send'),clrBtn=q('clr'),prog=q('prog'),bar=q('bar'),msg=q('msg');
 
-function addFiles(nf){for(const f of nf)if(!F.some(x=>x.name===f.name&&x.size===f.size))F.push(f);renderQueue()}
+function addFiles(nf){location.hash='files';showView('files');for(const f of nf)if(!F.some(x=>x.name===f.name&&x.size===f.size))F.push(f);renderQueue()}
 function renderQueue(){
   queue.innerHTML='';
   F.forEach((f,i)=>{
@@ -272,8 +226,7 @@ function renderQueue(){
 queue.addEventListener('click',e=>{const b=e.target.closest('.iconbtn');if(b){F.splice(+b.dataset.i,1);renderQueue()}});
 clrBtn.addEventListener('click',()=>{F=[];renderQueue()});
 
-drop.addEventListener('click',e=>{if(!e.target.closest('.linklike'))fi.click()});
-q('browse').addEventListener('click',()=>fi.click());
+drop.addEventListener('click',e=>{if(e.target!==fi)fi.click()});
 drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fi.click()}});
 fi.addEventListener('change',()=>{addFiles(fi.files);fi.value=''});
 
@@ -291,7 +244,7 @@ window.addEventListener('dragleave',()=>{dragDepth=Math.max(0,dragDepth-1);if(!d
 window.addEventListener('dragover',e=>e.preventDefault());
 window.addEventListener('drop',e=>{
   e.preventDefault();dragDepth=0;overlay.hidden=true;
-  if(e.dataTransfer&&e.dataTransfer.files.length)addFiles(e.dataTransfer.files)});
+  if(e.dataTransfer&&e.dataTransfer.files.length){if(!q('chat').hidden)window.addChatFiles(e.dataTransfer.files);else addFiles(e.dataTransfer.files)}});
 
 sendBtn.addEventListener('click',()=>{
   if(!F.length)return;
@@ -301,8 +254,9 @@ sendBtn.addEventListener('click',()=>{
   xhr.upload.onprogress=e=>{if(e.lengthComputable)bar.style.width=(e.loaded/e.total*100)+'%'};
   xhr.onload=()=>{bar.style.width='100%';
     try{const r=JSON.parse(xhr.responseText);
-      msg.textContent=r.count+' file'+(r.count!==1?'s':'')+' received by the host';
-      msg.className='up-msg ok';F=[];renderQueue();loadDisk();
+      if(xhr.status<200||xhr.status>=300||typeof r.count!=='number')throw Error();
+      F=[];renderQueue();loadDisk();refreshDashboard();
+      msg.textContent=r.count+' file'+(r.count!==1?'s':'')+' received by the host';msg.className='up-msg ok';
     }catch(e){msg.textContent='transfer failed — unexpected response';msg.className='up-msg err'}
     sendBtn.disabled=false;setTimeout(()=>{prog.hidden=true;bar.style.width='0'},1400)};
   xhr.onerror=()=>{msg.textContent='connection lost — is the server still up?';msg.className='up-msg err';
@@ -316,7 +270,7 @@ function loadDisk(){
   fetch('/upload/files').then(r=>r.json()).then(files=>{
     recvN.textContent=files.length?files.length+' file'+(files.length!==1?'s':'')+' on this machine':'';
     disk.innerHTML='';
-    if(!files.length){disk.innerHTML='<div class="disk-empty">nothing received yet — files people send appear here</div>';return}
+    if(!files.length){disk.innerHTML='<div class="disk-empty">No files yet. Send a file to make it available here.</div>';return}
     files.forEach((f,i)=>{
       const d=document.createElement('div');d.className='di';d.style.animationDelay=Math.min(i*20,300)+'ms';
       d.innerHTML=I.file+
@@ -416,27 +370,23 @@ loadDisk();
       ],
     },
   };
-  const GROUPS=[['upload','Upload a file','lands in ~/Downloads/expose on this machine'],
-                ['chat','Post a chat message','shows up in the chat panel'],
-                ['download','Download shared content','whatever is being served right now']];
+  const GROUPS=[['upload','Upload a file'],['chat','Post a chat message'],
+                ['download','Download shared content']];
   const box=q('cmds');
   let os='linux';
 
-  // collapsed by default — click the header to expand
-  q('cli-h').addEventListener('click',e=>{
-    if(e.target.closest('.os-pill'))return;
-    q('cli-card').classList.toggle('collapsed')});
-
   function render(){
     let h='';
-    for(const[g,label,hint]of GROUPS){
-      h+='<div class="cmd-g"><h4>'+label+' &middot; '+hint+'</h4>';
+    for(const[g,label]of GROUPS){
+      h+='<section class="cmd-g"><h2>'+label+'</h2>';
       CMDS[os][g].forEach(([tool,cmd],i)=>{
+        if(i===1)h+='<details class="cmd-alternatives"><summary>Other tools</summary>';
         h+='<div class="cmd"><span class="cmd-t">'+esc(tool)+'</span>'+
            '<code class="cmd-c">'+esc(sub(cmd))+'</code>'+
            '<button class="iconbtn cmd-copy" data-c="'+ea(sub(cmd))+'" title="Copy command" aria-label="Copy command">'+I.copy+'</button></div>';
       });
-      h+='</div>';
+      if(CMDS[os][g].length>1)h+='</details>';
+      h+='</section>';
     }
     box.innerHTML=h;
   }
@@ -446,7 +396,7 @@ loadDisk();
   q('os-pills').addEventListener('click',e=>{
     const p=e.target.closest('.os-pill');if(!p)return;
     os=p.dataset.os;
-    q('os-pills').querySelectorAll('.os-pill').forEach(x=>x.classList.toggle('active',x===p));
+    q('os-pills').querySelectorAll('.os-pill').forEach(x=>(x.classList.toggle('active',x===p),x.setAttribute('aria-pressed',String(x===p))));
     render()});
   render();
 })();
@@ -493,18 +443,21 @@ loadDisk();
   const sub=s=>{const{h,p}=cur();return s.replaceAll('{H}',h).replaceAll('{P}',p)};
 
   function group(title,hint,rows){
-    let h='<div class="cmd-g"><h4>'+title+' &middot; '+hint+'</h4>';
-    rows.forEach(([tool,cmd,best])=>{
+    let h='<section class="cmd-g"><h2>'+title+'</h2><p class="hint">'+hint+'</p>';
+    rows.forEach(([tool,cmd,best],i)=>{
+      if(i===1)h+='<details class="cmd-alternatives"><summary>Other tools</summary>';
       h+='<div class="cmd"><span class="cmd-t">'+esc(tool)+
          (best?'<span class="cmd-best">'+esc(best)+'</span>':'')+'</span>'+
          '<code class="cmd-c">'+esc(sub(cmd))+'</code>'+
          '<button class="iconbtn cmd-copy" data-c="'+ea(sub(cmd))+'" title="Copy command" aria-label="Copy command">'+I.copy+'</button></div>';
     });
-    return h+'</div>';
+    return h+(rows.length>1?'</details>':'')+'</section>';
   }
   function render(){
+    const expanded=[...box.querySelectorAll('details')].map(el=>el.open);
     box.innerHTML=group('Start a listener','run on your machine first',LISTENER)+
                   group('Run on the target','connects back to you',RS[os]);
+    box.querySelectorAll('details').forEach((el,i)=>el.open=!!expanded[i]);
   }
   box.addEventListener('click',e=>{
     const b=e.target.closest('.cmd-copy');if(!b)return;
@@ -512,42 +465,32 @@ loadDisk();
   q('rs-pills').addEventListener('click',e=>{
     const p=e.target.closest('.os-pill');if(!p)return;
     os=p.dataset.os;
-    q('rs-pills').querySelectorAll('.os-pill').forEach(x=>x.classList.toggle('active',x===p));
+    q('rs-pills').querySelectorAll('.os-pill').forEach(x=>(x.classList.toggle('active',x===p),x.setAttribute('aria-pressed',String(x===p))));
     render()});
   hostIn.addEventListener('input',render);
   portIn.addEventListener('input',render);
-  q('rs-h').addEventListener('click',e=>{
-    if(e.target.closest('.os-pill')||e.target.closest('.rs-in'))return;
-    q('rs-card').classList.toggle('collapsed')});
+
   render();
 })();
 
 // ── request log drawer ────────────────────────────────────
 (function(){
-  const lp=q('log'),lpBar=q('log-bar'),lpBody=q('log-body'),lpBadge=q('log-badge'),
+  const lpBody=q('log-body'),lpBadge=q('log-badge'),
         lpSearch=q('log-search'),lpEmpty=q('log-empty'),live=q('live'),
         btnPause=q('log-pause'),btnExport=q('log-export'),btnClear=q('log-clear');
   let entries=[],lastN=0,paused=false,autoScroll=true,filter='';
   const openRows=new Set();   // n of expanded entries — survives re-renders
 
-  function toggleLog(force){
-    const willCollapse=force!=null?force:lp.classList.contains('collapsed')?false:true;
-    lp.classList.toggle('collapsed',willCollapse);
-    document.body.classList.toggle('log-open',!willCollapse);
-  }
-  lpBar.addEventListener('click',e=>{
-    if(e.target.closest('.log-search')||e.target.closest('.btn')||e.target.closest('input'))return;
-    toggleLog()});
-  lpBar.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target===lpBar)toggleLog()});
   document.addEventListener('keydown',e=>{
-    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
-    if(e.key==='l'||e.key==='L'){e.preventDefault();toggleLog()}});
+    if(e.target.matches('input,textarea,[contenteditable]')||e.ctrlKey||e.metaKey||e.altKey)return;
+    if(e.key.toLowerCase()==='l'){e.preventDefault();location.hash='traffic'}
+  });
 
   lpSearch.addEventListener('input',()=>{filter=lpSearch.value.toLowerCase();renderAll()});
   lpSearch.addEventListener('click',e=>e.stopPropagation());
 
   btnPause.addEventListener('click',e=>{e.stopPropagation();paused=!paused;
-    btnPause.textContent=paused?'resume':'pause';
+    btnPause.textContent=paused?'Resume':'Pause';
     btnPause.classList.toggle('active',paused);
     live.classList.toggle('paused',paused)});
 
@@ -571,11 +514,11 @@ loadDisk();
   const btnSound=q('log-sound');
   let soundOn=false,painted=false,audioCtx=null;
   try{soundOn=localStorage.getItem('expose-sound')==='1'}catch(e){}
-  btnSound.classList.toggle('active',soundOn);
+  btnSound.classList.toggle('active',soundOn);btnSound.setAttribute('aria-pressed',String(soundOn));
   btnSound.addEventListener('click',e=>{e.stopPropagation();
     soundOn=!soundOn;
     try{localStorage.setItem('expose-sound',soundOn?'1':'0')}catch(e2){}
-    btnSound.classList.toggle('active',soundOn);
+    btnSound.classList.toggle('active',soundOn);btnSound.setAttribute('aria-pressed',String(soundOn));
     if(soundOn)blip()});
   function blip(){
     if(!soundOn)return;
@@ -675,7 +618,7 @@ loadDisk();
     return c}
 
   function makeNodes(e){
-    const row=document.createElement('div');row.className='le';row.dataset.n=e.n;
+    const row=document.createElement('div');row.className='le';row.dataset.n=e.n;row.tabIndex=0;row.setAttribute('role','button');row.setAttribute('aria-label',e.method+' '+e.path+' '+e.code);row.setAttribute('aria-expanded',String(openRows.has(e.n)));
     const flag=e.body&&SECRET_RE.test(e.body)?'<span class="le-flag">creds</span>':'';
     row.innerHTML='<span class="le-n">'+e.n+'</span>'+
       '<span class="le-time">'+hl(e.time)+'</span>'+
@@ -714,7 +657,7 @@ loadDisk();
     const vis=entries.filter(matchesFilter);
     lpBadge.textContent=entries.length||'';
     lpBody.innerHTML='';
-    if(!vis.length){lpBody.appendChild(lpEmpty);lpEmpty.style.display='';return}
+    if(!vis.length){lpEmpty.textContent=filter?'No requests match this filter.':'Waiting for requests…';lpBody.appendChild(lpEmpty);lpEmpty.style.display='';return}
     lpEmpty.style.display='none';
     const frag=document.createDocumentFragment();
     vis.forEach(e=>{const[r,d]=makeNodes(e);frag.appendChild(r);frag.appendChild(d)});
@@ -738,10 +681,12 @@ loadDisk();
     const row=e.target.closest('.le');if(!row)return;
     const n=+row.dataset.n;
     const expanding=!row.classList.contains('expanded');
-    row.classList.toggle('expanded',expanding);
+    row.classList.toggle('expanded',expanding);row.setAttribute('aria-expanded',String(expanding));
     const det=row.nextElementSibling;
     if(det&&det.classList.contains('le-detail'))det.classList.toggle('open',expanding);
     if(expanding)openRows.add(n);else openRows.delete(n)});
+
+  lpBody.addEventListener('keydown',e=>{if(e.target.classList.contains('le')&&(e.key==='Enter'||e.key===' ')){e.preventDefault();e.target.click()}});
 
   function poll(){
     if(paused)return;
@@ -762,48 +707,76 @@ loadDisk();
   poll();
 })();
 
-// ── chat ──────────────────────────────────────────────────
+// ── chat and attachments ──────────────────────────────────
 (function(){
-  const panel=q('chat'),cbody=q('chat-body'),cin=q('chat-input'),csend=q('chat-send'),
-        toggle=q('chat-toggle'),dot=q('chat-dot');
-  let lastN=0,seen=false;
-
-  // open by default, but remember if the user closed it
-  function openChat(focus){panel.hidden=false;dot.hidden=true;toggle.classList.add('active');
-    if(focus!==false)cin.focus();
-    try{localStorage.setItem('expose-chat','open')}catch(e){}}
-  function closeChat(){panel.hidden=true;toggle.classList.remove('active');
-    try{localStorage.setItem('expose-chat','closed')}catch(e){}}
-  try{if(localStorage.getItem('expose-chat')==='closed'){closeChat()}else{openChat(false)}}catch(e){openChat(false)}
-  toggle.addEventListener('click',()=>{panel.hidden?openChat():closeChat()});
-  q('chat-close').addEventListener('click',closeChat);
-
-  // one-click copy of any message
-  cbody.addEventListener('click',e=>{
-    const m=e.target.closest('.cm');if(!m)return;
-    copyText(m.querySelector('.cx').textContent,'Message copied')});
-
-  function refresh(){
-    fetch('/chat').then(r=>r.json()).then(msgs=>{
-      if(!msgs.length)return;
-      const added=msgs.filter(m=>m.n>lastN);
-      if(!added.length)return;
-      const had=lastN>0;
-      lastN=msgs[msgs.length-1].n;
-      added.forEach(m=>{
-        const d=document.createElement('div');d.className='cm';d.title='Click to copy';
-        d.innerHTML='<span class="ct">'+esc(m.time)+'</span><span class="cx">'+esc(m.msg)+'</span>';
-        cbody.appendChild(d)});
-      cbody.scrollTop=cbody.scrollHeight;
-      if(panel.hidden&&had)dot.hidden=false;   // unread indicator (skip initial backlog)
-    }).catch(()=>{})}
-
-  function send(){
-    const v=cin.value.trim();
-    if(!v)return;
-    fetch('/chat',{method:'POST',body:v}).then(r=>r.json()).then(()=>{cin.value='';refresh()}).catch(()=>{})}
-
+  const panel=q('chat'),cbody=q('chat-body'),cin=q('chat-input'),csend=q('chat-send'),dot=q('chat-dot');
+  let lastN=0,files=[],sending=false;
+  function queueFiles(items){
+    if(sending)return;
+    for(const file of items)if(!files.some(f=>f.name===file.name&&f.size===file.size))files.push(file);
+    q('chat-attachments').innerHTML=files.map((file,i)=>'<span class="attachment-chip">'+esc(file.name)+' <small>'+fmt(file.size)+'</small><button type="button" data-remove="'+i+'" aria-label="Remove '+ea(file.name)+'">×</button></span>').join('');
+  }
+  window.addChatFiles=queueFiles;
+  q('chat-attach').addEventListener('click',()=>q('chat-files').click());
+  q('chat-files').addEventListener('change',()=>{queueFiles(q('chat-files').files);q('chat-files').value=''});
+  q('chat-attachments').addEventListener('click',e=>{const b=e.target.closest('[data-remove]');if(b&&!sending){files.splice(+b.dataset.remove,1);queueFiles([])}});
+  cin.addEventListener('paste',e=>{const pasted=[...(e.clipboardData?.files||[])];if(pasted.length){e.preventDefault();queueFiles(pasted)}});
+  function attachment(file){
+    const url='/upload/files/'+encodeURIComponent(file.name),preview='/upload/preview/'+encodeURIComponent(file.name);
+    const card=document.createElement('div');card.className='chat-file';
+    card.innerHTML='<div class="chat-file-head"><span class="grow">'+esc(file.name)+'</span><small>'+fmt(file.size)+'</small><a class="btn ghost sm" href="'+url+'" download="'+ea(file.name)+'">Download</a></div>';
+    if(file.kind==='image'){
+      const image=document.createElement('img');image.src=preview;image.alt=file.name;image.loading='lazy';image.className='chat-image';
+      image.addEventListener('error',()=>{image.replaceWith(document.createTextNode('Preview unavailable. The file may have been removed.'))});card.appendChild(image);
+    }else if(file.kind==='audio'||file.kind==='video'){
+      const media=document.createElement(file.kind);media.controls=true;media.preload='metadata';media.src=preview;card.appendChild(media);
+    }else if(file.kind==='text'){
+      const detail=document.createElement('details');detail.innerHTML='<summary>Preview text</summary><pre>Loading…</pre>';
+      detail.addEventListener('toggle',()=>{if(!detail.open||detail.dataset.loaded)return;detail.dataset.loaded='1';fetch(preview).then(r=>{if(!r.ok)throw Error();return r.text()}).then(text=>{detail.querySelector('pre').textContent=text+(file.size>65536?'\n[Preview limited to 64 KB]':'')}).catch(()=>{detail.querySelector('pre').textContent='Preview unavailable. The file may have been removed.'})});card.appendChild(detail);
+    }
+    return card;
+  }
+  function renderMessage(message){
+    const row=document.createElement('article');row.className='cm';row.dataset.n=message.n;
+    const header=document.createElement('div');header.className='chat-message-head';
+    header.innerHTML='<time>'+esc(message.time)+'</time>';
+    if(message.msg){const copy=document.createElement('button');copy.className='chat-copy';copy.textContent='Copy text';copy.addEventListener('click',()=>copyText(message.msg,'Message copied'));header.appendChild(copy)}
+    row.appendChild(header);
+    if(message.msg){
+      const text=document.createElement('div');text.className='cx';
+      String(message.msg).split(/(https?:\/\/[^\s<>]+)/g).forEach(part=>{
+        if(/^https?:\/\//.test(part)){const a=document.createElement('a');a.href=part;a.textContent=part;a.target='_blank';a.rel='noopener noreferrer';text.appendChild(a)}else text.appendChild(document.createTextNode(part));
+      });row.appendChild(text);
+    }
+    (message.files||[]).forEach(file=>row.appendChild(attachment(file)));return row;
+  }
+  async function refresh(){
+    try{
+      const response=await fetch('/chat');if(!response.ok)throw Error();const messages=await response.json();
+      if(messages.length&&messages[messages.length-1].n<lastN){lastN=0;cbody.querySelectorAll('.cm').forEach(el=>el.remove())}
+      const added=messages.filter(m=>m.n>lastN);if(!added.length)return;
+      const had=lastN>0,atBottom=cbody.scrollHeight-cbody.scrollTop-cbody.clientHeight<80;
+      lastN=messages[messages.length-1].n;q('chat-empty').hidden=true;
+      added.forEach(m=>cbody.appendChild(renderMessage(m)));
+      while(cbody.querySelectorAll('.cm').length>200)cbody.querySelector('.cm').remove();
+      if(atBottom)cbody.scrollTop=cbody.scrollHeight;
+      if(panel.hidden&&had)dot.hidden=false;
+    }catch(_){}
+  }
+  async function send(){
+    const message=cin.value.trim();if(sending||(!message&&!files.length))return;
+    if(files.reduce((n,file)=>n+file.size,0)>49*1024*1024){q('chat-status').textContent='Keep attachments below 49 MB per message.';return}
+    sending=true;csend.disabled=true;q('chat-attach').disabled=true;q('chat-status').textContent=files.length?'Uploading attachments…':'Sending…';
+    try{
+      let url='/chat',body=message;
+      if(files.length){url='/chat/upload';body=new FormData();body.append('message',message);files.forEach(file=>body.append('files',file))}
+      const response=await fetch(url,{method:'POST',body});const result=await response.json();
+      if(!response.ok||!result.ok)throw Error(result.error||'Message not sent');
+      if(cin.value.trim()===message)cin.value='';files=[];sending=false;queueFiles([]);q('chat-status').textContent='';await refresh();loadDisk();refreshDashboard();
+    }catch(error){q('chat-status').textContent=error.message+'. Your message and attachments are still here. Try again.'}
+    finally{sending=false;csend.disabled=false;q('chat-attach').disabled=false;cin.focus()}
+  }
   csend.addEventListener('click',send);
-  cin.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();send()}});
+  cin.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
   setInterval(refresh,2000);refresh();
 })();

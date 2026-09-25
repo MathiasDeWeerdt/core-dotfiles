@@ -51,13 +51,17 @@ with open(serve_path) as f:
 
 def load_asset(rel_path):
     with open(src_root + '/' + rel_path) as f:
-        return f.read().rstrip('\n')
+        asset = f.read().rstrip('\n')
+    if rel_path == 'assets/web/me.html':
+        with open(src_root + '/assets/web/upload.css') as f:
+            asset = asset.replace('@@CSS@@', f.read())
+    return asset
 
 # Resolve @@INJECT:assets/web/upload.html@@ — this one needs CSS+JS first
 import subprocess
 html_resolved = subprocess.check_output(
     ['python3', '-c', '''
-import sys
+import sys, os
 html_path, css_path, js_path, fp_path, logo_path = sys.argv[1:6]
 with open(html_path) as f: html = f.read()
 with open(css_path)  as f: css  = f.read()
@@ -68,6 +72,10 @@ html = html.replace("<style>@@CSS@@</style>", "<style>" + css + "</style>")
 html = html.replace("<script>@@JS@@</script>", "<script>" + js  + "</script>")
 html = html.replace("<script>@@FPJS@@</script>", "<script>" + fp  + "</script>")
 html = html.replace("@@LOGO@@", logo)
+for marker, asset in (("@@TERM_JS@@", "vendor/xterm.js"), ("@@FIT_JS@@", "vendor/addon-fit.js"),
+                      ("@@TERM_CSS@@", "vendor/xterm.css"), ("@@CONSOLE_JS@@", "console.js")):
+    with open(os.path.join(os.path.dirname(html_path), asset)) as f:
+        html = html.replace(marker, f.read())
 print(html, end="")
 ''',
     src_root + '/assets/web/upload.html',

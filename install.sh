@@ -259,8 +259,20 @@ PACMAN_PKGS=(
     nautilus-python
 )
 
+# --noconfirm keeps the default "No" for package conflicts.
+if pacman -Q gnu-netcat &>/dev/null; then
+    info "Replacing gnu-netcat with openbsd-netcat..."
+    if ! run "Remove conflicting gnu-netcat" sudo pacman -R --noconfirm gnu-netcat; then
+        err "Could not remove gnu-netcat; package installation stopped."
+        exit 1
+    fi
+fi
+
 info "Installing ${#PACMAN_PKGS[@]} packages..."
-sudo pacman -Syu --needed --noconfirm "${PACMAN_PKGS[@]}"
+if ! run "Install official packages" sudo pacman -Syu --needed --noconfirm "${PACMAN_PKGS[@]}"; then
+    err "Official package installation failed."
+    exit 1
+fi
 log "Official packages installed"
 fi  # SKIP_PACKAGES
 
@@ -651,6 +663,11 @@ if [[ -f "$DOTFILES/expose/build.sh" ]]; then
   if bash "$DOTFILES/expose/build.sh" && [[ -f "$DOTFILES/expose/dist/expose" ]]; then
     cp "$DOTFILES/expose/dist/expose" "$DOTFILES/local-bin/.local/bin/expose"
     cp "$DOTFILES/expose/dist/expose-online" "$DOTFILES/local-bin/.local/bin/expose-online"
+    if command -v go &>/dev/null; then
+      run "Build and install browser console connectors" make -C "$DOTFILES/expose" install-console-clients || true
+    else
+      warn "Go is required to build optional browser console connectors"
+    fi
   else
     warn "expose build failed — deploying pre-staged binaries instead"
   fi

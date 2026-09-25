@@ -8,6 +8,7 @@ import json
 import mimetypes
 import os
 import re
+import runpy
 import signal
 import socket
 import socketserver
@@ -21,6 +22,7 @@ port = int(os.environ["EXPOSE_PORT"])
 bind_addr = os.environ.get("EXPOSE_BIND", "0.0.0.0")
 verbose = os.environ.get("EXPOSE_VERBOSE", "0") == "1"
 mode = os.environ.get("EXPOSE_MODE", "text")
+health_token = os.environ.get("EXPOSE_HEALTH_TOKEN", "")
 upload_dir = os.environ.get("EXPOSE_UPLOAD_DIR", "/tmp/expose-uploads")
 upload_html_path = os.environ.get("EXPOSE_UPLOAD_HTML", "")
 me_html_path = os.environ.get("EXPOSE_ME_HTML", "")
@@ -55,6 +57,9 @@ os.makedirs(upload_dir, exist_ok=True)
 req_counter = 0
 counter_lock = threading.Lock()
 _httpd = None
+console_enabled = os.environ.get('EXPOSE_CONSOLES') == '1'
+ConsoleService = runpy.run_path(os.environ['EXPOSE_CONSOLE_MODULE'])['ConsoleService']
+consoles = ConsoleService(console_enabled, os.environ.get('EXPOSE_CLIENT_DIR', ''))
 
 def rdns(ip):
     try:
@@ -80,7 +85,7 @@ def parse_ua(ua):
         if re.search(pat, ua): os_name += f" {arch}"; break
     return browser, os_name
 
-def parse_multipart(body, content_type):
+def parse_multipart(body, content_type, fields=None):
     saved = []
     message = email.parser.BytesParser(policy=email.policy.default).parsebytes(
         b"Content-Type: " + content_type.encode() + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
@@ -92,6 +97,8 @@ def parse_multipart(body, content_type):
             continue
         filename = part.get_filename()
         if not filename:
+            if fields is not None and part.get_param('name', header='content-disposition') == 'message':
+                fields['message'] = (part.get_payload(decode=True) or b'').decode('utf-8', errors='replace')[:16000]
             continue
         name = os.path.basename(filename).replace("..", "").lstrip(".")
         if not name:
@@ -153,16 +160,32 @@ def _read_chat():
             return msgs
     except: return []
 
-def _append_chat(msg):
+def attachment_info(name):
+    if not isinstance(name, str) or name != os.path.basename(name):
+        raise ValueError('Invalid filename')
+    path = os.path.join(upload_dir, name)
+    if not os.path.isfile(path) or os.path.islink(path):
+        raise ValueError('File not found')
+    mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+    kind = ('image' if mime in ('image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif')
+            else 'audio' if mime in ('audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/x-wav')
+            else 'video' if mime in ('video/mp4', 'video/webm', 'video/ogg')
+            else 'text' if mime.startswith('text/') or mime in ('application/json', 'application/xml')
+            else 'file')
+    return {'name': name, 'size': os.path.getsize(path), 'mime': mime, 'kind': kind}
+
+def _append_chat(msg, attachments=None):
     """Thread-safe append of a message to the chat JSON file."""
-    if not chat_file or not msg: return False
+    if not chat_file or not (msg or attachments): return False
     try:
         os.makedirs(os.path.dirname(chat_file) or '.', exist_ok=True)
         with open(chat_file, 'r+') as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             try: msgs = json.load(f)
             except: msgs = []
-            msgs.append({'time': time.strftime('%H:%M:%S'), 'msg': msg, 'n': len(msgs) + 1})
+            number = max((item.get('n', 0) for item in msgs), default=0) + 1
+            msgs.append({'time': time.strftime('%H:%M:%S'), 'msg': msg, 'n': number,
+                         'files': attachments or []})
             if len(msgs) > 200: msgs = msgs[-200:]
             f.seek(0); f.truncate(); json.dump(msgs, f)
             fcntl.flock(f, fcntl.LOCK_UN)
@@ -174,7 +197,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Server", "expose")
-        for name, value in custom_headers:
+        protected = urllib.parse.urlsplit(self.path).path.startswith('/console/') or urllib.parse.urlsplit(self.path).path in ('/lin', '/mac', '/win')
+        for name, value in ([] if protected else custom_headers):
             self.send_header(name, value)
         super().end_headers()
 
@@ -201,7 +225,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return True
 
     def do_GET(self):
+        if consoles.handle(self):
+            return
         if not self._check_access():
+            return
+        if health_token and self.path.split('?', 1)[0] == '/.expose-health':
+            self._send(200, health_token, "text/plain", (("Cache-Control", "no-store"),))
             return
         if redirect_url:
             self._send(302, b"", "text/plain", (("Location", redirect_url),))
@@ -222,7 +251,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
-        elif self.path in ('/', '/upload'):
+        elif ppath in ('/', '/upload'):
             try:
                 with open(upload_html_path, "rb") as f: body = f.read()
             except Exception: body = b"page not found"
@@ -282,18 +311,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
-        elif self.path.startswith("/upload/files/"):
-            name = urllib.parse.unquote(self.path[len("/upload/files/"):])
+        elif self.path.startswith(("/upload/files/", "/upload/preview/")):
+            preview = self.path.startswith('/upload/preview/')
+            prefix = '/upload/preview/' if preview else '/upload/files/'
+            name = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path[len(prefix):])
             name = os.path.basename(name)
             fp = os.path.join(upload_dir, name)
-            if os.path.isfile(fp):
+            if os.path.isfile(fp) and not os.path.islink(fp):
+                info = attachment_info(name)
                 mime = mimetypes.guess_type(fp)[0] or "application/octet-stream"
                 sz = os.path.getsize(fp)
+                if preview:
+                    if info['kind'] == 'file':
+                        self.send_error(415, 'Preview not available'); return
+                    if info['kind'] == 'text':
+                        with open(fp, 'rb') as f:
+                            data = f.read(65536).decode('utf-8', errors='replace')
+                        self._send(200, data, 'text/plain; charset=utf-8', (
+                            ('X-Content-Type-Options', 'nosniff'),
+                            ('Content-Security-Policy', "sandbox; default-src 'none'")))
+                        return
                 self.send_response(200)
                 self.send_header("Content-Type", mime)
                 self.send_header("Content-Length", str(sz))
+                self.send_header('X-Content-Type-Options', 'nosniff')
                 encoded_name = urllib.parse.quote(name, safe="")
-                self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{encoded_name}")
+                disposition = 'inline' if preview else 'attachment'
+                self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{encoded_name}")
                 self.end_headers()
                 with open(fp, "rb") as f:
                     while True:
@@ -387,8 +431,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return None
 
     def do_POST(self):
+        if consoles.handle(self):
+            return
         if not self._check_access():
             return
+        if self.path == '/chat/upload':
+            try:
+                size = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                size = -1
+            if not 0 < size <= 50 * 1024 * 1024:
+                self.close_connection = True
+                self._send(413, '{"error":"Chat uploads are limited to 50 MB per message"}')
+                return
         body = self._read_body()
         self.request_body = body[:body_log_limit]
         if catch_requests and body:
@@ -416,6 +471,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
+        elif self.path == '/chat/upload':
+            fields = {}
+            saved = parse_multipart(body, self.headers.get('Content-Type', ''), fields)
+            attachments = [attachment_info(name) for name in saved]
+            if _append_chat(fields.get('message', '').strip(), attachments):
+                self._send(200, json.dumps({'ok': True, 'files': attachments}))
+            else:
+                self._send(400, '{"error":"No message or attachments received"}')
         elif self.path == '/chat':
             if body:
                 message = body.decode('utf-8', errors='replace').strip()
@@ -458,6 +521,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(405)
 
     def log_message(self, fmt, *args):
+        if urllib.parse.urlsplit(self.path).path.startswith('/console/') or urllib.parse.urlsplit(self.path).path in ('/lin', '/mac', '/win'):
+            return
+        if health_token and self.path.split('?', 1)[0] == '/.expose-health':
+            return
         global req_counter
         with counter_lock:
             req_counter += 1

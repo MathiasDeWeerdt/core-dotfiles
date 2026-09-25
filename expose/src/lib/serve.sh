@@ -68,6 +68,11 @@ PAYLOAD_SRC
 }
 
 # ── Common exports ────────────────────────────────────────────────────────────
+_CONSOLE_PY=$(_mktmp /tmp/expose-console.XXXXXX)
+cat > "$_CONSOLE_PY" <<'CONSOLEPY'
+@@INJECT:assets/consoles.py@@
+CONSOLEPY
+
 _export_common() {
   export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND" EXPOSE_VERBOSE="$VERBOSE"
   export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
@@ -83,6 +88,8 @@ _export_common() {
   export EXPOSE_FP_JS="$_FP_JS"
   export EXPOSE_ME_HTML="$_ME_HTML"
   export EXPOSE_LOGO_SVG="$_LOGO_SVG"
+  export EXPOSE_CONSOLES="$CONSOLES" EXPOSE_CONSOLE_MODULE="$_CONSOLE_PY"
+  export EXPOSE_CLIENT_DIR="${EXPOSE_CLIENT_DIR:-$HOME/.local/share/expose/clients}"
 }
 
 # ── Unified HTTP backend ──────────────────────────────────────────────────────
