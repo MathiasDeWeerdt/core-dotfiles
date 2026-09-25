@@ -1,3 +1,5 @@
 [user]
 	email = mathias.de.weerdt@gmail.com
 	name = Mathias De Weerdt
+[safe]
+	directory = /home/mathias/Burpsuite-Professional
