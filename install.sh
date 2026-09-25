@@ -642,12 +642,18 @@ section "11/11 — Dotfiles (stow)"
 
 cd "$DOTFILES"
 
-# Build expose before stowing
+# ── Build expose before stowing ──────────────────────────────────────
+# The binaries staged in local-bin/.local/bin are committed as fallback;
+# a fresh build replaces them with the latest source. If the build fails
+# we keep the staged versions so expose is still deployable.
 if [[ -f "$DOTFILES/expose/build.sh" ]]; then
   info "Building expose..."
-  bash "$DOTFILES/expose/build.sh"
-  cp "$DOTFILES/expose/dist/expose" "$DOTFILES/local-bin/.local/bin/expose"
-  cp "$DOTFILES/expose/dist/expose-online" "$DOTFILES/local-bin/.local/bin/expose-online"
+  if bash "$DOTFILES/expose/build.sh" && [[ -f "$DOTFILES/expose/dist/expose" ]]; then
+    cp "$DOTFILES/expose/dist/expose" "$DOTFILES/local-bin/.local/bin/expose"
+    cp "$DOTFILES/expose/dist/expose-online" "$DOTFILES/local-bin/.local/bin/expose-online"
+  else
+    warn "expose build failed — deploying pre-staged binaries instead"
+  fi
 fi
 
 # Ensure local-bin executables are executable
@@ -655,11 +661,48 @@ chmod +x "$DOTFILES/local-bin/.local/bin/"* 2>/dev/null || true
 
 STOW_PACKAGES=(zsh p10k foot tmux git fonts local-bin flameshot memory)
 
-info "Stowing dotfiles..."
-stow -d "$DOTFILES" -t "$HOME" -R --adopt "${STOW_PACKAGES[@]}" 2>/dev/null || \
-    stow -d "$DOTFILES" -t "$HOME" --adopt "${STOW_PACKAGES[@]}"
+if command -v stow &>/dev/null; then
+  info "Stowing dotfiles..."
+  stow -d "$DOTFILES" -t "$HOME" -R --adopt "${STOW_PACKAGES[@]}" 2>/dev/null || \
+      stow -d "$DOTFILES" -t "$HOME" --adopt "${STOW_PACKAGES[@]}"
+  log "Dotfiles deployed"
+else
+  warn "stow not found — dotfiles not symlinked; expose tools still deployed directly"
+fi
 
-log "Dotfiles deployed"
+# ── Guarantee expose & expose-online are installed and usable ────────
+# stow's errors are suppressed above, so don't trust it: verify both
+# tools landed in ~/.local/bin, fall back to a direct copy if not, and
+# sanity-check the result before reporting success.
+BIN_DIR="$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
+for _tool in expose expose-online; do
+  _staged="$DOTFILES/local-bin/.local/bin/$_tool"
+  _target="$BIN_DIR/$_tool"
+  if [[ ! -x "$_target" ]]; then
+    warn "$_tool missing after stow — installing directly to $BIN_DIR"
+    if [[ -f "$_staged" ]]; then
+      cp -f "$_staged" "$_target" && chmod +x "$_target" || _ERRORS+=("$_tool: direct install failed")
+    else
+      _ERRORS+=("$_tool: no staged binary found")
+      continue
+    fi
+  fi
+  if bash -n "$_target" 2>/dev/null; then
+    log "$_tool ready: $BIN_DIR/$_tool"
+  else
+    _ERRORS+=("$_tool: syntax check failed")
+    warn "$_tool present but fails bash syntax check"
+  fi
+done
+if [[ -x "$BIN_DIR/expose" ]] && ! "$BIN_DIR/expose" --help >/dev/null 2>&1; then
+  warn "expose --help sanity check failed"
+fi
+
+# ~/.local/bin must be on PATH for the tools to be usable in new shells
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+  warn "$BIN_DIR is not on PATH — expose tools may not resolve in this shell"
+fi
 
 # ── GNOME settings (run separately if D-Bus is unresponsive) ─────────
 if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]; then

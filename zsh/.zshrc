@@ -5,13 +5,13 @@ if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
-# export PATH="$PATH:/home/mathias/.local/bin"
+# export PATH="$PATH:$HOME/.local/bin"
 source /usr/share/cachyos-zsh-config/cachyos-config.zsh
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
-export PATH="$PATH:/home/mathias/.local/bin/"
+export PATH="$PATH:$HOME/.local/bin/"
 
 source /usr/share/nvm/init-nvm.sh
 eval "$(zoxide init zsh)"
