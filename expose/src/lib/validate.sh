@@ -4,6 +4,10 @@
   || die "Invalid port: $PORT (must be 1–65535)"
 [[ "$MODE" == "file" && ! -f "$TARGET" ]] && die "File not found: $TARGET"
 command -v python3 &>/dev/null || die "python3 is required"
+if [[ $CONSOLES -eq 1 ]]; then
+  python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
+    || die "Browser consoles require Python 3.11 or newer"
+fi
 [[ -n "$RESP_CODE" ]] && { [[ "$RESP_CODE" =~ ^[0-9]+$ ]] && (( RESP_CODE >= 100 && RESP_CODE <= 599 )) \
   || die "Invalid status code: $RESP_CODE (must be 100–599)"; }
 if (( ${#RESP_HEADERS[@]} )); then

@@ -3,216 +3,106 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>expose</title>
+<title>Overview · expose</title>
 <script>try{var __t=localStorage.getItem('expose-theme');if(__t&&__t!=='auto')document.documentElement.dataset.theme=__t}catch(_){}</script>
 <style>@@CSS@@</style>
+<style>@@TERM_CSS@@</style>
 </head>
 <body>
-
+<a class="skip-link" href="#workspace">Skip to content</a>
 <header class="top">
-  <button class="iconbtn hamburger" id="nav-toggle" aria-label="Open navigation">
-    <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-  </button>
-  <a class="brand" href="#overview" aria-label="Expose overview">
-    <span class="logo" aria-hidden="true">@@LOGO@@</span>
-    <span class="word">expose</span>
-  </a>
-  <span class="status-chip"><i></i>Running</span>
-  <button class="url-chip" id="copy-url" title="Copy session URL">
-    <span class="mono" id="top-url"></span>
-    <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-  </button>
+  <a class="brand" href="#overview" aria-label="Expose overview"><span class="logo" aria-hidden="true">@@LOGO@@</span><span class="word">expose</span></a>
+  <span class="connection" id="connection" role="status">Connecting…</span>
   <div class="top-spacer"></div>
-  <button class="btn ghost sm" id="chat-toggle" title="Toggle chat">
-    <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8c-1.4 0-2.8-.4-3.9-1L3 20l1.1-5.1A8 8 0 1 1 21 12z"/></svg>
-    <span>Chat</span><i class="dot" id="chat-dot" hidden></i>
-  </button>
-  <button class="btn ghost sm" id="theme-toggle" title="Theme: auto (system)">
-    <svg viewBox="0 0 24 24" id="theme-ic"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
-  </button>
+  <button class="btn ghost sm" id="copy-url" title="Copy session URL"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Copy link</button>
+  <button class="iconbtn" id="theme-toggle" aria-label="Change theme" title="Theme: auto (system)"><svg viewBox="0 0 24 24" id="theme-ic"></svg></button>
 </header>
-
+<nav class="top-nav" aria-label="Main navigation">
+  <a class="nav-item active" href="#overview" data-section="overview" aria-current="page">Overview</a>
+  <a class="nav-item" href="#files" data-section="files">Files</a>
+  <a class="nav-item" href="#chat" data-section="chat">Chat <span class="dot" id="chat-dot" hidden aria-label="New messages"></span></a>
+  <a class="nav-item" href="#traffic" data-section="traffic">Traffic</a>
+  <a class="nav-item" href="#commands" data-section="commands">Commands</a>
+  <a class="nav-item" href="#shells" data-section="shells">Consoles</a>
+  <a class="nav-item" href="/me">Client info</a>
+</nav>
 <div class="app-shell">
-  <aside class="sidebar" id="sidebar">
-    <nav>
-      <a class="nav-item active" href="#overview" data-section="overview"><span>⌗</span>Overview</a>
-      <a class="nav-item" href="#files" data-section="files"><span>□</span>Files</a>
-      <a class="nav-item" href="#commands" data-section="commands"><span>›_</span>Commands</a>
-      <a class="nav-item" href="#shells" data-section="shells"><span>↗</span>Reverse shells</a>
-      <a class="nav-item" href="#chat" data-section="chat"><span>◇</span>Chat</a>
-      <a class="nav-item" href="#traffic" data-section="traffic"><span>⌁</span>Traffic</a>
-      <a class="nav-item" href="/me"><span>◎</span>Client info</a>
-    </nav>
-    <div class="sidebar-foot">
-      <span><i class="side-dot"></i>HTTP session live</span>
-      <code>v2.0</code>
-    </div>
-  </aside>
-  <div class="nav-backdrop" id="nav-backdrop" hidden></div>
-
-  <main class="workspace">
-    <section class="view-section overview-section" id="overview">
-      <div class="page-head">
-        <div><h1>Overview</h1><p>Live session status and recent activity</p></div>
-        <span class="badge" id="mode-badge">&hellip;</span>
+  <main class="workspace" id="workspace" tabindex="-1">
+    <section class="view-section" id="overview">
+      <div class="page-head"><div><h1>Overview</h1><p>Your shared content and session activity.</p></div><a class="btn primary" href="#files">Send files</a></div>
+      <div class="session-address"><span id="overview-url" class="mono"></span><span class="badge" id="mode-badge">Loading…</span></div>
+      <section class="shared-section" aria-label="Shared content"><div id="hero"><p class="empty-line">Loading shared content…</p></div></section>
+      <div class="stat-strip" aria-label="Session statistics">
+        <div><strong id="overview-visitors">0</strong><span>Visitors</span></div>
+        <div><strong id="overview-requests">0</strong><span>Requests</span></div>
+        <a href="#files"><strong id="overview-files">0</strong><span>Received files</span></a>
       </div>
-
-      <div class="session-strip">
-        <span class="session-state"><i></i>Running</span>
-        <span class="session-mode">Serving <strong id="overview-mode">—</strong></span>
-        <span class="session-divider"></span>
-        <span class="session-url"><small>URL</small><code id="overview-url"></code></span>
-        <button class="iconbtn" id="overview-copy" title="Copy session URL">
-          <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-        </button>
-        <span class="session-spacer"></span>
-        <span class="session-uptime">Uptime <code id="uptime">00:00:00</code></span>
-      </div>
-
-      <div class="stat-strip">
-        <div><small>Unique visitors</small><strong id="overview-visitors">0</strong></div>
-        <div><small>Total requests</small><strong id="overview-requests">0</strong></div>
-        <div><small>Received files</small><strong id="overview-files">0</strong></div>
-        <div><small>Stored data</small><strong id="overview-bytes">0 B</strong></div>
-        <div><small>Chat messages</small><strong id="overview-chat">0</strong></div>
-      </div>
-
-      <div class="overview-grid">
-        <div class="overview-stack">
-          <section class="panel" id="shared-panel">
-            <div class="panel-head"><h2>Shared content</h2><a href="#shared-content">Open</a></div>
-            <div class="panel-body" id="overview-shared"><span class="empty-line">Loading session details…</span></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><h2>Received files</h2><a href="#files">View all</a></div>
-            <div class="panel-body" id="overview-file-list"><span class="empty-line">No files received yet</span></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><h2>Latest chat</h2><a href="#chat">Open chat</a></div>
-            <div class="panel-body" id="overview-chat-list"><span class="empty-line">No messages yet</span></div>
-          </section>
-        </div>
-        <div class="overview-stack">
-          <section class="panel">
-            <div class="panel-head"><h2>Visitors</h2><span id="overview-visitor-label">0 observed</span></div>
-            <div class="panel-body" id="overview-visitor-list"><span class="empty-line">Waiting for visitors…</span></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><h2>Recent traffic</h2><a href="#traffic">View all</a></div>
-            <div class="panel-body" id="overview-traffic-list"><span class="empty-line">Waiting for requests…</span></div>
-          </section>
-        </div>
-      </div>
+      <section class="activity-section"><div class="section-head"><h2>Recent activity</h2><a href="#traffic">View traffic <span aria-hidden="true">→</span></a></div><div id="overview-traffic-list"><p class="empty-line">Requests will appear here when someone connects.</p></div></section>
     </section>
-
-    <section class="view-section" id="shared-content">
-      <div class="page-head"><div><h1>Shared content</h1><p>The text, file, directory, redirect, or payload served by this session</p></div></div>
-      <section class="card hero" id="hero" hidden></section>
+    <section class="view-section" id="files" hidden>
+      <div class="page-head"><div><h1>Files</h1><p>Send files to the host or download what’s been shared.</p></div></div>
+      <section id="upload-card">
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose files to upload">
+          <svg class="drop-ic" viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+          <p class="drop-t">Drop files here <span>or choose files</span></p><p class="drop-s">Select multiple files, then send them together.</p>
+          <input type="file" id="fi" multiple hidden>
+        </div>
+        <div class="queue" id="queue"></div>
+        <div class="up-acts" id="up-acts" hidden><button class="btn primary" id="send">Send files <span id="send-n"></span></button><button class="btn ghost" id="clr">Clear selection</button></div>
+        <div class="prog" id="prog" hidden><i id="bar"></i></div><div class="up-msg" id="msg" role="status"></div>
+      </section>
+      <section class="received-section" id="recv-card"><div class="section-head"><h2>Received files</h2><span class="hint" id="recv-n"></span></div><div class="disk" id="disk"></div></section>
     </section>
-
-    <section class="view-section" id="files">
-      <div class="page-head"><div><h1>Files</h1><p>Upload to the host and manage received files</p></div></div>
-      <div class="files-grid">
-        <section class="card" id="upload-card">
-          <div class="card-h"><h2>Send files</h2><span class="hint">files land in ~/Downloads/expose</span></div>
-          <div class="drop" id="drop" tabindex="0" role="button" aria-label="Drop files or browse">
-            <svg class="drop-ic" viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-            <p class="drop-t">Drag &amp; drop files here, or <button class="linklike" id="browse" type="button">browse</button></p>
-            <p class="drop-s">multiple files welcome</p>
-            <input type="file" id="fi" multiple hidden>
-          </div>
-          <div class="queue" id="queue"></div>
-          <div class="up-acts" id="up-acts" hidden>
-            <button class="btn primary" id="send"><svg viewBox="0 0 24 24"><path d="M12 19V5m0 0l-5 5m5-5l5 5"/></svg>Send <span id="send-n"></span></button>
-            <button class="btn ghost" id="clr">Clear</button>
-          </div>
-          <div class="prog" id="prog" hidden><i id="bar"></i></div>
-          <div class="up-msg" id="msg" role="status"></div>
+    <section class="view-section" id="commands" hidden>
+      <div class="page-head"><div><h1>Commands</h1><p>Transfer files and send messages from your terminal.</p></div></div>
+      <div class="os-pills" id="os-pills" aria-label="Operating system"><button class="os-pill active" data-os="linux" aria-pressed="true">Linux</button><button class="os-pill" data-os="macos" aria-pressed="false">macOS</button><button class="os-pill" data-os="windows" aria-pressed="false">Windows</button></div>
+      <div id="cmds"></div>
+    </section>
+    <section class="view-section" id="shells" hidden>
+      <div class="page-head"><div><h1>Consoles</h1><p>Connect a test machine and use its terminal here.</p></div><span class="badge" id="console-status">Checking…</span></div>
+      <p id="console-help" class="hint">Checking console availability…</p>
+      <div id="console-controls" hidden>
+        <section class="console-connect"><div class="section-head"><h2>Connect a machine</h2><div><button class="btn ghost sm" id="console-new">New connection link</button></div></div>
+          <div class="os-pills" id="console-platforms" aria-label="Client operating system"><button class="os-pill active" data-platform="win" aria-pressed="true">Windows</button><button class="os-pill" data-platform="mac" aria-pressed="false">macOS</button><button class="os-pill" data-platform="lin" aria-pressed="false">Linux</button></div>
+          <p class="hint" id="console-invite-info">Create a single-use connection link, then copy the command to the other machine.</p>
+          <div class="connect-command"><code id="console-command"></code><button class="btn ghost sm" id="console-copy" disabled>Copy command</button></div>
+          <p class="hint">Uses this page’s address. The other machine must be able to reach it. Runs as your current user; no service is installed.</p>
         </section>
-        <section class="card" id="recv-card">
-          <div class="card-h"><h2>Received</h2><span class="hint" id="recv-n"></span></div>
-          <div class="disk" id="disk"></div>
-        </section>
+        <div class="terminal-tab-bar"><a class="btn ghost sm" href="/#shells">Back to consoles</a><strong id="terminal-tab-title">Terminal</strong><span class="hint" id="terminal-tab-status">Connecting…</span></div>
+        <section class="console-workspace"><div class="section-head"><h2>Connected machines</h2><div class="console-actions"><button class="btn ghost sm" id="console-popout" disabled>Open terminal in new tab</button><button class="btn ghost sm" id="console-disconnect" disabled>Disconnect selected</button><button class="btn ghost sm" id="console-remove" title="Disconnect this machine and delete its session and terminal history" disabled>Remove selected</button></div></div><div class="console-tabs" id="console-sessions" aria-label="Connected machines"></div><p class="empty-line" id="console-empty">Waiting for a connection. Run the command above on your test machine.</p><div class="browser-terminal" id="browser-terminal" hidden></div><p class="hint" id="console-terminal-info">Ctrl+C interrupts the remote command. Type exit to end the shell.</p></section>
       </div>
+      <p id="console-error" class="console-error" role="status"></p>
+      <details class="legacy-shells"><summary>Raw TCP connection commands</summary><p class="hint">For direct network tests. These require a separate TCP listener and reachable port.</p>
+      <div class="os-pills" id="rs-pills" aria-label="Operating system"><button class="os-pill active" data-os="linux" aria-pressed="true">Linux</button><button class="os-pill" data-os="macos" aria-pressed="false">macOS</button><button class="os-pill" data-os="windows" aria-pressed="false">Windows</button></div>
+      <div class="rs-cfg"><label>Listener host <input class="rs-in" id="rs-host" type="text" autocomplete="off" spellcheck="false"></label><label>Port <input class="rs-in" id="rs-port" type="text" inputmode="numeric" autocomplete="off" spellcheck="false"></label></div>
+      <div id="rcmds"></div>
+      </details>
     </section>
-
-    <section class="view-section" id="commands">
-      <div class="page-head"><div><h1>Commands</h1><p>Copy-ready transfer and interaction commands by operating system</p></div></div>
-      <section class="card collapsed" id="cli-card">
-        <div class="card-h cli-h" id="cli-h">
-          <h2>Send from the command line</h2>
-          <span class="hint">upload, chat, and download without a browser</span>
-          <div class="os-pills" id="os-pills">
-            <button class="os-pill active" data-os="linux">Linux</button>
-            <button class="os-pill" data-os="macos">macOS</button>
-            <button class="os-pill" data-os="windows">Windows</button>
-          </div>
-          <button class="iconbtn" id="cli-chev" aria-label="Toggle commands"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
-        </div>
-        <div id="cmds"></div>
-      </section>
-    </section>
-
-    <section class="view-section" id="shells">
-      <div class="page-head"><div><h1>Reverse shells</h1><p>Generate commands for explicitly authorized testing</p></div></div>
-      <section class="card collapsed" id="rs-card">
-        <div class="card-h rs-h" id="rs-h">
-          <h2>Reverse shells</h2>
-          <span class="hint">LHOST and LPORT are substituted into every command</span>
-          <div class="os-pills" id="rs-pills">
-            <button class="os-pill active" data-os="linux">Linux</button>
-            <button class="os-pill" data-os="macos">macOS</button>
-            <button class="os-pill" data-os="windows">Windows</button>
-          </div>
-          <button class="iconbtn" id="rs-chev" aria-label="Toggle reverse shells"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
-        </div>
-        <div id="rs-body">
-          <div class="rs-cfg">
-            <label>LHOST <input class="rs-in" id="rs-host" type="text" autocomplete="off" spellcheck="false"></label>
-            <label>LPORT <input class="rs-in" id="rs-port" type="text" autocomplete="off" spellcheck="false"></label>
-            <span class="hint">substituted into every command</span>
-          </div>
-          <div id="rcmds"></div>
+    <section class="view-section" id="chat" hidden>
+      <div class="page-head"><div><h1>Chat</h1><p>A shared conversation for everyone in this session.</p></div></div>
+      <section class="chat-panel" id="chat-panel" aria-label="Session chat">
+        <div class="chat-body" id="chat-body" role="log" aria-label="Messages"><p class="empty-line" id="chat-empty">Share a message, drop a file, or paste an image.</p></div>
+        <div class="chat-compose">
+          <div id="chat-attachments" class="chat-attachments" aria-label="Selected attachments"></div>
+          <textarea id="chat-input" aria-label="Message" rows="2" placeholder="Write a message…" autocomplete="off"></textarea>
+          <div class="chat-compose-actions"><input type="file" id="chat-files" multiple hidden><button class="btn ghost sm" id="chat-attach">Attach files</button><span class="hint">Enter to send · Shift+Enter for a new line</span><button class="btn primary" id="chat-send">Send</button></div>
+          <p class="hint chat-status" id="chat-status" role="status"></p>
         </div>
       </section>
     </section>
-
-    <section class="view-section" id="chat">
-      <div class="page-head"><div><h1>Chat</h1><p>Messages shared by everyone connected to this session</p></div></div>
-      <section class="chat-panel">
-        <div class="chat-h"><h3>Session chat</h3><span class="hint">everyone on this page sees this</span><button class="iconbtn" id="chat-close" aria-label="Hide chat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
-        <div class="chat-body" id="chat-body"></div>
-        <div class="chat-bar"><input id="chat-input" type="text" placeholder="Message…" autocomplete="off" spellcheck="false"><button class="btn primary sm" id="chat-send" aria-label="Send message"><svg viewBox="0 0 24 24"><path d="M5 12h14m0 0l-6-6m6 6l-6 6"/></svg>Send</button></div>
-      </section>
-    </section>
-
-    <section class="view-section" id="traffic">
-      <div class="page-head"><div><h1>Traffic</h1><p>Live request log with filtering, request details, and export</p></div></div>
+    <section class="view-section" id="traffic" hidden>
+      <div class="page-head"><div><h1>Traffic</h1><p>Inspect incoming requests. Select a row for details.</p></div></div>
       <section class="log" id="log">
-        <div class="log-bar" id="log-bar" role="button" tabindex="0" aria-label="Toggle request log">
-          <span class="live" id="live" title="Polling for requests"></span><h3>Requests</h3><span class="count" id="log-badge"></span>
-          <input class="log-search" id="log-search" type="text" placeholder="Filter…" autocomplete="off" spellcheck="false">
-          <div class="log-acts">
-            <button class="btn ghost sm" id="log-sound" title="Sound on new request"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M10.3 21a2 2 0 0 0 3.4 0"/></svg></button>
-            <button class="btn ghost sm" id="log-pause">pause</button>
-            <button class="btn ghost sm" id="log-export">export</button>
-            <button class="btn ghost sm" id="log-clear">clear</button>
-            <button class="iconbtn" id="log-chev" aria-label="Collapse"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
-          </div>
-        </div>
-        <div class="log-body" id="log-body"><div class="log-empty" id="log-empty">waiting for requests…</div></div>
+        <div class="log-bar" id="log-bar"><span class="live" id="live" title="Polling for requests"></span><button class="count" id="log-badge" aria-label="Request statistics"></button><input class="log-search" id="log-search" aria-label="Filter requests" type="search" placeholder="Filter requests…" autocomplete="off" spellcheck="false"><div class="log-acts"><button class="iconbtn" id="log-sound" aria-label="Sound on new request" aria-pressed="false" title="Sound on new request"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8M10 21h4"/></svg></button><button class="btn ghost sm" id="log-pause">Pause</button><button class="btn ghost sm" id="log-export">Export</button><button class="btn ghost sm" id="log-clear">Clear</button></div></div>
+        <div class="log-columns" aria-hidden="true"><span>#</span><span>Time</span><span>Method</span><span>Path</span><span>Status</span><span>Client</span><span>Agent</span></div>
+        <div class="log-body" id="log-body"><div class="log-empty" id="log-empty">Waiting for requests…</div></div>
       </section>
     </section>
-
-    <footer class="foot"><span>served by <b>expose</b></span><span class="fsep">&middot;</span><span>requests persist in <code>~/.expose/requests.json</code></span><span class="fsep">&middot;</span><a href="/me">client info</a></footer>
   </main>
 </div>
-
 <div class="stats" id="stats" hidden></div>
-<div class="overlay" id="overlay" hidden><div class="ov-box"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg><p>Drop to upload</p></div></div>
+<div class="overlay" id="overlay" hidden><div class="ov-box"><p>Drop to add files</p></div></div>
 <div class="toast" id="toast" role="status"></div>
-
-<script>@@JS@@</script>
-<script>@@FPJS@@</script>
+<script>@@TERM_JS@@</script><script>@@FIT_JS@@</script><script>@@JS@@</script><script>@@CONSOLE_JS@@</script><script>@@FPJS@@</script>
 </body>
 </html>

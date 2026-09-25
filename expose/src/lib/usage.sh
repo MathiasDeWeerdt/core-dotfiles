@@ -15,6 +15,7 @@ ${B}OPTIONS${R}
     --bind ${CYN}<addr>${R}        Bind to specific interface  (default: 0.0.0.0)
     -m, --more          Verbose logging (all headers, reverse DNS, parsed UA)
     --catch             Request catcher (dump full headers + body)
+    --console           Enable browser terminals (automatic with expose-online)
     --code ${CYN}<N>${R}           HTTP status code for responses (default: 200)
     --header ${CYN}"K: V"${R}     Add response header (repeatable)
     --cors              Add CORS headers (Access-Control-Allow-Origin: *)

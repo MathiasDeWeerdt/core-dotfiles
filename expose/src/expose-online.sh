@@ -2,10 +2,14 @@
 # expose-online — expose a local server through singlecore.dev
 set -euo pipefail
 
+# Prefer the matching build beside this wrapper over older copies on PATH.
+EXPOSE_BIN="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/expose"
+[[ -x "$EXPOSE_BIN" ]] || EXPOSE_BIN=expose
+
 # Local utility commands do not need a public tunnel and must keep control of
 # the terminal.
 if [[ "${1:-}" == "db" ]]; then
-  exec expose "$@"
+  exec "$EXPOSE_BIN" "$@"
 fi
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -14,6 +18,8 @@ TUNNEL_PORT="${TUNNEL_PORT:-47865}"
 TUNNEL_USER="${TUNNEL_USER:-root}"
 TUNNEL_RPORT="${TUNNEL_RPORT:-9090}"
 TUNNEL_LPORT="${TUNNEL_LPORT:-9090}"
+EXPOSE_HEALTH_TOKEN=$(cat /proc/sys/kernel/random/uuid)
+export EXPOSE_HEALTH_TOKEN
 
 GREEN=$'\033[0;32m'
 CYAN=$'\033[0;36m'
@@ -62,6 +68,28 @@ start_tunnel() {
   SSH_PID=$!
 }
 
+check_tunnel() {
+  local response attempt
+  printf '  %-7s %sChecking public connection…%s\n' "Status" "$DIM" "$NC" >&2
+  for attempt in {1..5}; do
+    [[ $_STOPPED -eq 1 ]] && return
+    if ! kill -0 "$SSH_PID" 2>/dev/null; then
+      printf '  %-7s %sSSH tunnel disconnected%s\n' "Status" "$YLW" "$NC" >&2
+      return
+    fi
+    if response=$(curl --fail --silent --connect-timeout 2 --max-time 3 \
+      -H 'Cache-Control: no-cache' \
+      "https://singlecore.dev/.expose-health?session=$EXPOSE_HEALTH_TOKEN") \
+      && [[ "$response" == "$EXPOSE_HEALTH_TOKEN" ]]; then
+      printf '  %-7s %sConnected — public URL verified%s\n' "Status" "$GREEN" "$NC" >&2
+      return
+    fi
+    [[ $attempt -eq 5 ]] || sleep 1
+  done
+  printf '  %-7s %sPublic URL not verified; check DNS, proxy, or SSH tunnel%s\n' \
+    "Status" "$YLW" "$NC" >&2
+}
+
 local_ip() {
   local address
   address=$(ip route get 1 2>/dev/null \
@@ -87,7 +115,7 @@ if [[ -n "$_local_pid" ]]; then
 fi
 
 # ── Start expose ──────────────────────────────────────────────────────────────
-EXPOSE_NO_BANNER=1 expose --bind 0.0.0.0 -p "$TUNNEL_LPORT" "$@" &
+EXPOSE_CONSOLES=1 EXPOSE_NO_BANNER=1 "$EXPOSE_BIN" --bind 0.0.0.0 -p "$TUNNEL_LPORT" "$@" &
 EXPOSE_PID=$!
 sleep 0.5
 
@@ -107,12 +135,12 @@ if ! kill -0 "$SSH_PID" 2>/dev/null; then
   exit 1
 fi
 
-printf '\n%s%sExpose online%s\n' "$BOLD" "$GREEN" "$NC" >&2
+printf '\n  %s%sexpose online%s\n\n' "$BOLD" "$GREEN" "$NC" >&2
 printf '  %-7s %shttps://singlecore.dev%s\n' "Public" "$CYAN" "$NC" >&2
 printf '  %-7s http://127.0.0.1:%s\n' "Local" "$TUNNEL_LPORT" >&2
 printf '  %-7s http://%s:%s\n' "Network" "$(local_ip)" "$TUNNEL_LPORT" >&2
-printf '  %-7s %s:%s %s(via SSH :%s)%s\n\n' \
-  "Tunnel" "$TUNNEL_HOST" "$TUNNEL_RPORT" "$DIM" "$TUNNEL_PORT" "$NC" >&2
+check_tunnel
+printf '\n  %sCtrl+C to stop%s\n\n' "$DIM" "$NC" >&2
 
 while [[ $_STOPPED -eq 0 ]]; do
   wait "$SSH_PID" 2>/dev/null || true
@@ -127,4 +155,5 @@ while [[ $_STOPPED -eq 0 ]]; do
   sleep 3
   free_remote_port
   start_tunnel
+  check_tunnel
 done
