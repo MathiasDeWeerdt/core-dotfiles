@@ -18,6 +18,15 @@ TUNNEL_PORT="${TUNNEL_PORT:-47865}"
 TUNNEL_USER="${TUNNEL_USER:-root}"
 TUNNEL_RPORT="${TUNNEL_RPORT:-9090}"
 TUNNEL_LPORT="${TUNNEL_LPORT:-9090}"
+# Bind the reverse port to loopback on the jump host; nginx publishes it.
+TUNNEL_RBIND="${TUNNEL_RBIND:-127.0.0.1}"
+# SOCKS5 listener for routing local tools through the connected machine.
+PROXY_BIND="${EXPOSE_PROXY:-${PROXY_BIND:-127.0.0.1:${PROXY_PORT:-1080}}}"
+[[ "$PROXY_BIND" == "off" || "$PROXY_BIND" == "0" ]] && PROXY_BIND=""
+export EXPOSE_PROXY="$PROXY_BIND"
+# Public HTTP surface requires a password; override with EXPOSE_AUTH_PASSWORD.
+EXPOSE_AUTH_PASSWORD="${EXPOSE_AUTH_PASSWORD-Sharedpassword778#}"
+export EXPOSE_AUTH_PASSWORD
 EXPOSE_HEALTH_TOKEN=$(cat /proc/sys/kernel/random/uuid)
 export EXPOSE_HEALTH_TOKEN
 
@@ -49,7 +58,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 free_remote_port() {
-  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+  ssh -o ConnectTimeout=5 -o BatchMode=yes -o PasswordAuthentication=no \
+    -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=accept-new \
     -p "$TUNNEL_PORT" "${TUNNEL_USER}@${TUNNEL_HOST}" \
     "fuser -k ${TUNNEL_RPORT}/tcp >/dev/null 2>&1; true" \
     >/dev/null 2>&1 || true
@@ -57,12 +67,15 @@ free_remote_port() {
 
 start_tunnel() {
   ssh -n \
-    -o ServerAliveInterval=30 \
+    -o BatchMode=yes \
+    -o PasswordAuthentication=no \
+    -o KbdInteractiveAuthentication=no \
+    -o ServerAliveInterval=15 \
     -o ServerAliveCountMax=2 \
     -o ExitOnForwardFailure=yes \
     -o StrictHostKeyChecking=accept-new \
     -o ConnectTimeout=10 \
-    -N -R "*:${TUNNEL_RPORT}:localhost:${TUNNEL_LPORT}" \
+    -N -R "${TUNNEL_RBIND}:${TUNNEL_RPORT}:localhost:${TUNNEL_LPORT}" \
     -p "$TUNNEL_PORT" \
     "${TUNNEL_USER}@${TUNNEL_HOST}" &
   SSH_PID=$!
@@ -70,6 +83,7 @@ start_tunnel() {
 
 check_tunnel() {
   local response attempt
+  TUNNEL_OK=0
   printf '  %-7s %sChecking public connection…%s\n' "Status" "$DIM" "$NC" >&2
   for attempt in {1..5}; do
     [[ $_STOPPED -eq 1 ]] && return
@@ -81,12 +95,13 @@ check_tunnel() {
       -H 'Cache-Control: no-cache' \
       "https://singlecore.dev/.expose-health?session=$EXPOSE_HEALTH_TOKEN") \
       && [[ "$response" == "$EXPOSE_HEALTH_TOKEN" ]]; then
+      TUNNEL_OK=1
       printf '  %-7s %sConnected — public URL verified%s\n' "Status" "$GREEN" "$NC" >&2
       return
     fi
     [[ $attempt -eq 5 ]] || sleep 1
   done
-  printf '  %-7s %sPublic URL not verified; check DNS, proxy, or SSH tunnel%s\n' \
+  printf '  %-7s %sPublic URL not verified; retrying with backoff%s\n' \
     "Status" "$YLW" "$NC" >&2
 }
 
@@ -124,36 +139,55 @@ if ! kill -0 "$EXPOSE_PID" 2>/dev/null; then
   exit 1
 fi
 
-# ── Start tunnel ──────────────────────────────────────────────────────────────
-free_remote_port
-start_tunnel
-sleep 0.3
-
-if ! kill -0 "$SSH_PID" 2>/dev/null; then
-  wait "$SSH_PID" 2>/dev/null || true
-  printf '%sSSH tunnel failed to start%s\n' "$YLW" "$NC" >&2
-  exit 1
-fi
-
+# ── Start tunnel and keep retrying ────────────────────────────────────────────
 printf '\n  %s%sexpose online%s\n\n' "$BOLD" "$GREEN" "$NC" >&2
 printf '  %-7s %shttps://singlecore.dev%s\n' "Public" "$CYAN" "$NC" >&2
 printf '  %-7s http://127.0.0.1:%s\n' "Local" "$TUNNEL_LPORT" >&2
 printf '  %-7s http://%s:%s\n' "Network" "$(local_ip)" "$TUNNEL_LPORT" >&2
-check_tunnel
+if [[ -n "$PROXY_BIND" ]]; then
+  printf '  %-7s socks5://%s\n' "Proxy" "$PROXY_BIND" >&2
+  printf '  %-7s %sproxychains4 <command>%s\n' "Use" "$DIM" "$NC" >&2
+fi
+[[ -n "$EXPOSE_AUTH_PASSWORD" ]] \
+  && printf '  %-7s %spassword required%s\n' "Auth" "$DIM" "$NC" >&2
 printf '\n  %sCtrl+C to stop%s\n\n' "$DIM" "$NC" >&2
 
+BACKOFF=3
+ATTEMPT=0
 while [[ $_STOPPED -eq 0 ]]; do
-  wait "$SSH_PID" 2>/dev/null || true
-  [[ $_STOPPED -eq 1 ]] && break
-
   if ! kill -0 "$EXPOSE_PID" 2>/dev/null; then
     printf '%sexpose stopped unexpectedly%s\n' "$YLW" "$NC" >&2
     exit 1
   fi
-
-  printf '%sTunnel dropped; reconnecting in 3 seconds…%s\n' "$YLW" "$NC" >&2
-  sleep 3
   free_remote_port
   start_tunnel
-  check_tunnel
+  sleep 0.3
+  TUNNEL_OK=0
+  if ! kill -0 "$SSH_PID" 2>/dev/null; then
+    wait "$SSH_PID" 2>/dev/null || true
+    printf '%sSSH tunnel failed to start%s\n' "$YLW" "$NC" >&2
+  else
+    check_tunnel
+  fi
+
+  if [[ "$TUNNEL_OK" -eq 1 ]]; then
+    if [[ $ATTEMPT -gt 0 ]]; then
+      printf '%sTunnel restored — public URL is reachable%s\n' "$GREEN" "$NC" >&2
+    fi
+    BACKOFF=3
+    ATTEMPT=0
+    wait "$SSH_PID" 2>/dev/null || true
+    [[ $_STOPPED -eq 1 ]] && break
+  else
+    kill "$SSH_PID" 2>/dev/null || true
+    wait "$SSH_PID" 2>/dev/null || true
+    [[ $_STOPPED -eq 1 ]] && break
+  fi
+
+  ATTEMPT=$((ATTEMPT + 1))
+  printf '%sTunnel down (attempt %d); retrying in %ds…%s\n' \
+    "$YLW" "$ATTEMPT" "$BACKOFF" "$NC" >&2
+  sleep "$BACKOFF"
+  (( BACKOFF < 60 )) && BACKOFF=$((BACKOFF * 2))
+  (( BACKOFF > 60 )) && BACKOFF=60
 done

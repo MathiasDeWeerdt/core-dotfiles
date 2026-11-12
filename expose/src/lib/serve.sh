@@ -89,6 +89,10 @@ _export_common() {
   export EXPOSE_ME_HTML="$_ME_HTML"
   export EXPOSE_LOGO_SVG="$_LOGO_SVG"
   export EXPOSE_CONSOLES="$CONSOLES" EXPOSE_CONSOLE_MODULE="$_CONSOLE_PY"
+  export EXPOSE_PROXY="$PROXY"
+  _CALLBACKS_LIST=""
+  (( ${#CALLBACKS[@]} )) && _CALLBACKS_LIST=$(IFS=,; printf '%s' "${CALLBACKS[*]}")
+  export EXPOSE_CALLBACKS="$_CALLBACKS_LIST"
   export EXPOSE_CLIENT_DIR="${EXPOSE_CLIENT_DIR:-$HOME/.local/share/expose/clients}"
 }
 

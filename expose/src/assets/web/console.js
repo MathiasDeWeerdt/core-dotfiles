@@ -1,7 +1,7 @@
 /* Browser terminal control with single-use connector enrollment. */
 (function(){
   let enabled=false,ticket='',expires=0,platform='win',selected='',terminal=null,fit=null,cursor=0,generation=0,polling=false;
-  let inputQueue=Promise.resolve(),sessions=[],available=[];
+  let inputQueue=Promise.resolve(),sessions=[],available=[],proxy=null,callbacks=[];
   const error=q('console-error'),container=q('browser-terminal');
   const terminalSession=new URLSearchParams(location.search).get('terminal');
   if(terminalSession){document.body.classList.add('terminal-view');showView('shells')}
@@ -20,13 +20,13 @@
     try{const result=await api('invites','POST',{origin:location.origin});ticket=result.ticket;expires=result.expires*1000;renderCommand();q('console-invite-info').textContent='Single use · expires in 10 minutes. Paste into '+(platform==='win'?'PowerShell.':'a terminal.');notice('')}
     catch(e){notice(e.message)}
   }
-  function dispose(){generation++;selected='';cursor=0;if(terminal)terminal.dispose();terminal=null;fit=null;container.replaceChildren();container.hidden=true;q('console-disconnect').disabled=true;q('console-remove').disabled=true;q('console-popout').disabled=true}
+  function dispose(){generation++;selected='';cursor=0;if(terminal)terminal.dispose();terminal=null;fit=null;container.replaceChildren();container.hidden=true;q('console-disconnect').disabled=true;q('console-remove').disabled=true;q('console-popout').disabled=true;renderProxy()}
   async function command(action,value){if(!selected||!enabled)return;await api('sessions/'+selected+'/'+action,'POST',value)}
   function fitTerminal(){if(fit&&!q('shells').hidden&&container.clientWidth){fit.fit()}}
   async function selectSession(id){
     if(selected===id)return;dispose();selected=id;cursor=0;
     container.hidden=false;q('console-empty').hidden=true;
-    terminal=new Terminal({cursorBlink:true,fontFamily:'Cascadia Code, Consolas, monospace',fontSize:14,scrollback:5000,allowProposedApi:false,theme:{background:'#111713',foreground:'#e7eee8',cursor:'#a3cfb0'},screenReaderMode:true});
+    terminal=new Terminal({cursorBlink:true,fontFamily:'Cascadia Code, Consolas, monospace',fontSize:14,scrollback:5000,allowProposedApi:false,theme:{background:'#181818',foreground:'#e5e5e5',cursor:'#d4d4d4',selectionBackground:'#334155'},screenReaderMode:true});
     fit=new FitAddon.FitAddon();terminal.loadAddon(fit);terminal.open(container);fit.fit();
     q('console-disconnect').disabled=false;q('console-remove').disabled=false;q('console-popout').disabled=false;
     const thisGeneration=generation,sessionID=id;
@@ -49,20 +49,48 @@
   }
   function renderSessions(){
     q('console-sessions').replaceChildren();
-    sessions.forEach(session=>{const button=document.createElement('button');button.className='btn ghost sm'+(session.id===selected?' selected':'');button.textContent=session.host+' · '+session.os+' / '+session.arch+(session.connected?'':' · ended');button.setAttribute('aria-pressed',String(session.id===selected));button.addEventListener('click',()=>selectSession(session.id));q('console-sessions').appendChild(button)});
+    sessions.forEach(session=>{const button=document.createElement('button');button.className='btn ghost sm'+(session.id===selected?' selected':'');button.textContent=session.host+' · '+session.os+' / '+session.arch+(session.connected?(session.stale?' · away':''):' · ended');button.setAttribute('aria-pressed',String(session.id===selected));button.addEventListener('click',()=>selectSession(session.id));q('console-sessions').appendChild(button)});
     q('console-empty').hidden=!!selected||sessions.length>0;
+    renderProxy();
+    renderCallbacks();
   }
+  function renderProxy(){
+    const box=q('console-proxy');
+    if(!proxy||!proxy.enabled){box.hidden=true;return}
+    box.hidden=false;
+    q('console-proxy-address').textContent=proxy.address;
+    q('console-proxy-target').textContent=proxy.session?'→ '+proxy.session.host:'→ waiting for a machine';
+    q('console-proxy-use').disabled=!selected||(proxy.session&&proxy.session.id===selected);
+  }
+  function renderCallbacks(){
+    const box=q('console-callbacks');
+    box.hidden=!enabled;
+    if(!enabled)return;
+    const list=q('callback-list');list.replaceChildren();
+    if(!callbacks.length){const empty=document.createElement('p');empty.className='empty-line';empty.textContent='No callbacks. Add a local port to receive connections from the connected machine.';list.appendChild(empty);return}
+    callbacks.forEach(callback=>{
+      const row=document.createElement('div');row.className='mini-row';
+      const target=callback.address||('endpoint:'+callback.remote);
+      const label=document.createElement('span');label.className='grow';label.textContent=target+' → 127.0.0.1:'+callback.local;
+      const meta=document.createElement('span');meta.className='meta';meta.textContent=callback.active?'listening':(callback.error||'waiting');
+      const remove=document.createElement('button');remove.className='btn ghost sm';remove.textContent='Remove';
+      remove.addEventListener('click',()=>removeCallback(callback.id));
+      row.append(label,meta,remove);list.appendChild(row);
+    });
+  }
+  async function removeCallback(id){try{await api('callbacks/'+id+'/remove','POST',{});await refresh();notice('')}catch(e){notice(e.message)}}
   async function refresh(){
     if(!enabled||polling)return;polling=true;
     try{
-      sessions=await api('sessions');
+      const [list,info,callbackInfo]=await Promise.all([api('sessions'),api('proxy'),api('callbacks')]);
+      sessions=list;proxy=info;callbacks=callbackInfo.callbacks||[];
       if(selected&&!sessions.some(s=>s.id===selected))dispose();
-      renderSessions();q('console-status').textContent=sessions.some(s=>s.connected)?'Connected':'Listening';
+      renderSessions();q('console-status').textContent=sessions.some(s=>s.connected&&!s.stale)?'Connected':sessions.some(s=>s.connected)?'Away':'Listening';
       if(terminalSession){
         const session=sessions.find(s=>s.id===terminalSession);
         q('terminal-tab-title').textContent=session?session.host+' · '+session.os:'Terminal';
         document.title=(session?session.host:'Terminal')+' · expose';
-        q('terminal-tab-status').textContent=session?(session.connected?'Connected':'Ended'):'Removed';
+        q('terminal-tab-status').textContent=session?(session.connected?(session.stale?'Away':'Connected'):'Ended'):'Removed';
         if(session&&!selected)selectSession(session.id);
         if(!session){q('console-empty').hidden=false;q('console-empty').textContent='This machine is no longer available. Return to consoles to connect a machine.'}
       }else if(!selected&&sessions.some(s=>s.connected)&&!q('shells').hidden)selectSession(sessions.find(s=>s.connected).id);
@@ -87,6 +115,17 @@
       if(selected===id)dispose();
       sessions=sessions.filter(session=>session.id!==id);renderSessions();notice('');refresh();
     }catch(e){q('console-remove').disabled=!selected;notice(e.message)}
+  });
+  q('console-proxy-use').addEventListener('click',async()=>{
+    if(!selected)return;
+    try{proxy=await api('proxy','POST',{session:selected});renderProxy();notice(proxy.session?'Network proxy now uses '+proxy.session.host:'Network proxy has no selected machine')}
+    catch(e){notice(e.message)}
+  });
+  q('callback-add').addEventListener('click',async()=>{
+    const local=parseInt(q('callback-local').value,10),remote=parseInt(q('callback-remote').value,10)||local;
+    if(!local){notice('Enter a local port');return}
+    try{const callback=await api('callbacks','POST',{local,remote});q('callback-local').value='';q('callback-remote').value='';await refresh();notice('Callback '+callback.remote+' → 127.0.0.1:'+callback.local)}
+    catch(e){notice(e.message)}
   });
   new ResizeObserver(fitTerminal).observe(container);
   window.addEventListener('hashchange',()=>{if(!q('shells').hidden){fitTerminal();refresh()}});

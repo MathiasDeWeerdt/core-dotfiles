@@ -8,6 +8,19 @@ if [[ $CONSOLES -eq 1 ]]; then
   python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
     || die "Browser consoles require Python 3.11 or newer"
 fi
+if [[ -n "$PROXY" ]]; then
+  [[ "$PROXY" =~ ^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]*)?:[0-9]+$ || "$PROXY" =~ ^[0-9]+$ ]] \
+    || die "Invalid proxy address: $PROXY (use host:port)"
+fi
+for _callback in "${CALLBACKS[@]}"; do
+  [[ "$_callback" =~ ^[0-9]+(:[0-9]+)?$ ]] \
+    || die "Invalid callback: $_callback (use local[:remote])"
+  _local=${_callback%%:*}
+  _remote=${_callback#*:}
+  [[ "$_callback" == *:* ]] || _remote=$_local
+  (( _local >= 1 && _local <= 65535 && _remote >= 1 && _remote <= 65535 )) \
+    || die "Invalid callback port: $_callback"
+done
 [[ -n "$RESP_CODE" ]] && { [[ "$RESP_CODE" =~ ^[0-9]+$ ]] && (( RESP_CODE >= 100 && RESP_CODE <= 599 )) \
   || die "Invalid status code: $RESP_CODE (must be 100–599)"; }
 if (( ${#RESP_HEADERS[@]} )); then

@@ -21,6 +21,11 @@ drop web UI), and built-in reverse-shell payloads.
 - **Smart request viewer** — request bodies are auto-decoded (JSON pretty-print, JWT header+payload, form-urlencoded) and credential-looking bodies are flagged with a red `creds` chip
 - **CLI one-liners** — copy-ready commands per OS (Linux/macOS/Windows) for uploading files, posting to chat, and downloading shared content: curl, wget, nc, socat, python (stdlib + requests), httpie, PowerShell, certutil, bitsadmin
 - **Browser consoles** — full interactive PTY / ConPTY sessions, Windows/macOS/Linux connection commands, terminal resizing, Ctrl+C, and disconnect controls (automatic with `expose-online`)
+- **Network proxy** — `expose-online` also starts a local SOCKS5 listener; route `proxychains`, `curl`, or other tools through the connected machine's network. Forward proxying only — no reverse shell.
+- **Inbound callbacks** — expose a listener on the connected machine and forward it to a local service, so targets on the endpoint's network can connect back to you.
+- **Password-protected session** — `expose-online` gates the UI and API behind a login and session cookie; connector tickets and agent tokens remain self-authenticating.
+- **Resilient reconnection** — the connector and tunnel retry across multi-hour outages; sessions stay attached and the console resumes when the network returns.
+- **Focused operator log** — hides UI polling, deduplicates external hits, and shows login, connector, SOCKS, callback, tunnel, and real client IP events.
 - **Chat attachments** — drop, paste, or attach files; image, audio, video, and safe text previews with direct downloads
 - **Reverse shells** — revshells.com-style card with editable LHOST/LPORT: bash `/dev/tcp`, zsh `ztcp`, nc (`-e` + mkfifo), python3, socat for Linux/macOS; PowerShell (+ AMSI-bypass variant) and ncat for Windows; plus listener commands (nc / rlwrap / socat)
 - **Persistent request log** — requests are kept in `~/.expose/requests.json` as a JSON array capped at 500 entries; internal API polling is excluded
@@ -71,6 +76,8 @@ Stop with `Ctrl+C`. The startup banner shows the local and network URLs.
 | `--bind <addr>` | Bind to a specific interface (default: 0.0.0.0) |
 | `-m, --more` | Verbose logging: all headers, reverse DNS, parsed UA |
 | `--console` | Enable local browser consoles; automatic with expose-online (Python 3.11+) |
+| `--proxy [addr]` | SOCKS5 listener for routing local tools through the connected machine (default: `127.0.0.1:1080`; implies `--console`) |
+| `--callback <local[:remote]>` | Listen on the connected machine and forward to `127.0.0.1:<local>` (repeatable; implies `--console`) |
 | `--catch` | Request catcher — dump full headers + body (implies `--more`) |
 | `--code <N>` | HTTP status code for responses (100–599, default: 200) |
 | `--header "K: V"` | Add a response header (repeatable) |
@@ -95,6 +102,7 @@ content on `/content`, or 404):
 | Route | Description |
 |-------|-------------|
 | `GET /` · `GET /upload` | Upload web UI (drag & drop, queue, received-files list, log panel, chat) |
+| `GET /login` · `POST /login` · `POST /logout` | Password gate and session cookie |
 | `POST /upload` | Multipart upload — saves to `~/Downloads/expose` |
 | `GET /upload/files` | JSON list of received files |
 | `GET /upload/files/<name>` | Download a received file |
@@ -106,8 +114,8 @@ content on `/content`, or 404):
 | `GET /content` | The served text/file payload (not in directory mode) |
 | `POST /chat/upload` | Send multipart files with an optional `message` field |
 | `GET /upload/preview/<name>` | Safe inline media / text preview |
-| `GET /lin`, `/mac`, `/win` | Single-use console connector bootstrap (requires a connection ticket) |
-| `/console/*` | Console status, browser control, and connector relay |
+| `GET /lin`, `/mac`, `/win` | Console connector bootstrap (requires a connection ticket) |
+| `/console/*` | Console status, browser control, proxy, callbacks, and connector relay |
 | `GET`/`POST /chat` | Mini chat shared between visitors of the upload page |
 
 Directory mode additionally serves the full file tree under `/` and a JSON
@@ -154,11 +162,174 @@ with no separate listener port. A proxy must allow the `/console/*`, `/lin`,
 
 Connectors for x64 and ARM64 Windows, macOS, and Linux are stored in
 `~/.local/share/expose/clients` (override with `EXPOSE_CLIENT_DIR`). Downloads are
-SHA-256 checked before execution. There is no console key or login: anyone who
-can reach the web UI can list, control, disconnect, or remove connected machines.
-Connector enrollment still uses expiring single-use tickets and per-session tokens.
-Console credentials and traffic are excluded from the request inspector. Use HTTPS for remote connections. Chat and shared files retain
-the existing public sharing behavior.
+SHA-256 checked before execution. The web UI is password protected when
+`EXPOSE_AUTH_PASSWORD` is set (see below); connector enrollment uses expiring
+single-use tickets and per-session bearer tokens. Console credentials and
+traffic are excluded from the request inspector. Use HTTPS for remote
+connections. Chat and shared files retain the existing public sharing behavior.
+
+## Network proxy
+
+`expose-online` starts a SOCKS5 listener on `127.0.0.1:1080` alongside the
+console. Each connection is dialled by the connected machine, so local tools can
+reach hosts and services that only that machine can see. This is forward
+proxying — the machine opens outbound connections; it does not receive a shell.
+
+```bash
+proxychains4 nmap -sT -Pn 10.11.12.0/23
+curl --socks5-hostname 127.0.0.1:1080 http://10.11.12.254/
+```
+
+The proxy uses the newest connected machine. Select another in **Consoles →
+Network proxy → Use selected machine**. Override the listener with
+`PROXY_PORT=1080` or `PROXY_BIND=127.0.0.1:1080`; set `PROXY_BIND=off` to
+disable it. `expose --proxy [addr]` enables the same listener in a local
+session and implies `--console`.
+
+`GET /console/proxy` reports active streams and counters (`opens`, `failed`,
+`sent`, `received`). Each stream moves data in HTTP chunks, so bulk transfers
+are limited by round-trip time; it is intended for control traffic and scans,
+not large file copies.
+
+Proxy traffic is capped at 256 concurrent streams, 4 MB per stream buffer, and
+512 KB of queued outbound data per machine. Disconnecting the console closes its
+streams.
+
+## Inbound callbacks
+
+A callback creates a listener on the connected machine and forwards every
+accepted connection to a service on the expose host. Use it when a target on the
+endpoint's network must connect back to you and your machine is not reachable
+from that network.
+
+```bash
+expose-online --callback 4444          # endpoint:4444 → 127.0.0.1:4444
+expose-online --callback 4444:9000     # endpoint:9000 → 127.0.0.1:4444
+```
+
+Or add one under **Consoles → Inbound callbacks**. The endpoint binds
+`0.0.0.0:<remote>` for the life of the console session; the UI and startup
+output show its address. Remove the callback to close the listener.
+
+```bash
+# terminal 1
+expose-online --callback 4444
+
+# terminal 2 — local listener
+nc -lvnp 4444
+
+# target on the endpoint network
+# connect to <endpoint-ip>:4444
+```
+
+Anyone who can reach `<endpoint-ip>:<remote>` can use the forward, so choose a
+port deliberately. Callbacks are rebound when a console reconnects. The local
+service must be listening before the target connects.
+
+Ports below 1024 require root or `CAP_NET_BIND_SERVICE` on Linux/macOS. On
+Windows, port 445 is owned by the SMB service (`System`) and cannot be bound by
+the connector while SMB is running. Use a high remote port when you control the
+client, for example `--callback 445:8445` (endpoint:8445 → local:445).
+
+## Password protection
+
+`expose-online` requires the password `Sharedpassword778#` before serving the UI
+or API. Override it with `EXPOSE_AUTH_PASSWORD`; an empty value disables the
+gate. Direct `expose` uses the same variable.
+
+- `GET /login` serves the login page; a correct password sets an HttpOnly,
+  SameSite=Strict session cookie valid for 12 hours. `Secure` is added when the
+  tunnel forwards HTTPS.
+- Wrong passwords are rate-limited per client address.
+- Connector enrollment routes (`/lin`, `/mac`, `/win`, `/console/client/*`,
+  `/console/register`, `/console/agent/*`) and the health probe
+  `/.expose-health` are exempt because they require single-use tickets or
+  per-session bearer tokens.
+- Everything else — uploads, chat, files, console control, proxy, and
+  callbacks — requires the session.
+- The password is never written to the request log. **Log out** is in the
+  header.
+
+The default is hardcoded for convenience; use a unique value for anything
+long-lived:
+
+```bash
+EXPOSE_AUTH_PASSWORD='...' expose-online
+```
+
+## Reconnection and outages
+
+Both sides retry for long outages instead of exiting.
+
+- The connector retries relay requests with exponential backoff (1 s → 60 s)
+  indefinitely. The PTY/ConPTY and shell stay alive; a `2–3 hour` network gap
+  resumes without a new connection command.
+- Sessions are retained server-side for 24 hours. The UI shows **away** after
+  45 seconds without traffic and returns to **Connected** when requests resume.
+- `expose-online` retries the SSH tunnel forever with backoff (3 s → 60 s) and
+  prints `Tunnel down (attempt N)` / `Tunnel restored`. It does not exit when
+  the public path is unavailable.
+- Connector registration is retry-safe: the connector sends a nonce and the
+  server returns the same session if the registration response was lost. The
+  invitation itself still expires after ten minutes.
+- If the endpoint reboots or the connector process is killed, the in-memory
+  session is gone and a fresh connection command is required.
+
+`expose-online` settings:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TUNNEL_HOST` / `TUNNEL_PORT` / `TUNNEL_USER` | `213.118.201.119` / `47865` / `root` | SSH jump host |
+| `TUNNEL_RPORT` / `TUNNEL_LPORT` | `9090` / `9090` | Remote/local forward ports |
+| `TUNNEL_RBIND` | `127.0.0.1` | Reverse bind address on the jump host |
+| `PROXY_PORT` / `PROXY_BIND` | `1080` / `127.0.0.1:1080` | SOCKS5 listener |
+| `EXPOSE_AUTH_PASSWORD` | `Sharedpassword778#` | UI/API password; empty disables |
+
+The reverse port is bound to `127.0.0.1` on the jump host by default
+(`TUNNEL_RBIND`), so nginx is the only public entry point. SSH runs in batch
+mode with password prompts disabled; use a key or agent.
+
+## Operator output
+
+The console is event-focused, not a request firehose:
+
+- Internal polling (`/log`, `/chat`, `/upload/files`, `/meta`, `/console/*`,
+  health) is hidden.
+- External HTTP hits are deduplicated on `(IP, method, path, status)` for 60
+  seconds.
+- Login events, connector join/resume/leave, SOCKS connections, callback
+  starts, and tunnel state are printed with timestamps and the real client IP.
+- The JSON request log still records external traffic for the Traffic view and
+  includes `ip` (real) and `peer` (local tunnel address).
+
+Real IPs come from `X-Forwarded-For` or `X-Real-IP` only when the direct peer
+is loopback, which is the SSH tunnel. A direct LAN client cannot spoof them.
+
+## Jump host (nginx)
+
+The SSH tunnel binds `127.0.0.1:9090` on the jump host. Publish it through
+nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:9090;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 30s;
+    proxy_buffering off;
+    client_max_body_size 64m;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+}
+```
+
+`X-Forwarded-For` and `X-Forwarded-Proto` are required for real-IP logging and
+for the `Secure` session cookie. Overwrite `X-Forwarded-For` (as above) so a
+client cannot spoof its address. If nginx is behind Cloudflare or another
+proxy, configure `ngx_http_realip_module` so `$remote_addr` is the real client.
+If the tunnel binds a different address, set `TUNNEL_RBIND`.
 
 ## Development
 

@@ -150,6 +150,21 @@ wait "$SERVER_PID"
 SERVER_PID=""
 ! rg -q 'python3 <<|Terminated|import http.server' "$TEST_HOME/server.err"
 
+# ── Explicit --proxy starts a SOCKS5 listener ────────────────────────────────
+port=$(free_port)
+proxy_port=$(free_port)
+"$EXPOSE" --bind 127.0.0.1 --port "$port" --proxy "127.0.0.1:$proxy_port" proxy-test \
+  >"$TEST_HOME/server.out" 2>"$TEST_HOME/server.err" &
+SERVER_PID=$!
+for _ in {1..50}; do
+  proxy_result=$(curl -fsS "http://127.0.0.1:$port/console/proxy" 2>/dev/null) && break
+  sleep 0.05
+done
+[[ "$proxy_result" == *'"enabled": true'* ]]
+[[ "$proxy_result" == *"socks5://127.0.0.1:$proxy_port"* ]]
+ss -tln "sport = :$proxy_port" 2>/dev/null | grep -q ":$proxy_port"
+stop_server
+
 # Online output uses the paired binary, even through a symlink with an older
 # expose on PATH. Stub SSH so this check never opens a public tunnel.
 mkdir -p "$TEST_HOME/bin"
@@ -174,22 +189,39 @@ SH
 chmod +x "$TEST_HOME/bin/ssh" "$TEST_HOME/bin/expose" "$TEST_HOME/bin/curl"
 ln -s "$ROOT/dist/expose-online" "$TEST_HOME/bin/expose-online"
 port=$(free_port)
-PATH="$TEST_HOME/bin:$PATH" TUNNEL_LPORT="$port" \
+proxy_port=$(free_port)
+PATH="$TEST_HOME/bin:$PATH" TUNNEL_LPORT="$port" PROXY_BIND="127.0.0.1:$proxy_port" \
   "$TEST_HOME/bin/expose-online" online-test \
   >"$TEST_HOME/online.out" 2>"$TEST_HOME/online.err" &
 SERVER_PID=$!
-for _ in {1..50}; do
-  rg -q 'Ctrl\+C to stop' "$TEST_HOME/online.err" && break
+for _ in {1..100}; do
+  rg -q 'Connected — public URL verified' "$TEST_HOME/online.err" && break
   sleep 0.05
 done
-assert_eq "online-test" "$(curl -fsS "http://127.0.0.1:$port/content")"
-console_status=$(curl -fsS "http://127.0.0.1:$port/console/status")
+login_page=$(curl -s -H 'Accept: text/html' "http://127.0.0.1:$port/")
+[[ "$login_page" == *'This session is password protected'* ]]
+assert_eq "401" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/content")"
+login_code=$(curl -s -c "$TEST_HOME/cookies" -o /dev/null -w '%{http_code}' \
+  -d 'password=Sharedpassword778#' "http://127.0.0.1:$port/login")
+assert_eq "303" "$login_code"
+assert_eq "online-test" "$(curl -fsS -b "$TEST_HOME/cookies" "http://127.0.0.1:$port/content")"
+assert_eq "online-test" "$(curl -fsS -b "$TEST_HOME/cookies" \
+  -H 'X-Forwarded-For: 203.0.113.7' "http://127.0.0.1:$port/content")"
+curl -fsS -b "$TEST_HOME/cookies" "http://127.0.0.1:$port/log" >/dev/null
+! rg -q 'GET /log' "$TEST_HOME/online.err"
+rg -q 'LOGIN .*ok' "$TEST_HOME/online.err"
+console_status=$(curl -fsS -b "$TEST_HOME/cookies" "http://127.0.0.1:$port/console/status")
 [[ "$console_status" == *'"enabled": true'* ]]
-assert_eq '[]' "$(curl -fsS "http://127.0.0.1:$port/console/sessions")"
+assert_eq '[]' "$(curl -fsS -b "$TEST_HOME/cookies" "http://127.0.0.1:$port/console/sessions")"
+proxy_info=$(curl -fsS -b "$TEST_HOME/cookies" "http://127.0.0.1:$port/console/proxy")
+[[ "$proxy_info" == *'"enabled": true'* ]]
+[[ "$proxy_info" == *"socks5://127.0.0.1:$proxy_port"* ]]
 [[ ! -e "$TEST_HOME/.expose/console-$port.key" ]]
 rg -q '^  expose online$'  "$TEST_HOME/online.err"
 rg -q '^  Public  https://singlecore.dev$' "$TEST_HOME/online.err"
 rg -q "^  Local   http://127.0.0.1:$port$" "$TEST_HOME/online.err"
+rg -q "^  Proxy   socks5://127.0.0.1:$proxy_port$" "$TEST_HOME/online.err"
+rg -q '^  Auth    password required$' "$TEST_HOME/online.err"
 rg -q 'Ctrl\+C to stop' "$TEST_HOME/online.err"
 rg -q 'Connected — public URL verified' "$TEST_HOME/online.err"
 ! rg -q '/.expose-health' "$TEST_HOME/online.err"
@@ -210,7 +242,11 @@ with open(sys.argv[1]) as log_file:
     entries = json.load(log_file)
 assert entries
 assert any(entry["path"] == "/content" for entry in entries)
+assert any(entry.get("ip") == "203.0.113.7" and entry.get("peer") == "127.0.0.1"
+           for entry in entries)
+assert not any(entry["path"].startswith("/log") for entry in entries)
 assert not any(entry["path"].startswith("/.expose-health") for entry in entries)
+assert "Sharedpassword778#" not in json.dumps(entries)
 PY
 
 echo "integration tests passed"

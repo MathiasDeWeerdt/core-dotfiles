@@ -1,15 +1,20 @@
 """Exercise attachment safety, authorization, and a real Linux PTY callback."""
 import base64
+import http.cookiejar
 import json
 import os
 from pathlib import Path
 import signal
 import socket
+import socketserver
+import struct
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,8 +26,10 @@ class Features(unittest.TestCase):
         cls.home = Path(cls.temp.name)
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0)); cls.port = sock.getsockname()[1]
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0)); cls.proxy_port = sock.getsockname()[1]
         cls.origin = f'http://127.0.0.1:{cls.port}'
-        env = dict(os.environ, HOME=str(cls.home), EXPOSE_CLIENT_DIR=str(ROOT/'dist/console-clients'), EXPOSE_CONSOLES='1')
+        env = dict(os.environ, HOME=str(cls.home), EXPOSE_CLIENT_DIR=str(ROOT/'dist/console-clients'), EXPOSE_CONSOLES='1', EXPOSE_PROXY=f'127.0.0.1:{cls.proxy_port}')
         cls.log = open(cls.home/'server.log', 'wb')
         cls.server = subprocess.Popen([str(ROOT/'dist/expose'), '--bind', '127.0.0.1',
                                       '-p', str(cls.port), 'hello'],
@@ -122,9 +129,13 @@ class Features(unittest.TestCase):
         if (ROOT/'dist/console-clients/linux-amd64').exists():
             self.assertEqual(code,200); self.assertIn(self.origin.encode(),script)
             subprocess.run(['bash','-n'],input=script,check=True)
-        status,client=self.json('/console/register',{'host':'scope-test','os':'linux','arch':'amd64'},ticket)
+        status,client=self.json('/console/register',
+                                 {'host':'scope-test','os':'linux','arch':'amd64','nonce':'n1'},ticket)
         self.assertEqual(status,200)
-        self.assertEqual(self.json('/console/register',{},ticket)[0],401)
+        replay_status,replay=self.json('/console/register',{'nonce':'n1'},ticket)
+        self.assertEqual(replay_status,200)
+        self.assertEqual(replay['id'],client['id'])
+        self.assertEqual(self.json('/console/register',{'nonce':'n2'},ticket)[0],401)
         self.assertEqual(self.call('/lin?ticket='+ticket)[0],401)
         prefix='/console/sessions/'+client['id']
         self.assertEqual(self.call('/console/agent/'+client['id']+'/input',token='invalid')[0],401)
@@ -139,6 +150,96 @@ class Features(unittest.TestCase):
         self.assertNotIn(ticket,content)
         self.assertNotIn('/console/',content)
         self.assertFalse((self.home/'.expose'/f'console-{self.port}.key').exists())
+
+    def test_network_proxy_relays_through_connected_machine(self):
+        _,invite=self.json('/console/invites',{'origin':self.origin})
+        _,client=self.json('/console/register',{'host':'proxy-test','os':'linux','arch':'amd64'},
+                           invite['ticket'])
+        agent='/console/agent/'+client['id']; token=client['token']
+        proxy_info=self.json('/console/proxy')[1]
+        self.assertTrue(proxy_info['enabled'])
+        self.assertEqual(proxy_info['address'],f'socks5://127.0.0.1:{self.proxy_port}')
+        received={'reply':b'','greeting':b'','after':b''}
+        started=threading.Event(); greeted=threading.Event()
+        def socks_client():
+            def exact(sock,size):
+                data=b''
+                while len(data)<size:
+                    chunk=sock.recv(size-len(data))
+                    if not chunk:break
+                    data+=chunk
+                return data
+            with socket.create_connection(('127.0.0.1',self.proxy_port),timeout=10) as sock:
+                sock.sendall(b'\x05\x01\x00')
+                self.assertEqual(exact(sock,2),b'\x05\x00')
+                host=b'10.10.10.12'
+                sock.sendall(b'\x05\x01\x00\x03'+bytes([len(host)])+host+struct.pack('!H',445))
+                received['reply']=exact(sock,10);started.set()
+                received['greeting']=exact(sock,5);greeted.set()
+                sock.sendall(b'PING')
+                try:received['after']=sock.recv(16)
+                except socket.timeout:pass
+        thread=threading.Thread(target=socks_client,daemon=True);thread.start()
+        events=json.loads(self.call(agent+'/net?after=0',token=token)[2])
+        opened=[e for e in events['events'] if e['type']=='open']
+        self.assertEqual(len(opened),1)
+        self.assertEqual((opened[0]['host'],opened[0]['port']),('10.10.10.12',445))
+        sid=opened[0]['stream'];cursor=events['events'][-1]['seq']
+        self.assertEqual(self.json(f'{agent}/net/{sid}/status',{'ok':True},token)[0],200)
+        self.assertEqual(self.call(f'{agent}/net/{sid}/data',b'HELLO',token=token)[0],200)
+        self.assertTrue(started.wait(5))
+        self.assertEqual(received['reply'][:4],b'\x05\x00\x00\x01')
+        self.assertTrue(greeted.wait(5))
+        self.assertEqual(received['greeting'],b'HELLO')
+        forwarded=json.loads(self.call(f'{agent}/net?after={cursor}',token=token)[2])
+        writes=[e for e in forwarded['events'] if e['type']=='data']
+        self.assertEqual(base64.b64decode(writes[0]['data']),b'PING')
+        self.assertEqual(self.json(f'{agent}/net/{sid}/close',{},token)[0],200)
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(self.json('/console/sessions/'+client['id']+'/remove',{})[0],200)
+
+    def test_inbound_callback_reaches_local_service(self):
+        class Echo(socketserver.BaseRequestHandler):
+            def handle(self):
+                while True:
+                    data=self.request.recv(4096)
+                    if not data:break
+                    self.request.sendall(data)
+        class EchoServer(socketserver.ThreadingTCPServer):
+            allow_reuse_address=True
+            daemon_threads=True
+        echo=EchoServer(('127.0.0.1',0),Echo)
+        local_port=echo.server_address[1]
+        threading.Thread(target=echo.serve_forever,daemon=True).start()
+        try:
+            _,invite=self.json('/console/invites',{'origin':self.origin})
+            _,client=self.json('/console/register',{'host':'callback-test','os':'linux','arch':'amd64'},
+                               invite['ticket'])
+            agent='/console/agent/'+client['id']; token=client['token']
+            status,callback=self.json('/console/callbacks',{'local':local_port,'remote':4455})
+            self.assertEqual(status,200); cid=callback['id']
+            events=json.loads(self.call(agent+'/net?after=0',token=token)[2])
+            listen=[e for e in events['events'] if e['type']=='listen']
+            self.assertEqual(len(listen),1); self.assertEqual(listen[0]['port'],4455)
+            cursor=events['events'][-1]['seq']
+            self.assertEqual(self.json(f'{agent}/callback/{cid}/state',
+                                       {'active':True,'address':'10.11.12.12:4455'},
+                                       token)[0],200)
+            listed=self.json('/console/callbacks')[1]['callbacks']
+            self.assertTrue(listed[0]['active']); self.assertEqual(listed[0]['address'],'10.11.12.12:4455')
+            sid='callback-stream-1'
+            self.assertEqual(self.json(f'{agent}/net/{sid}/inbound',
+                                       {'callback':cid,'address':'10.11.12.99:55555'},token)[0],200)
+            self.assertEqual(self.call(f'{agent}/net/{sid}/data',b'CALLBACK',token=token)[0],200)
+            forwarded=json.loads(self.call(f'{agent}/net?after={cursor}',token=token)[2])
+            writes=[e for e in forwarded['events'] if e['type']=='data']
+            self.assertEqual(base64.b64decode(writes[0]['data']),b'CALLBACK')
+            self.assertEqual(self.json(f'{agent}/net/{sid}/close',{},token)[0],200)
+            self.assertEqual(self.json(f'/console/callbacks/{cid}/remove',{},token)[0],200)
+            self.assertEqual(self.json('/console/sessions/'+client['id']+'/remove',{})[0],200)
+        finally:
+            echo.shutdown(); echo.server_close()
 
     @unittest.skipUnless((ROOT/'dist/console-clients/linux-amd64').exists() and os.uname().machine=='x86_64', 'Build Linux connector first')
     def test_real_pty_callback_resize_interrupt_and_remove(self):
@@ -184,5 +285,106 @@ class Features(unittest.TestCase):
                 try:client.wait(timeout=5)
                 except subprocess.TimeoutExpired:os.killpg(client.pid,signal.SIGKILL);client.wait()
             client_log.close()
+
+class AuthFeatures(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory(prefix='expose-auth-')
+        cls.home = Path(cls.temp.name)
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0)); cls.port = sock.getsockname()[1]
+        cls.origin = f'http://127.0.0.1:{cls.port}'
+        env = dict(os.environ, HOME=str(cls.home), EXPOSE_CLIENT_DIR=str(ROOT/'dist/console-clients'),
+                   EXPOSE_CONSOLES='1', EXPOSE_AUTH_PASSWORD='secret123',
+                   EXPOSE_HEALTH_TOKEN='health123')
+        cls.log = open(cls.home/'server.log', 'wb')
+        cls.server = subprocess.Popen([str(ROOT/'dist/expose'), '--bind', '127.0.0.1',
+                                      '-p', str(cls.port), 'hello'],
+                                     env=env, stdout=cls.log, stderr=cls.log, start_new_session=True)
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(cls.origin+'/login', timeout=2)
+                break
+            except urllib.error.HTTPError as error:
+                error.close()
+                break
+            except OSError:
+                pass
+            time.sleep(.05)
+        else:
+            raise RuntimeError('Server did not start')
+
+    @classmethod
+    def tearDownClass(cls):
+        os.killpg(cls.server.pid, signal.SIGTERM)
+        try: cls.server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(cls.server.pid, signal.SIGKILL); cls.server.wait()
+        cls.log.close(); cls.temp.cleanup()
+
+    def opener(self):
+        jar=http.cookiejar.CookieJar()
+        return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar)),jar
+
+    def open(self, opener, path, data=None, accept=None):
+        headers={'Accept':accept} if accept else {}
+        if data is not None:
+            data=urllib.parse.urlencode(data).encode()
+            headers['Content-Type']='application/x-www-form-urlencoded'
+        req=urllib.request.Request(self.origin+path,data=data,headers=headers)
+        try:
+            with opener.open(req,timeout=15) as response:
+                return response.status,response.headers,response.read()
+        except urllib.error.HTTPError as response:
+            with response:
+                return response.code,response.headers,response.read()
+
+    def test_password_gate_and_connector_exemptions(self):
+        anon,_=self.opener()
+        code,headers,body=self.open(anon,'/',accept='text/html')
+        self.assertEqual(code,401); self.assertIn(b'This session is password protected',body)
+        self.assertEqual(self.open(anon,'/console/status')[0],401)
+        self.assertEqual(self.open(anon,'/login',{'password':'wrong'})[0],401)
+        code,_,_=self.open(anon,'/login',{'password':'secret123'})
+        self.assertEqual(code,200)
+        self.assertEqual(self.open(anon,'/console/status')[0],200)
+        code,_,body=self.open(anon,'/login',{'password':'wrong'})
+        self.assertEqual(code,401)
+        self.assertIn(b'Incorrect password',body)
+        self.assertEqual(self.open(anon,'/.expose-health?session=health123')[0],200)
+        self.assertEqual(self.open(anon,'/.expose-health?session=wrong')[0],404)
+
+        auth,jar=self.opener()
+        self.assertEqual(self.open(auth,'/login',{'password':'secret123'})[0],200)
+        self.assertTrue(any(cookie.name=='expose_session' for cookie in jar))
+        self.assertEqual(self.open(auth,'/console/status')[0],200)
+        req=urllib.request.Request(self.origin+'/console/invites',
+                                   data=json.dumps({'origin':self.origin}).encode(),
+                                   headers={'Content-Type':'application/json'})
+        with auth.open(req,timeout=15) as response:
+            invite=json.loads(response.read())
+        ticket=invite['ticket']
+        anon2,_=self.opener()
+        self.assertEqual(self.open(anon2,'/lin?ticket='+ticket)[0],200)
+        req=urllib.request.Request(self.origin+'/console/register',
+                                   data=json.dumps({'host':'auth-test'}).encode(),
+                                   headers={'Content-Type':'application/json',
+                                            'Authorization':'Bearer '+ticket})
+        with anon2.open(req,timeout=15) as response:
+            client=json.loads(response.read())
+        req=urllib.request.Request(self.origin+'/console/agent/'+client['id']+'/exit',
+                                   data=b'',method='POST',
+                                   headers={'Authorization':'Bearer '+client['token']})
+        with anon2.open(req,timeout=15) as response:
+            self.assertEqual(response.status,200)
+        try:
+            auth.open(urllib.request.Request(self.origin+'/logout',data=b'',method='POST'),timeout=15)
+        except urllib.error.HTTPError as response:
+            with response:
+                self.assertEqual(response.code,401)  # redirected to the login page
+        self.assertEqual(self.open(auth,'/')[0],401)
+        log=(self.home/'.expose/requests.json').read_text()
+        self.assertNotIn('secret123',log)
+        self.assertNotIn('secret123',(self.home/'server.log').read_text(errors='replace'))
 
 if __name__=='__main__':unittest.main(verbosity=2)

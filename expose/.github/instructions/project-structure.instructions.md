@@ -23,6 +23,8 @@ src/
 │   └── serve.sh            # Runtime serve logic (contains @@INJECT@@ markers)
 └── assets/
     ├── server.py           # Unified Python HTTP backend
+    ├── consoles.py         # Console relay + SOCKS5 network proxy
+    ├── payloads.sh         # Built-in payload templates
     └── web/
         ├── upload.html     # HTML skeleton (inject markers: @@CSS@@ / @@JS@@)
         ├── upload.css      # All styles — edited here, injected at build time

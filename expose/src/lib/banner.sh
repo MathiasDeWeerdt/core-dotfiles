@@ -36,6 +36,9 @@ if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
   ${BLU}Me${R}       ${U}${_SCHEME}://${LOCAL_IP}:${PORT}/me${R}$(
     [[ $VERBOSE -eq 1 ]]            && printf '\n  %sVerbose%s  %senabled  (--more)%s'       "$YLW" "$R" "$D" "$R"
     [[ $CONSOLES -eq 1 ]]          && printf '\n  %sConsole%s  %senabled  (--console)%s'    "$YLW" "$R" "$D" "$R"
+    [[ -n "$PROXY" ]]               && printf '\n  %sProxy%s    %ssocks5://%s%s'                "$YLW" "$R" "$D" "$PROXY" "$R"
+    (( ${#CALLBACKS[@]} ))          && printf '\n  %sCallback%s %s%d configured%s'             "$YLW" "$R" "$D" "${#CALLBACKS[@]}" "$R"
+    [[ -n "${EXPOSE_AUTH_PASSWORD:-}" ]] && printf '\n  %sAuth%s      %spassword required%s'   "$YLW" "$R" "$D" "$R"
     [[ $CATCH -eq 1 ]]              && printf '\n  %sCatch%s    %senabled  (--catch)%s'      "$YLW" "$R" "$D" "$R"
     [[ "$BIND" != "0.0.0.0" ]]      && printf '\n  %sBind%s     %s%s%s'                       "$YLW" "$R" "$D" "$BIND" "$R"
     [[ -n "$RESP_CODE" ]]           && printf '\n  %sCode%s     %s%s%s'                       "$YLW" "$R" "$D" "$RESP_CODE" "$R"

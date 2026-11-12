@@ -131,6 +131,8 @@ else
     alias ls='ls -G -h'
 fi
 alias dev='~/.config/tmux/dev-session'
+alias dstopall='docker stop $(docker ps -q)'
+alias dockerstop='docker ps -q | xargs -r docker stop'
 
 # Kill process on specified port
 killport() {
@@ -182,8 +184,9 @@ export PATH=$PATH:/home/mathias/.local/bin
 # export ANDROID_HOME=$HOME/android-sdk
 # export PATH=$PATH:$ANDROID_HOME/platform-tools
 
-export ANDROID_HOME=/opt/android-sdk
+export ANDROID_HOME=/home/mathias/android-sdk
 export ANDROID_SDK_ROOT=$ANDROID_HOME
+export PATH=$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin
 
 # export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
 # export JAVA_HOME=/home/mathias/Documents/java/graalvm-jdk-23.0.2+7.1
@@ -239,3 +242,13 @@ export COPILOT_PROVIDER_WIRE_MODEL=deepseek/deepseek-v4-pro
 # bun completions
 [ -s "/home/mathias/.bun/_bun" ] && source "/home/mathias/.bun/_bun"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+# opencode
+export PATH=/home/mathias/.opencode/bin:$PATH
+
+# pi: give the model the real date at every launch. It has no clock, so without
+# this it assumes the year from its training data. See ~/.pi/agent/AGENTS.md.
+pi() {
+  command pi --append-system-prompt \
+    "Current date: $(date '+%Y-%m-%d, %A'). Trust this over your memory; never assume the year." "$@"
+}
