@@ -34,6 +34,8 @@ class ConsoleService:
         self.proxy_address = ''
         self.proxy_stats = {'opens': 0, 'failed': 0, 'sent': 0, 'received': 0}
         self.event_seen = {}
+        self.script_tickets = {}
+        self.winenum_script = ''
         self.condition = threading.Condition()
         self.platforms = ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64',
                           'windows-amd64.exe', 'windows-arm64.exe']
@@ -103,6 +105,7 @@ class ConsoleService:
         self.invites = {k: v for k, v in self.invites.items() if v['expires'] > now}
         self.registrations = {k: v for k, v in self.registrations.items()
                               if v['expires'] > now}
+        self.script_tickets = {k: v for k, v in self.script_tickets.items() if v > now}
         keep = {}
         for ident, session in self.sessions.items():
             retention = self.SESSION_RETENTION if session['connected'] else self.CLOSED_RETENTION
@@ -259,6 +262,26 @@ class ConsoleService:
             self.proxy_address = proxy.address
         return proxy
 
+    def new_script_ticket(self):
+        with self.condition:
+            now = time.time()
+            self.script_tickets = {k: v for k, v in self.script_tickets.items() if v > now}
+            if len(self.script_tickets) >= 16:
+                self.script_tickets.pop(next(iter(self.script_tickets)), None)
+            ticket = secrets.token_urlsafe(24)
+            self.script_tickets[ticket] = now + 1800
+            return ticket
+
+    def valid_transfer_ticket(self, ticket):
+        if not ticket:
+            return False
+        with self.condition:
+            expires = self.script_tickets.get(ticket)
+            if not expires or expires < time.time():
+                self.script_tickets.pop(ticket, None)
+                return False
+            return True
+
     def callback_info(self, callback):
         session = self.sessions.get(callback['session'])
         return {'id': callback['id'], 'local': callback['local'],
@@ -396,6 +419,20 @@ class ConsoleService:
                 return True
             with self.condition:
                 self.prune()
+            if path == '/console/winenum/ticket' and handler.command == 'POST':
+                self.reply(handler, 200, {'ticket': self.new_script_ticket(),
+                                          'expires': time.time() + 1800})
+                return True
+            if path == '/console/winenum.ps1' and handler.command == 'GET':
+                ticket = urllib.parse.parse_qs(parsed.query).get('ticket', [''])[0]
+                if not self.valid_transfer_ticket(ticket):
+                    self.reply(handler, 401, {'error': 'Script link expired'})
+                    return True
+                body = self.winenum_script or '# winenum script unavailable'
+                handler._send(200, body, 'text/plain; charset=utf-8', (
+                    ('Cache-Control', 'no-store'), ('Referrer-Policy', 'no-referrer'),
+                    ('X-Content-Type-Options', 'nosniff')))
+                return True
             if path in ('/lin', '/mac', '/win') or path.startswith('/console/client/'):
                 self.bootstrap(handler, path, urllib.parse.parse_qs(parsed.query))
                 return True

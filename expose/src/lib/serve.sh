@@ -73,6 +73,11 @@ cat > "$_CONSOLE_PY" <<'CONSOLEPY'
 @@INJECT:assets/consoles.py@@
 CONSOLEPY
 
+_WINENUM_PS1=$(_mktmp /tmp/expose-winenum.XXXXXX)
+cat > "$_WINENUM_PS1" <<'WINENUMPS1'
+@@INJECT:assets/winenum.ps1@@
+WINENUMPS1
+
 _export_common() {
   export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND" EXPOSE_VERBOSE="$VERBOSE"
   export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
@@ -89,6 +94,7 @@ _export_common() {
   export EXPOSE_ME_HTML="$_ME_HTML"
   export EXPOSE_LOGO_SVG="$_LOGO_SVG"
   export EXPOSE_CONSOLES="$CONSOLES" EXPOSE_CONSOLE_MODULE="$_CONSOLE_PY"
+  export EXPOSE_WINENUM="$_WINENUM_PS1"
   export EXPOSE_PROXY="$PROXY"
   _CALLBACKS_LIST=""
   (( ${#CALLBACKS[@]} )) && _CALLBACKS_LIST=$(IFS=,; printf '%s' "${CALLBACKS[*]}")

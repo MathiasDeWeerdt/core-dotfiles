@@ -36,7 +36,7 @@ Injection markers (resolved by `build.sh` via `str.replace`, verbatim,
 no escaping needed):
 
 - `@@INJECT:assets/<path>@@` inside heredocs in `serve.sh` — embeds
-  `server.py`, `consoles.py`, `payloads.sh`, `web/upload.html`,
+  `server.py`, `consoles.py`, `winenum.ps1`, `payloads.sh`, `web/upload.html`,
   `web/me.html`, `web/logo.svg`, and `web/fp.js`
 - `@@CSS@@` / `@@JS@@` / `@@TERM_CSS@@` / `@@TERM_JS@@` / `@@FIT_JS@@` /
   `@@CONSOLE_JS@@` / `@@FPJS@@` inside `src/assets/web/upload.html` — inlines
@@ -85,14 +85,21 @@ dashboard with sidebar navigation and live overview), `POST /upload`
 `/chat`, plus `/content` outside directory mode. The request log is JSON,
 capped at 500 entries; chat is capped at 200 messages.
 
-`src/assets/consoles.py` holds the console relay and the SOCKS5 proxy.
-Console sessions long-poll `/console/agent/<id>/input`; proxy streams use
+`src/assets/consoles.py` holds the console relay, the SOCKS5 proxy, and the
+Windows enumeration ticket/upload bridge. Console sessions long-poll
+`/console/agent/<id>/input`; proxy streams use
 `/console/agent/<id>/net` plus per-stream `status`, `data`, and `close`
 endpoints. Inbound callbacks add `listen`/`unlisten` events, a connector
 `/callback/<id>/state` report, and `/net/<id>/inbound` for accepted connections.
 The Go connector (`src/connector/`) dials targets or accepts callback
 connections from the endpoint and pumps bytes over those HTTP endpoints. Keep
 per-session queues bounded.
+
+`winenum.ps1` is served at `/console/winenum.ps1?ticket=…`. The ticket comes
+from the authenticated `/console/winenum/ticket` route, lasts 30 minutes, and
+is also accepted by `POST /upload?ticket=…` so the endpoint can upload its
+report without a browser session. Keep ticket values out of logs; the logger
+redacts `ticket=…`.
 
 ### Reconnection
 

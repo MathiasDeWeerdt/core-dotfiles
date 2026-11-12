@@ -339,6 +339,45 @@ class AuthFeatures(unittest.TestCase):
             with response:
                 return response.code,response.headers,response.read()
 
+    def test_winenum_ticket_and_ticket_upload(self):
+        anon,_=self.opener()
+        req=urllib.request.Request(self.origin+'/console/winenum/ticket',data=b'',method='POST')
+        try:
+            anon.open(req,timeout=10)
+            self.fail('winenum ticket endpoint allowed anonymous access')
+        except urllib.error.HTTPError as response:
+            with response:
+                self.assertEqual(response.code,401)
+        auth,_=self.opener()
+        self.open(auth,'/login',{'password':'secret123'})
+        req=urllib.request.Request(self.origin+'/console/winenum/ticket',data=b'',method='POST')
+        with auth.open(req,timeout=10) as response:
+            ticket=json.loads(response.read())['ticket']
+        code,_,body=self.open(anon,'/console/winenum.ps1?ticket='+ticket)
+        self.assertEqual(code,200)
+        self.assertIn(b'expose winenum',body)
+        self.assertEqual(self.open(anon,'/console/winenum.ps1?ticket=bad')[0],401)
+        boundary='expose-winenum-boundary'
+        raw=(f'--{boundary}\r\nContent-Disposition: form-data; name="files"; '
+             'filename="recon.txt"\r\nContent-Type: text/plain\r\n\r\nreport\r\n'
+             f'--{boundary}--\r\n').encode()
+        headers={'Content-Type':'multipart/form-data; boundary='+boundary}
+        req=urllib.request.Request(self.origin+'/upload?ticket='+ticket,data=raw,headers=headers)
+        with anon.open(req,timeout=10) as response:
+            saved=json.loads(response.read())
+        self.assertEqual(saved['saved'],['recon.txt'])
+        self.assertEqual((self.home/'Downloads/expose/recon.txt').read_text(),'report')
+        req=urllib.request.Request(self.origin+'/upload',data=raw,headers=headers)
+        try:
+            anon.open(req,timeout=10)
+            self.fail('upload allowed anonymous access without a ticket')
+        except urllib.error.HTTPError as response:
+            with response:
+                self.assertEqual(response.code,401)
+        log=(self.home/'.expose/requests.json').read_text()
+        self.assertNotIn(ticket,log)
+        self.assertIn('ticket=%2A%2A%2A',log)
+
     def test_password_gate_and_connector_exemptions(self):
         anon,_=self.opener()
         code,headers,body=self.open(anon,'/',accept='text/html')
