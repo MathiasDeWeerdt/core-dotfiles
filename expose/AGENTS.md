@@ -117,8 +117,9 @@ Do not turn a network error into a session close.
 - `unique_hit()` deduplicates external hits for 60 seconds.
 - `event()` formats `time  ip  KIND  message`. Login, connector, SOCKS, and
   callback transitions use it.
-- Real client IPs come from `X-Forwarded-For`/`X-Real-IP` only when the peer is
-  loopback. Keep the JSON log's `peer` field for tunnel debugging.
+- Real client IPs come from `X-Real-IP`, then the last `X-Forwarded-For`
+  entry, only when the peer is loopback. Keep the JSON log's `peer` field for
+  tunnel debugging.
 
 ## Conventions
 

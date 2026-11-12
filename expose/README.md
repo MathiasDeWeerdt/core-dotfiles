@@ -302,8 +302,9 @@ The console is event-focused, not a request firehose:
 - The JSON request log still records external traffic for the Traffic view and
   includes `ip` (real) and `peer` (local tunnel address).
 
-Real IPs come from `X-Forwarded-For` or `X-Real-IP` only when the direct peer
-is loopback, which is the SSH tunnel. A direct LAN client cannot spoof them.
+Real IPs come from `X-Real-IP`, then the last `X-Forwarded-For` entry, only when
+the direct peer is loopback (the SSH tunnel). A direct LAN client cannot spoof
+them.
 
 ## Jump host (nginx)
 

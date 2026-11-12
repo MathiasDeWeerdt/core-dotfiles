@@ -339,8 +339,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def real_ip(self):
         peer = self.client_address[0]
         if peer in ('127.0.0.1', '::1'):
-            forwarded = self.headers.get('X-Forwarded-For', '').split(',')[0].strip()
-            return forwarded or self.headers.get('X-Real-IP', '').strip() or peer
+            real = self.headers.get('X-Real-IP', '').strip()
+            if real:
+                return real
+            forwarded = self.headers.get('X-Forwarded-For', '')
+            if forwarded.strip():
+                return forwarded.split(',')[-1].strip()
         return peer
 
     def _session_valid(self):
