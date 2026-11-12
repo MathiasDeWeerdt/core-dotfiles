@@ -36,6 +36,8 @@ class ConsoleService:
         self.event_seen = {}
         self.script_tickets = {}
         self.winenum_script = ''
+        self.toolrunner_script = ''
+        self.tools_dir = ''
         self.condition = threading.Condition()
         self.platforms = ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64',
                           'windows-amd64.exe', 'windows-arm64.exe']
@@ -269,7 +271,7 @@ class ConsoleService:
             if len(self.script_tickets) >= 16:
                 self.script_tickets.pop(next(iter(self.script_tickets)), None)
             ticket = secrets.token_urlsafe(24)
-            self.script_tickets[ticket] = now + 1800
+            self.script_tickets[ticket] = now + 3600
             return ticket
 
     def valid_transfer_ticket(self, ticket):
@@ -421,7 +423,7 @@ class ConsoleService:
                 self.prune()
             if path == '/console/winenum/ticket' and handler.command == 'POST':
                 self.reply(handler, 200, {'ticket': self.new_script_ticket(),
-                                          'expires': time.time() + 1800})
+                                          'expires': time.time() + 3600})
                 return True
             if path == '/console/winenum.ps1' and handler.command == 'GET':
                 ticket = urllib.parse.parse_qs(parsed.query).get('ticket', [''])[0]
@@ -429,6 +431,41 @@ class ConsoleService:
                     self.reply(handler, 401, {'error': 'Script link expired'})
                     return True
                 body = self.winenum_script or '# winenum script unavailable'
+                handler._send(200, body, 'text/plain; charset=utf-8', (
+                    ('Cache-Control', 'no-store'), ('Referrer-Policy', 'no-referrer'),
+                    ('X-Content-Type-Options', 'nosniff')))
+                return True
+            if path == '/console/tools' and handler.command == 'GET':
+                files = []
+                if self.tools_dir and os.path.isdir(self.tools_dir):
+                    for name in sorted(os.listdir(self.tools_dir)):
+                        target = os.path.join(self.tools_dir, name)
+                        if os.path.isfile(target):
+                            info = os.stat(target)
+                            files.append({'name': name, 'size': info.st_size,
+                                          'mtime': int(info.st_mtime)})
+                self.reply(handler, 200, {'tools': files})
+                return True
+            if path.startswith('/console/tool/') and handler.command == 'GET':
+                ticket = urllib.parse.parse_qs(parsed.query).get('ticket', [''])[0]
+                if not self.valid_transfer_ticket(ticket):
+                    self.reply(handler, 401, {'error': 'Tool link expired'})
+                    return True
+                name = os.path.basename(urllib.parse.unquote(path[len('/console/tool/'):]))
+                target = os.path.join(self.tools_dir, name)
+                if not self.tools_dir or not os.path.isfile(target):
+                    self.reply(handler, 404, {'error': 'Tool not staged'})
+                    return True
+                with open(target, 'rb') as tool_file:
+                    handler._send(200, tool_file.read(), 'application/octet-stream', (
+                        ('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff')))
+                return True
+            if path == '/console/toolrunner.ps1' and handler.command == 'GET':
+                ticket = urllib.parse.parse_qs(parsed.query).get('ticket', [''])[0]
+                if not self.valid_transfer_ticket(ticket):
+                    self.reply(handler, 401, {'error': 'Tool link expired'})
+                    return True
+                body = self.toolrunner_script or '# tool runner unavailable'
                 handler._send(200, body, 'text/plain; charset=utf-8', (
                     ('Cache-Control', 'no-store'), ('Referrer-Policy', 'no-referrer'),
                     ('X-Content-Type-Options', 'nosniff')))

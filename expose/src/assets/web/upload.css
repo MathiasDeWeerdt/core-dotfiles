@@ -185,6 +185,7 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .terminal-view #console-proxy { display: none; }
 .terminal-view #console-callbacks { display: none; }
 .terminal-view #windows-recon { display: none; }
+.terminal-view #windows-tools { display: none; }
 #console-callbacks { margin: 16px 0 24px; }
 #console-callbacks .section-head { margin-bottom: 8px; }
 #console-callbacks .rs-cfg { margin-bottom: 8px; }
@@ -193,6 +194,14 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .recon-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .recon-actions input { flex: 1; min-width: 180px; }
 .recon-cat { margin: 18px 0 6px; color: var(--fnt); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.recon-warning { color: var(--amb); font-size: 12px; margin: 8px 0 16px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--amb) 45%, var(--brd)); border-radius: var(--radius); background: color-mix(in srgb, var(--amb) 8%, transparent); }
+.tool-card { padding: 14px 0; border-bottom: 1px solid var(--brd); }
+.tool-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tool-head strong { font-size: 13px; }
+.tool-head .meta { color: var(--fnt); font: 11px var(--mono); }
+.tool-card p { margin: 6px 0 10px; }
+.tool-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tool-actions input[type=file] { max-width: 100%; color: var(--fnt); font-size: 12px; }
 .recon-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--brd); }
 .recon-row code { font-size: 12px; overflow-wrap: anywhere; }
 .recon-btns { display: flex; gap: 4px; }

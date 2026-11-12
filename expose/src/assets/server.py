@@ -164,6 +164,15 @@ try:
         consoles.winenum_script = winenum_file.read()
 except OSError:
     consoles.winenum_script = ''
+try:
+    with open(os.environ.get('EXPOSE_TOOLRUNNER', '')) as toolrunner_file:
+        consoles.toolrunner_script = toolrunner_file.read()
+except OSError:
+    consoles.toolrunner_script = ''
+tools_dir = os.environ.get('EXPOSE_TOOLS_DIR',
+                           os.path.join(os.path.expanduser('~'), '.local/share/expose/tools'))
+os.makedirs(tools_dir, exist_ok=True)
+consoles.tools_dir = tools_dir
 proxy_bind = os.environ.get('EXPOSE_PROXY', '').strip()
 if proxy_bind and console_enabled:
     try:
@@ -345,6 +354,44 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             length = 0
         return self.rfile.read(length) if length > 0 else b""
 
+    def _receive_tool(self, path):
+        name = os.path.basename(urllib.parse.unquote(path[len('/console/tools/'):]))
+        if (not re.fullmatch(r'[A-Za-z0-9._-]{1,120}', name)
+                or not name.lower().endswith(('.exe', '.ps1', '.bat', '.cmd', '.zip'))):
+            self.close_connection = True
+            self._send(400, json.dumps({'error': 'Unsupported tool filename'}), 'application/json')
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = -1
+        if not 0 < length <= 200 * 1024 * 1024:
+            self.close_connection = True
+            self._send(413, json.dumps({'error': 'Tool uploads are limited to 200 MB'}),
+                       'application/json')
+            return
+        temp = os.path.join(tools_dir, name + '.part')
+        remaining = length
+        try:
+            with open(temp, 'wb') as target:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        raise OSError('Upload truncated')
+                    target.write(chunk)
+                    remaining -= len(chunk)
+            os.replace(temp, os.path.join(tools_dir, name))
+        except OSError as error:
+            self.close_connection = True
+            try:
+                os.remove(temp)
+            except OSError:
+                pass
+            self._send(500, json.dumps({'error': str(error)}), 'application/json')
+            return
+        self._send(200, json.dumps({'ok': True, 'name': name, 'size': length}),
+                   'application/json')
+
     def _cookie_token(self):
         for part in self.headers.get('Cookie', '').split(';'):
             name, separator, value = part.strip().partition('=')
@@ -398,10 +445,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 or path == '/console/register'
                 or path.startswith('/console/agent/')
                 or path == '/console/winenum.ps1'
+                or path == '/console/toolrunner.ps1'
+                or path.startswith('/console/tool/')
                 or self.command == 'OPTIONS'):
             return True
         if self._session_valid():
             return True
+        self.close_connection = True
         if self.command == 'GET' and 'text/html' in self.headers.get('Accept', ''):
             self._send(401, login_page('', path), 'text/html; charset=utf-8', LOGIN_HEADERS)
         else:
@@ -691,6 +741,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if path == '/logout':
             self._handle_logout()
+            return
+        if path.startswith('/console/tools/') and path != '/console/tools':
+            if not self._authorized():
+                return
+            self._receive_tool(path)
             return
         ticket_upload = False
         if path == '/upload':

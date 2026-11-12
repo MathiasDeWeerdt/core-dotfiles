@@ -96,10 +96,14 @@ connections from the endpoint and pumps bytes over those HTTP endpoints. Keep
 per-session queues bounded.
 
 `winenum.ps1` is served at `/console/winenum.ps1?ticket=…`. The ticket comes
-from the authenticated `/console/winenum/ticket` route, lasts 30 minutes, and
-is also accepted by `POST /upload?ticket=…` so the endpoint can upload its
-report without a browser session. Keep ticket values out of logs; the logger
-redacts `ticket=…`.
+from the authenticated `/console/winenum/ticket` route, lasts one hour, and is
+also accepted by `POST /upload?ticket=…` so the endpoint can upload its report
+without a browser session. Third-party tools are staged by the operator in
+`EXPOSE_TOOLS_DIR` (default `~/.local/share/expose/tools`), listed at
+`GET /console/tools`, downloaded at `/console/tool/<name>?ticket=…`, and run by
+`toolrunner.ps1` (winPEAS, Seatbelt, PrivescCheck, SharpHound). Keep ticket
+values out of logs; the logger redacts `ticket=…`. Tool uploads bypass the
+64 KB console body cache and stream to disk.
 
 ### Reconnection
 
