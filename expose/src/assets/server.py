@@ -124,6 +124,17 @@ INTERNAL_PATHS = {'/log', '/log/clear', '/chat', '/upload/files', '/meta',
 def internal_path(path):
     return path in INTERNAL_PATHS or path.startswith('/console/')
 
+def redact_path(path):
+    parsed = urllib.parse.urlsplit(path)
+    if not parsed.query:
+        return path
+    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    if not any(key == 'ticket' for key, _ in pairs):
+        return path
+    pairs = [(key, '***' if key == 'ticket' else value) for key, value in pairs]
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
+                                    urllib.parse.urlencode(pairs), parsed.fragment))
+
 def event(kind, message, ip=''):
     sys.stderr.write(f"{datetime.datetime.now().strftime('%H:%M:%S')}  "
                      f"{ip:<15}  {kind:<9} {message}\n")
@@ -148,6 +159,11 @@ _httpd = None
 console_enabled = os.environ.get('EXPOSE_CONSOLES') == '1'
 ConsoleService = runpy.run_path(os.environ['EXPOSE_CONSOLE_MODULE'])['ConsoleService']
 consoles = ConsoleService(console_enabled, os.environ.get('EXPOSE_CLIENT_DIR', ''))
+try:
+    with open(os.environ.get('EXPOSE_WINENUM', '')) as winenum_file:
+        consoles.winenum_script = winenum_file.read()
+except OSError:
+    consoles.winenum_script = ''
 proxy_bind = os.environ.get('EXPOSE_PROXY', '').strip()
 if proxy_bind and console_enabled:
     try:
@@ -381,6 +397,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 or path.startswith('/console/client/')
                 or path == '/console/register'
                 or path.startswith('/console/agent/')
+                or path == '/console/winenum.ps1'
                 or self.command == 'OPTIONS'):
             return True
         if self._session_valid():
@@ -675,7 +692,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == '/logout':
             self._handle_logout()
             return
-        if not self._authorized():
+        ticket_upload = False
+        if path == '/upload':
+            ticket = urllib.parse.parse_qs(
+                urllib.parse.urlsplit(self.path).query).get('ticket', [''])[0]
+            ticket_upload = bool(ticket and consoles.valid_transfer_ticket(ticket))
+        if not ticket_upload and not self._authorized():
             return
         if consoles.handle(self):
             return
@@ -696,7 +718,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             sys.stderr.flush()
             sys.stderr.buffer.write(shown + b"\n")
             sys.stderr.buffer.flush()
-        if self.path == '/log/clear':
+        if path == '/log/clear':
             try:
                 with open(log_file, 'w') as f: json.dump([], f)
             except: pass
@@ -706,7 +728,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
-        elif self.path == "/upload":
+        elif path == "/upload":
             ct = self.headers.get("Content-Type", "")
             saved = parse_multipart(body, ct)
             result = json.dumps({"saved": saved, "count": len(saved)}).encode()
@@ -715,7 +737,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(result)))
             self.end_headers()
             self.wfile.write(result)
-        elif self.path == '/chat/upload':
+        elif path == '/chat/upload':
             fields = {}
             saved = parse_multipart(body, self.headers.get('Content-Type', ''), fields)
             attachments = [attachment_info(name) for name in saved]
@@ -723,7 +745,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._send(200, json.dumps({'ok': True, 'files': attachments}))
             else:
                 self._send(400, '{"error":"No message or attachments received"}')
-        elif self.path == '/chat':
+        elif path == '/chat':
             if body:
                 message = body.decode('utf-8', errors='replace').strip()
                 if _append_chat(message):
@@ -784,6 +806,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         now = datetime.datetime.now().strftime("%H:%M:%S")
         client_ip = self.real_ip()
         client_port = self.client_address[1]
+        display_path = redact_path(self.path or '')
         show = unique_hit(client_ip, self.command or "-", path, code)
 
         if show:
@@ -796,7 +819,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 SEP = f"  {DM}│{W}"
                 lines = []
                 lines.append(f"\n  {DM}┌─ #{request_number} ─────────────────────────────────────────────{W}")
-                lines.append(f"{SEP} {DM}{now}{W}  {BD}{self.command or '-'} {CY}{self.path or '-'}{W}  {cc}{code}{W}  {DM}{self.request_version}{W}")
+                lines.append(f"{SEP} {DM}{now}{W}  {BD}{self.command or '-'} {CY}{display_path}{W}  {cc}{code}{W}  {DM}{self.request_version}{W}")
                 client_str = f"{client_ip}:{client_port}"
                 if client_ip != self.client_address[0]:
                     client_str += f"  {DM}(via {self.client_address[0]}){W}"
@@ -837,7 +860,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 browser, os_name = parse_ua(ua)
                 label = " ".join(part for part in (browser, os_name) if part and part != "-")
-                event("HTTP", f"{self.command or '-'} {self.path or '-'} {code}"
+                event("HTTP", f"{self.command or '-'} {display_path or '-'} {code}"
                               + (f" · {label}" if label else ""), client_ip)
             sys.stderr.flush()
 
@@ -846,7 +869,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         _path_clean = (self.path or '').split('?')[0]
         if _path_clean not in _skip:
             entry = {"n": request_number, "ts": time.time(), "time": now,
-                     "method": self.command or "-", "path": self.path or "-",
+                     "method": self.command or "-", "path": display_path or "-",
                      "httpver": self.request_version or "-",
                      "ip": client_ip, "peer": self.client_address[0],
                      "port": client_port, "code": code, "ua": ua}
