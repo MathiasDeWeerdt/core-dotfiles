@@ -17,6 +17,8 @@ PAYLOAD=""
 COLLECT=0
 DELAY_MS=0
 CONSOLES=${EXPOSE_CONSOLES:-0}
+PROXY=${EXPOSE_PROXY:-}
+CALLBACKS=()
 _COLLECT_FILE=""
 _CLEANUP_DONE=""
 _TMPFILES=()
@@ -79,6 +81,10 @@ ${B}OPTIONS${R}
     -m, --more          Verbose logging (all headers, reverse DNS, parsed UA)
     --catch             Request catcher (dump full headers + body)
     --console           Enable browser terminals (automatic with expose-online)
+    --proxy ${CYN}[addr]${R}       SOCKS5 proxy to the connected machine's network
+                        (default: 127.0.0.1:1080; implies --console)
+    --callback ${CYN}<local[:remote]>${R}  Forward an endpoint listener back to a
+                        local port (repeatable; implies --console)
     --code ${CYN}<N>${R}           HTTP status code for responses (default: 200)
     --header ${CYN}"K: V"${R}     Add response header (repeatable)
     --cors              Add CORS headers (Access-Control-Allow-Origin: *)
@@ -121,6 +127,14 @@ while [[ $# -gt 0 ]]; do
     -f|--file)   [[ -n "${2:-}" ]] || die "Missing filename after $1"; MODE="file"; TARGET="$2"; shift 2 ;;
     --catch)     CATCH=1; shift ;;
     --console)   CONSOLES=1; shift ;;
+    --proxy)
+      PROXY="127.0.0.1:1080"
+      if [[ -n "${2:-}" ]]; then
+        case "$2" in *:*|[0-9]*) PROXY="$2"; shift ;; esac
+      fi
+      shift ;;
+    --callback)  [[ -n "${2:-}" ]] || die "Missing port after $1"
+                 CALLBACKS+=("$2"); shift 2 ;;
     --bind)      [[ -n "${2:-}" ]] || die "Missing address after $1"; BIND="$2"; shift 2 ;;
     --code)      [[ -n "${2:-}" ]] || die "Missing status code after $1"; RESP_CODE="$2"; shift 2 ;;
     --header)    [[ -n "${2:-}" ]] || die "Missing header after $1"; RESP_HEADERS+=("$2"); shift 2 ;;
@@ -140,6 +154,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Normalise the proxy listener address
+if [[ -n "$PROXY" ]]; then
+  [[ "$PROXY" =~ ^[0-9]+$ ]] && PROXY="127.0.0.1:$PROXY"
+  [[ "$PROXY" == :* ]] && PROXY="127.0.0.1$PROXY"
+fi
+
 # Handle stdin mode
 if [[ "$MODE" == "stdin" ]]; then
   TARGET=$(cat)
@@ -153,6 +173,8 @@ fi
 # Collect mode: force verbose, default to catch mode if no other mode
 [[ $COLLECT -eq 1 ]] && VERBOSE=1
 [[ $COLLECT -eq 1 && -z "$MODE" ]] && MODE="catch"
+[[ -n "$PROXY" ]] && CONSOLES=1
+(( ${#CALLBACKS[@]} )) && CONSOLES=1
 [[ $CONSOLES -eq 1 && -z "$MODE" ]] && MODE="catch"
 
 [[ -n "$MODE" ]] || { usage; exit 1; }
@@ -167,6 +189,19 @@ if [[ $CONSOLES -eq 1 ]]; then
   python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
     || die "Browser consoles require Python 3.11 or newer"
 fi
+if [[ -n "$PROXY" ]]; then
+  [[ "$PROXY" =~ ^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]*)?:[0-9]+$ || "$PROXY" =~ ^[0-9]+$ ]] \
+    || die "Invalid proxy address: $PROXY (use host:port)"
+fi
+for _callback in "${CALLBACKS[@]}"; do
+  [[ "$_callback" =~ ^[0-9]+(:[0-9]+)?$ ]] \
+    || die "Invalid callback: $_callback (use local[:remote])"
+  _local=${_callback%%:*}
+  _remote=${_callback#*:}
+  [[ "$_callback" == *:* ]] || _remote=$_local
+  (( _local >= 1 && _local <= 65535 && _remote >= 1 && _remote <= 65535 )) \
+    || die "Invalid callback port: $_callback"
+done
 [[ -n "$RESP_CODE" ]] && { [[ "$RESP_CODE" =~ ^[0-9]+$ ]] && (( RESP_CODE >= 100 && RESP_CODE <= 599 )) \
   || die "Invalid status code: $RESP_CODE (must be 100–599)"; }
 if (( ${#RESP_HEADERS[@]} )); then
@@ -240,6 +275,9 @@ if [[ "${EXPOSE_NO_BANNER:-0}" != "1" ]]; then
   ${BLU}Me${R}       ${U}${_SCHEME}://${LOCAL_IP}:${PORT}/me${R}$(
     [[ $VERBOSE -eq 1 ]]            && printf '\n  %sVerbose%s  %senabled  (--more)%s'       "$YLW" "$R" "$D" "$R"
     [[ $CONSOLES -eq 1 ]]          && printf '\n  %sConsole%s  %senabled  (--console)%s'    "$YLW" "$R" "$D" "$R"
+    [[ -n "$PROXY" ]]               && printf '\n  %sProxy%s    %ssocks5://%s%s'                "$YLW" "$R" "$D" "$PROXY" "$R"
+    (( ${#CALLBACKS[@]} ))          && printf '\n  %sCallback%s %s%d configured%s'             "$YLW" "$R" "$D" "${#CALLBACKS[@]}" "$R"
+    [[ -n "${EXPOSE_AUTH_PASSWORD:-}" ]] && printf '\n  %sAuth%s      %spassword required%s'   "$YLW" "$R" "$D" "$R"
     [[ $CATCH -eq 1 ]]              && printf '\n  %sCatch%s    %senabled  (--catch)%s'      "$YLW" "$R" "$D" "$R"
     [[ "$BIND" != "0.0.0.0" ]]      && printf '\n  %sBind%s     %s%s%s'                       "$YLW" "$R" "$D" "$BIND" "$R"
     [[ -n "$RESP_CODE" ]]           && printf '\n  %sCode%s     %s%s%s'                       "$YLW" "$R" "$D" "$RESP_CODE" "$R"
@@ -313,16 +351,18 @@ cat > "$_UPLOAD_HTML" << 'UPLOADHTML'
 <style>/* expose: one workspace, one active tool. */
 :root {
   color-scheme: dark;
-  --bg: #151917; --srf: #191e1b; --srf2: #202722; --srf3: #29322c;
-  --brd: #303a33; --brd2: #4f5d53; --txt: #edf0eb; --dim: #b3bdb5; --fnt: #97a49a;
-  --acc: #9ac8a8; --acc2: #9ac8a8; --accsoft: #26392c; --on-acc: #17291e;
-  --red: #ffaaa2; --amb: #e5c17f; --blu: #a1bdde; --vio: #c7b5d8;
+  --bg: #161616; --srf: #202020; --srf2: #292929; --srf3: #333333;
+  --chrome: #1c1c1c; --field: #1c1c1c;
+  --brd: #383838; --brd2: #777777; --txt: #ededed; --dim: #bdbdbd; --fnt: #a3a3a3;
+  --acc: #94baff; --acc2: #2563eb; --accsoft: #243247; --on-acc: #ffffff;
+  --red: #ff9b96; --amb: #e9c46a; --blu: #94baff; --vio: #c4b5fd;
   --sans: 'Aptos', 'Noto Sans', 'Segoe UI', sans-serif;
   --mono: 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
   --shell-top: 64px; --radius: 6px;
 }
 :root[data-theme="light"] {
   color-scheme: light;
+    --chrome: var(--bg); --field: var(--bg);
   --bg: #fafbf8; --srf: #f2f5ef; --srf2: #eaf0e7; --srf3: #e0e7dd;
   --brd: #dce3d8; --brd2: #a4b1a4; --txt: #202b23; --dim: #526254; --fnt: #627164;
   --acc: #356847; --acc2: #356847; --accsoft: #e4eee3; --on-acc: #fafbf8;
@@ -331,6 +371,7 @@ cat > "$_UPLOAD_HTML" << 'UPLOADHTML'
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
+    --chrome: var(--bg); --field: var(--bg);
     --bg: #fafbf8; --srf: #f2f5ef; --srf2: #eaf0e7; --srf3: #e0e7dd;
     --brd: #dce3d8; --brd2: #a4b1a4; --txt: #202b23; --dim: #526254; --fnt: #627164;
     --acc: #356847; --acc2: #356847; --accsoft: #e4eee3; --on-acc: #fafbf8;
@@ -345,7 +386,7 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 button, input { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: 0; }
 button:disabled { opacity: .5; cursor: not-allowed; }
-input { background: var(--bg); border: 1px solid var(--brd2); border-radius: var(--radius); padding: 9px 12px; min-width: 0; }
+input { background: var(--field); border: 1px solid var(--brd2); border-radius: var(--radius); padding: 9px 12px; min-width: 0; }
 input::placeholder { color: var(--fnt); }
 :focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
 ::selection { background: var(--accsoft); color: var(--txt); }
@@ -355,17 +396,17 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .skip-link:focus { top: 8px; }
 .btn, .iconbtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid transparent; border-radius: var(--radius); min-height: 40px; padding: 8px 14px; font-weight: 600; font-size: 13px; white-space: nowrap; transition: background .15s; }
 .btn:hover, .iconbtn:hover { text-decoration: none; background: var(--srf2); }
-.btn.primary { background: var(--acc); color: var(--on-acc); }
+.btn.primary { background: var(--acc2); color: var(--on-acc); }
 .btn.primary:hover { filter: brightness(.93); }
 .btn.ghost { border-color: var(--brd); color: var(--dim); }
 .btn.sm { min-height: 36px; padding: 6px 10px; }
 .iconbtn { width: 36px; min-height: 36px; padding: 8px; color: var(--dim); }
 .iconbtn.dgr:hover { color: var(--red); }
 .btn svg, .iconbtn svg, .ic, .drop-ic { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.top { height: var(--shell-top); position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 20px; padding: 0 28px; border-bottom: 1px solid var(--brd); background: var(--bg); }
+.top { height: var(--shell-top); position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 20px; padding: 0 28px; border-bottom: 1px solid var(--brd); background: var(--chrome); }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--txt); }
 .brand:hover { text-decoration: none; }
-.logo { display: flex; color: var(--acc); }
+.logo { display: flex; color: var(--txt); }
 .logo svg { width: 28px; height: 25px; }
 .word { font-size: 19px; font-weight: 650; letter-spacing: -.6px; }
 .connection { font-size: 12px; color: var(--fnt); display: flex; align-items: center; gap: 7px; }
@@ -373,6 +414,7 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .connection.offline { color: var(--amb); }
 .connection.offline::before { background: var(--amb); }
 .top-spacer { flex: 1; }
+.top form { display: flex; margin: 0; }
 .app-shell { display: flex; min-height: calc(100dvh - var(--shell-top)); }
 .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--radius); color: var(--dim); }
 .nav-item:hover { background: var(--srf); text-decoration: none; }
@@ -427,7 +469,7 @@ h2 { font-size: 16px; line-height: 1.4; font-weight: 600; }
 .os-pills { display: flex; gap: 4px; border-bottom: 1px solid var(--brd); margin-bottom: 28px; }.os-pill { padding: 10px 16px; color: var(--dim); border-bottom: 2px solid transparent; }.os-pill.active { color: var(--acc); border-color: var(--acc); }.os-pill:hover { background: var(--srf); }
 .cmd-g { margin-bottom: 32px; }.cmd-g h2 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--dim); }
 .cmd { display: grid; grid-template-columns: 128px minmax(0,1fr) 36px; align-items: start; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--brd); }.cmd-t { font-size: 12px; color: var(--dim); padding-top: 8px; }.cmd-c { font: 12px/1.8 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 12px; border-radius: 4px; background: var(--srf); }.cmd-best { display: block; color: var(--acc); font-size: 10px; }.rs-cfg { display: flex; gap: 16px; margin-bottom: 32px; }.rs-cfg label { display: flex; flex-direction: column; gap: 6px; color: var(--dim); font-size: 12px; }.rs-in { width: 220px; }#rs-port { width: 100px; }
-.chat-panel { border: 1px solid var(--brd); border-radius: var(--radius); overflow: hidden; }.chat-body { height: min(50dvh,480px); overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }.cm { display: flex; align-items: baseline; gap: 16px; cursor: pointer; }.cm:hover { color: var(--acc); }.ct { font: 11px var(--mono); color: var(--fnt); }.cx { overflow-wrap: anywhere; min-width: 0; }.chat-bar { padding: 16px; border-top: 1px solid var(--brd); display: flex; gap: 12px; }.chat-bar input { flex: 1; }.chat-status:not(:empty) { padding: 0 16px 16px; color: var(--red); }
+.chat-panel { background: var(--srf); border: 1px solid var(--brd); border-radius: var(--radius); overflow: hidden; }.chat-body { height: min(50dvh,480px); overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }.cm { display: flex; align-items: baseline; gap: 16px; cursor: pointer; }.cm:hover { color: var(--acc); }.ct { font: 11px var(--mono); color: var(--fnt); }.cx { overflow-wrap: anywhere; min-width: 0; }.chat-bar { padding: 16px; border-top: 1px solid var(--brd); display: flex; gap: 12px; }.chat-bar input { flex: 1; }.chat-status:not(:empty) { padding: 0 16px 16px; color: var(--red); }
 .log-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }.live { display: block; }.live.paused { background: var(--amb); }.count { color: var(--dim); font: 12px var(--mono); }.count:empty { display: none; }.log-search { flex: 1; min-width: 180px; }.log-acts { display: flex; align-items: center; gap: 6px; }.log-acts .active { color: var(--acc); border-color: var(--acc); }
 .log-columns, .le { display: grid; grid-template-columns: 28px 64px 56px minmax(80px,1fr) 48px 100px 100px; gap: 12px; align-items: center; }.log-columns { color: var(--fnt); font-size: 11px; padding: 0 8px 12px; border-bottom: 1px solid var(--brd); }.log-body { max-height: 62dvh; overflow-y: auto; }.le { font: 11px/1.6 var(--mono); padding: 12px 8px; cursor: pointer; border-bottom: 1px solid var(--brd); }.le:hover, .le.expanded { background: var(--srf); }.le-n, .le-time, .le-ip, .le-ua { color: var(--fnt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.le-path { display: flex; gap: 6px; min-width: 0; }.le-p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.le-m { font-weight: 600; }.le-code.c2 { color: var(--acc); }.le-code.c3 { color: var(--blu); }.le-code.c4 { color: var(--amb); }.le-code.c5 { color: var(--red); }.le-hl { background: var(--accsoft); color: var(--txt); }.le-flag { color: var(--red); font-size: 9px; }
 .le-detail { display: none; padding: 20px; background: var(--srf); }.le-detail.open { display: block; }.ld-grid { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 6px 20px; font: 12px/1.7 var(--mono); margin-bottom: 16px; }.dk { color: var(--fnt); }.dv { overflow-wrap: anywhere; }.dbody-pre, .dcurl { font: 12px/1.7 var(--mono); padding: 16px; background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 4px; margin-top: 12px; max-height: 240px; overflow: auto; }.dcurl { display: flex; gap: 16px; }.dcurl code { flex: 1; min-width: 0; font-size: inherit; }
@@ -451,10 +493,10 @@ h2 { font-size: 16px; line-height: 1.4; font-weight: 600; }
 
 /* Top-level navigation and rich chat */
 .app-shell { min-height: calc(100dvh - 112px); }
-.top-nav { display: flex; justify-content: center; gap: 8px; padding: 8px 24px; overflow-x: auto; border-bottom: 1px solid var(--brd); background: var(--bg); position: sticky; top: var(--shell-top); z-index: 35; }
+.top-nav { display: flex; justify-content: center; gap: 8px; padding: 8px 24px; overflow-x: auto; border-bottom: 1px solid var(--brd); background: var(--chrome); position: sticky; top: var(--shell-top); z-index: 35; }
 .top-nav .nav-item { flex: none; padding: 8px 14px; white-space: nowrap; }
 .view-section { scroll-margin-top: calc(var(--shell-top) + 80px); }
-textarea { font: inherit; color: var(--txt); background: var(--bg); border: 1px solid var(--brd2); border-radius: var(--radius); padding: 12px; resize: vertical; min-height: 76px; width: 100%; }
+textarea { font: inherit; color: var(--txt); background: var(--field); border: 1px solid var(--brd2); border-radius: var(--radius); padding: 12px; resize: vertical; min-height: 76px; width: 100%; }
 .chat-body { height: clamp(180px, calc(100dvh - 440px), 560px); gap: 24px; }
 .cm { display: block; padding-bottom: 24px; border-bottom: 1px solid var(--brd); cursor: auto; }
 .cm:last-child { border-bottom: 0; padding-bottom: 0; }.cm:hover { color: inherit; }
@@ -476,7 +518,7 @@ textarea { font: inherit; color: var(--txt); background: var(--bg); border: 1px 
 .console-connect { padding-bottom: 28px; border-bottom: 1px solid var(--brd); margin-bottom: 32px; }.console-connect .os-pills { margin-bottom: 16px; }
 .connect-command { display: flex; align-items: center; gap: 16px; padding: 16px; margin: 12px 0; background: var(--srf); border-radius: var(--radius); }.connect-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .console-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }.console-tabs .selected { border-color: var(--acc); color: var(--acc); }
-.browser-terminal { background: #111713; padding: 12px; height: 480px; border-radius: var(--radius); overflow: hidden; }.browser-terminal .xterm { height: 100%; }
+.browser-terminal { background: #181818; padding: 12px; height: 480px; border-radius: var(--radius); overflow: hidden; }.browser-terminal .xterm { height: 100%; }
 #console-terminal-info { margin-top: 12px; }.console-error { color: var(--red); margin: 16px 0; overflow-wrap: anywhere; }.console-error:empty { display: none; }
 .legacy-shells { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--brd); }.legacy-shells>summary { cursor: pointer; color: var(--dim); margin-bottom: 20px; }.legacy-shells>.hint { margin-bottom: 20px; }
 @media(max-width:600px) { .connect-command { flex-direction: column; align-items: stretch; }.console-connect .section-head { flex-wrap: wrap; }#console-unlock { flex-wrap: wrap; }#console-unlock label { min-width: 100%; }.browser-terminal { height: 420px; padding: 8px; } }
@@ -490,6 +532,11 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .terminal-view #shells > .page-head, .terminal-view .console-connect,
 .terminal-view .console-workspace > .section-head, .terminal-view .console-tabs,
 .terminal-view .legacy-shells, .terminal-view #console-terminal-info { display: none; }
+.terminal-view #console-proxy { display: none; }
+.terminal-view #console-callbacks { display: none; }
+#console-callbacks { margin: 16px 0 24px; }
+#console-callbacks .section-head { margin-bottom: 8px; }
+#console-callbacks .rs-cfg { margin-bottom: 8px; }
 .terminal-view .app-shell { height: 100%; min-height: 0; }
 .terminal-view .workspace { max-width: none; height: 100%; padding: 0; }
 .terminal-view #shells { height: 100%; display: flex; flex-direction: column; }
@@ -805,6 +852,7 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
   <span class="connection" id="connection" role="status">Connecting…</span>
   <div class="top-spacer"></div>
   <button class="btn ghost sm" id="copy-url" title="Copy session URL"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Copy link</button>
+  <form method="post" action="/logout"><button class="btn ghost sm" type="submit">Log out</button></form>
   <button class="iconbtn" id="theme-toggle" aria-label="Change theme" title="Theme: auto (system)"><svg viewBox="0 0 24 24" id="theme-ic"></svg></button>
 </header>
 <nav class="top-nav" aria-label="Main navigation">
@@ -859,7 +907,7 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
           <p class="hint">Uses this page’s address. The other machine must be able to reach it. Runs as your current user; no service is installed.</p>
         </section>
         <div class="terminal-tab-bar"><a class="btn ghost sm" href="/#shells">Back to consoles</a><strong id="terminal-tab-title">Terminal</strong><span class="hint" id="terminal-tab-status">Connecting…</span></div>
-        <section class="console-workspace"><div class="section-head"><h2>Connected machines</h2><div class="console-actions"><button class="btn ghost sm" id="console-popout" disabled>Open terminal in new tab</button><button class="btn ghost sm" id="console-disconnect" disabled>Disconnect selected</button><button class="btn ghost sm" id="console-remove" title="Disconnect this machine and delete its session and terminal history" disabled>Remove selected</button></div></div><div class="console-tabs" id="console-sessions" aria-label="Connected machines"></div><p class="empty-line" id="console-empty">Waiting for a connection. Run the command above on your test machine.</p><div class="browser-terminal" id="browser-terminal" hidden></div><p class="hint" id="console-terminal-info">Ctrl+C interrupts the remote command. Type exit to end the shell.</p></section>
+        <section class="console-workspace"><div class="section-head"><h2>Connected machines</h2><div class="console-actions"><button class="btn ghost sm" id="console-popout" disabled>Open terminal in new tab</button><button class="btn ghost sm" id="console-disconnect" disabled>Disconnect selected</button><button class="btn ghost sm" id="console-remove" title="Disconnect this machine and delete its session and terminal history" disabled>Remove selected</button></div></div><div class="console-tabs" id="console-sessions" aria-label="Connected machines"></div><div id="console-proxy" hidden><div class="connect-command"><span class="hint">Network proxy</span><code id="console-proxy-address"></code><span class="hint" id="console-proxy-target"></span><button class="btn ghost sm" id="console-proxy-use" disabled>Use selected machine</button></div><p class="hint">Run proxychains4 or any SOCKS5 client on this host. Traffic exits from the selected machine’s network.</p></div><div id="console-callbacks" hidden><div class="section-head"><h2>Inbound callbacks</h2></div><p class="hint">Listen on the connected machine and forward connections to a service on this host.</p><div class="rs-cfg"><label>Local port <input class="rs-in" id="callback-local" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><label>Endpoint port <input class="rs-in" id="callback-remote" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="4444"></label><button class="btn ghost sm" id="callback-add">Add callback</button></div><div id="callback-list"></div></div><p class="empty-line" id="console-empty">Waiting for a connection. Run the command above on your test machine.</p><div class="browser-terminal" id="browser-terminal" hidden></div><p class="hint" id="console-terminal-info">Ctrl+C interrupts the remote command. Type exit to end the shell.</p></section>
       </div>
       <p id="console-error" class="console-error" role="status"></p>
       <details class="legacy-shells"><summary>Raw TCP connection commands</summary><p class="hint">For direct network tests. These require a separate TCP listener and reachable port.</p>
@@ -897,6 +945,13 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 //# sourceMappingURL=xterm.js.map</script><script>!function(e,t){"object"==typeof exports&&"object"==typeof module?module.exports=t():"function"==typeof define&&define.amd?define([],t):"object"==typeof exports?exports.FitAddon=t():e.FitAddon=t()}(globalThis,(()=>(()=>{"use strict";var e={};return(()=>{var t=e;Object.defineProperty(t,"__esModule",{value:!0}),t.FitAddon=void 0,t.FitAddon=class{activate(e){this._terminal=e}dispose(){}fit(){const e=this.proposeDimensions();if(!e||!this._terminal||isNaN(e.cols)||isNaN(e.rows))return;const t=this._terminal._core;this._terminal.rows===e.rows&&this._terminal.cols===e.cols||(t._renderService.clear(),this._terminal.resize(e.cols,e.rows))}proposeDimensions(){if(!this._terminal)return;if(!this._terminal.element||!this._terminal.element.parentElement)return;const e=this._terminal._core._renderService.dimensions;if(0===e.css.cell.width||0===e.css.cell.height)return;const t=0===this._terminal.options.scrollback?0:this._terminal.options.overviewRuler?.width||14,r=window.getComputedStyle(this._terminal.element.parentElement),i=parseInt(r.getPropertyValue("height")),o=Math.max(0,parseInt(r.getPropertyValue("width"))),s=window.getComputedStyle(this._terminal.element),n=i-(parseInt(s.getPropertyValue("padding-top"))+parseInt(s.getPropertyValue("padding-bottom"))),l=o-(parseInt(s.getPropertyValue("padding-right"))+parseInt(s.getPropertyValue("padding-left")))-t;return{cols:Math.max(2,Math.floor(l/e.css.cell.width)),rows:Math.max(1,Math.floor(n/e.css.cell.height))}}}})(),e})()));
 //# sourceMappingURL=addon-fit.js.map</script><script>'use strict';
 /* expose — web UI */
+
+// Expired session: return to the login page instead of showing API errors.
+const _exposeFetch=window.fetch.bind(window);
+window.fetch=(...args)=>_exposeFetch(...args).then(response=>{
+  if(response.status===401&&!location.pathname.startsWith('/login'))location.href='/login';
+  return response;
+});
 
 // ── utils ─────────────────────────────────────────────────
 const q=id=>document.getElementById(id);
@@ -1680,7 +1735,7 @@ loadDisk();
 </script><script>/* Browser terminal control with single-use connector enrollment. */
 (function(){
   let enabled=false,ticket='',expires=0,platform='win',selected='',terminal=null,fit=null,cursor=0,generation=0,polling=false;
-  let inputQueue=Promise.resolve(),sessions=[],available=[];
+  let inputQueue=Promise.resolve(),sessions=[],available=[],proxy=null,callbacks=[];
   const error=q('console-error'),container=q('browser-terminal');
   const terminalSession=new URLSearchParams(location.search).get('terminal');
   if(terminalSession){document.body.classList.add('terminal-view');showView('shells')}
@@ -1699,13 +1754,13 @@ loadDisk();
     try{const result=await api('invites','POST',{origin:location.origin});ticket=result.ticket;expires=result.expires*1000;renderCommand();q('console-invite-info').textContent='Single use · expires in 10 minutes. Paste into '+(platform==='win'?'PowerShell.':'a terminal.');notice('')}
     catch(e){notice(e.message)}
   }
-  function dispose(){generation++;selected='';cursor=0;if(terminal)terminal.dispose();terminal=null;fit=null;container.replaceChildren();container.hidden=true;q('console-disconnect').disabled=true;q('console-remove').disabled=true;q('console-popout').disabled=true}
+  function dispose(){generation++;selected='';cursor=0;if(terminal)terminal.dispose();terminal=null;fit=null;container.replaceChildren();container.hidden=true;q('console-disconnect').disabled=true;q('console-remove').disabled=true;q('console-popout').disabled=true;renderProxy()}
   async function command(action,value){if(!selected||!enabled)return;await api('sessions/'+selected+'/'+action,'POST',value)}
   function fitTerminal(){if(fit&&!q('shells').hidden&&container.clientWidth){fit.fit()}}
   async function selectSession(id){
     if(selected===id)return;dispose();selected=id;cursor=0;
     container.hidden=false;q('console-empty').hidden=true;
-    terminal=new Terminal({cursorBlink:true,fontFamily:'Cascadia Code, Consolas, monospace',fontSize:14,scrollback:5000,allowProposedApi:false,theme:{background:'#111713',foreground:'#e7eee8',cursor:'#a3cfb0'},screenReaderMode:true});
+    terminal=new Terminal({cursorBlink:true,fontFamily:'Cascadia Code, Consolas, monospace',fontSize:14,scrollback:5000,allowProposedApi:false,theme:{background:'#181818',foreground:'#e5e5e5',cursor:'#d4d4d4',selectionBackground:'#334155'},screenReaderMode:true});
     fit=new FitAddon.FitAddon();terminal.loadAddon(fit);terminal.open(container);fit.fit();
     q('console-disconnect').disabled=false;q('console-remove').disabled=false;q('console-popout').disabled=false;
     const thisGeneration=generation,sessionID=id;
@@ -1728,20 +1783,48 @@ loadDisk();
   }
   function renderSessions(){
     q('console-sessions').replaceChildren();
-    sessions.forEach(session=>{const button=document.createElement('button');button.className='btn ghost sm'+(session.id===selected?' selected':'');button.textContent=session.host+' · '+session.os+' / '+session.arch+(session.connected?'':' · ended');button.setAttribute('aria-pressed',String(session.id===selected));button.addEventListener('click',()=>selectSession(session.id));q('console-sessions').appendChild(button)});
+    sessions.forEach(session=>{const button=document.createElement('button');button.className='btn ghost sm'+(session.id===selected?' selected':'');button.textContent=session.host+' · '+session.os+' / '+session.arch+(session.connected?(session.stale?' · away':''):' · ended');button.setAttribute('aria-pressed',String(session.id===selected));button.addEventListener('click',()=>selectSession(session.id));q('console-sessions').appendChild(button)});
     q('console-empty').hidden=!!selected||sessions.length>0;
+    renderProxy();
+    renderCallbacks();
   }
+  function renderProxy(){
+    const box=q('console-proxy');
+    if(!proxy||!proxy.enabled){box.hidden=true;return}
+    box.hidden=false;
+    q('console-proxy-address').textContent=proxy.address;
+    q('console-proxy-target').textContent=proxy.session?'→ '+proxy.session.host:'→ waiting for a machine';
+    q('console-proxy-use').disabled=!selected||(proxy.session&&proxy.session.id===selected);
+  }
+  function renderCallbacks(){
+    const box=q('console-callbacks');
+    box.hidden=!enabled;
+    if(!enabled)return;
+    const list=q('callback-list');list.replaceChildren();
+    if(!callbacks.length){const empty=document.createElement('p');empty.className='empty-line';empty.textContent='No callbacks. Add a local port to receive connections from the connected machine.';list.appendChild(empty);return}
+    callbacks.forEach(callback=>{
+      const row=document.createElement('div');row.className='mini-row';
+      const target=callback.address||('endpoint:'+callback.remote);
+      const label=document.createElement('span');label.className='grow';label.textContent=target+' → 127.0.0.1:'+callback.local;
+      const meta=document.createElement('span');meta.className='meta';meta.textContent=callback.active?'listening':(callback.error||'waiting');
+      const remove=document.createElement('button');remove.className='btn ghost sm';remove.textContent='Remove';
+      remove.addEventListener('click',()=>removeCallback(callback.id));
+      row.append(label,meta,remove);list.appendChild(row);
+    });
+  }
+  async function removeCallback(id){try{await api('callbacks/'+id+'/remove','POST',{});await refresh();notice('')}catch(e){notice(e.message)}}
   async function refresh(){
     if(!enabled||polling)return;polling=true;
     try{
-      sessions=await api('sessions');
+      const [list,info,callbackInfo]=await Promise.all([api('sessions'),api('proxy'),api('callbacks')]);
+      sessions=list;proxy=info;callbacks=callbackInfo.callbacks||[];
       if(selected&&!sessions.some(s=>s.id===selected))dispose();
-      renderSessions();q('console-status').textContent=sessions.some(s=>s.connected)?'Connected':'Listening';
+      renderSessions();q('console-status').textContent=sessions.some(s=>s.connected&&!s.stale)?'Connected':sessions.some(s=>s.connected)?'Away':'Listening';
       if(terminalSession){
         const session=sessions.find(s=>s.id===terminalSession);
         q('terminal-tab-title').textContent=session?session.host+' · '+session.os:'Terminal';
         document.title=(session?session.host:'Terminal')+' · expose';
-        q('terminal-tab-status').textContent=session?(session.connected?'Connected':'Ended'):'Removed';
+        q('terminal-tab-status').textContent=session?(session.connected?(session.stale?'Away':'Connected'):'Ended'):'Removed';
         if(session&&!selected)selectSession(session.id);
         if(!session){q('console-empty').hidden=false;q('console-empty').textContent='This machine is no longer available. Return to consoles to connect a machine.'}
       }else if(!selected&&sessions.some(s=>s.connected)&&!q('shells').hidden)selectSession(sessions.find(s=>s.connected).id);
@@ -1766,6 +1849,17 @@ loadDisk();
       if(selected===id)dispose();
       sessions=sessions.filter(session=>session.id!==id);renderSessions();notice('');refresh();
     }catch(e){q('console-remove').disabled=!selected;notice(e.message)}
+  });
+  q('console-proxy-use').addEventListener('click',async()=>{
+    if(!selected)return;
+    try{proxy=await api('proxy','POST',{session:selected});renderProxy();notice(proxy.session?'Network proxy now uses '+proxy.session.host:'Network proxy has no selected machine')}
+    catch(e){notice(e.message)}
+  });
+  q('callback-add').addEventListener('click',async()=>{
+    const local=parseInt(q('callback-local').value,10),remote=parseInt(q('callback-remote').value,10)||local;
+    if(!local){notice('Enter a local port');return}
+    try{const callback=await api('callbacks','POST',{local,remote});q('callback-local').value='';q('callback-remote').value='';await refresh();notice('Callback '+callback.remote+' → 127.0.0.1:'+callback.local)}
+    catch(e){notice(e.message)}
   });
   new ResizeObserver(fitTerminal).observe(container);
   window.addEventListener('hashchange',()=>{if(!q('shells').hidden){fitTerminal();refresh()}});
@@ -2035,16 +2129,18 @@ cat > "$_ME_HTML" << 'MEHTML'
 <style>/* expose: one workspace, one active tool. */
 :root {
   color-scheme: dark;
-  --bg: #151917; --srf: #191e1b; --srf2: #202722; --srf3: #29322c;
-  --brd: #303a33; --brd2: #4f5d53; --txt: #edf0eb; --dim: #b3bdb5; --fnt: #97a49a;
-  --acc: #9ac8a8; --acc2: #9ac8a8; --accsoft: #26392c; --on-acc: #17291e;
-  --red: #ffaaa2; --amb: #e5c17f; --blu: #a1bdde; --vio: #c7b5d8;
+  --bg: #161616; --srf: #202020; --srf2: #292929; --srf3: #333333;
+  --chrome: #1c1c1c; --field: #1c1c1c;
+  --brd: #383838; --brd2: #777777; --txt: #ededed; --dim: #bdbdbd; --fnt: #a3a3a3;
+  --acc: #94baff; --acc2: #2563eb; --accsoft: #243247; --on-acc: #ffffff;
+  --red: #ff9b96; --amb: #e9c46a; --blu: #94baff; --vio: #c4b5fd;
   --sans: 'Aptos', 'Noto Sans', 'Segoe UI', sans-serif;
   --mono: 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
   --shell-top: 64px; --radius: 6px;
 }
 :root[data-theme="light"] {
   color-scheme: light;
+    --chrome: var(--bg); --field: var(--bg);
   --bg: #fafbf8; --srf: #f2f5ef; --srf2: #eaf0e7; --srf3: #e0e7dd;
   --brd: #dce3d8; --brd2: #a4b1a4; --txt: #202b23; --dim: #526254; --fnt: #627164;
   --acc: #356847; --acc2: #356847; --accsoft: #e4eee3; --on-acc: #fafbf8;
@@ -2053,6 +2149,7 @@ cat > "$_ME_HTML" << 'MEHTML'
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
+    --chrome: var(--bg); --field: var(--bg);
     --bg: #fafbf8; --srf: #f2f5ef; --srf2: #eaf0e7; --srf3: #e0e7dd;
     --brd: #dce3d8; --brd2: #a4b1a4; --txt: #202b23; --dim: #526254; --fnt: #627164;
     --acc: #356847; --acc2: #356847; --accsoft: #e4eee3; --on-acc: #fafbf8;
@@ -2067,7 +2164,7 @@ a:hover { text-decoration: underline; text-underline-offset: 3px; }
 button, input { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: 0; }
 button:disabled { opacity: .5; cursor: not-allowed; }
-input { background: var(--bg); border: 1px solid var(--brd2); border-radius: var(--radius); padding: 9px 12px; min-width: 0; }
+input { background: var(--field); border: 1px solid var(--brd2); border-radius: var(--radius); padding: 9px 12px; min-width: 0; }
 input::placeholder { color: var(--fnt); }
 :focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
 ::selection { background: var(--accsoft); color: var(--txt); }
@@ -2077,17 +2174,17 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .skip-link:focus { top: 8px; }
 .btn, .iconbtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid transparent; border-radius: var(--radius); min-height: 40px; padding: 8px 14px; font-weight: 600; font-size: 13px; white-space: nowrap; transition: background .15s; }
 .btn:hover, .iconbtn:hover { text-decoration: none; background: var(--srf2); }
-.btn.primary { background: var(--acc); color: var(--on-acc); }
+.btn.primary { background: var(--acc2); color: var(--on-acc); }
 .btn.primary:hover { filter: brightness(.93); }
 .btn.ghost { border-color: var(--brd); color: var(--dim); }
 .btn.sm { min-height: 36px; padding: 6px 10px; }
 .iconbtn { width: 36px; min-height: 36px; padding: 8px; color: var(--dim); }
 .iconbtn.dgr:hover { color: var(--red); }
 .btn svg, .iconbtn svg, .ic, .drop-ic { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.top { height: var(--shell-top); position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 20px; padding: 0 28px; border-bottom: 1px solid var(--brd); background: var(--bg); }
+.top { height: var(--shell-top); position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 20px; padding: 0 28px; border-bottom: 1px solid var(--brd); background: var(--chrome); }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--txt); }
 .brand:hover { text-decoration: none; }
-.logo { display: flex; color: var(--acc); }
+.logo { display: flex; color: var(--txt); }
 .logo svg { width: 28px; height: 25px; }
 .word { font-size: 19px; font-weight: 650; letter-spacing: -.6px; }
 .connection { font-size: 12px; color: var(--fnt); display: flex; align-items: center; gap: 7px; }
@@ -2095,6 +2192,7 @@ code, .mono { font-family: var(--mono); font-size: .9em; }
 .connection.offline { color: var(--amb); }
 .connection.offline::before { background: var(--amb); }
 .top-spacer { flex: 1; }
+.top form { display: flex; margin: 0; }
 .app-shell { display: flex; min-height: calc(100dvh - var(--shell-top)); }
 .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--radius); color: var(--dim); }
 .nav-item:hover { background: var(--srf); text-decoration: none; }
@@ -2149,7 +2247,7 @@ h2 { font-size: 16px; line-height: 1.4; font-weight: 600; }
 .os-pills { display: flex; gap: 4px; border-bottom: 1px solid var(--brd); margin-bottom: 28px; }.os-pill { padding: 10px 16px; color: var(--dim); border-bottom: 2px solid transparent; }.os-pill.active { color: var(--acc); border-color: var(--acc); }.os-pill:hover { background: var(--srf); }
 .cmd-g { margin-bottom: 32px; }.cmd-g h2 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--dim); }
 .cmd { display: grid; grid-template-columns: 128px minmax(0,1fr) 36px; align-items: start; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--brd); }.cmd-t { font-size: 12px; color: var(--dim); padding-top: 8px; }.cmd-c { font: 12px/1.8 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 12px; border-radius: 4px; background: var(--srf); }.cmd-best { display: block; color: var(--acc); font-size: 10px; }.rs-cfg { display: flex; gap: 16px; margin-bottom: 32px; }.rs-cfg label { display: flex; flex-direction: column; gap: 6px; color: var(--dim); font-size: 12px; }.rs-in { width: 220px; }#rs-port { width: 100px; }
-.chat-panel { border: 1px solid var(--brd); border-radius: var(--radius); overflow: hidden; }.chat-body { height: min(50dvh,480px); overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }.cm { display: flex; align-items: baseline; gap: 16px; cursor: pointer; }.cm:hover { color: var(--acc); }.ct { font: 11px var(--mono); color: var(--fnt); }.cx { overflow-wrap: anywhere; min-width: 0; }.chat-bar { padding: 16px; border-top: 1px solid var(--brd); display: flex; gap: 12px; }.chat-bar input { flex: 1; }.chat-status:not(:empty) { padding: 0 16px 16px; color: var(--red); }
+.chat-panel { background: var(--srf); border: 1px solid var(--brd); border-radius: var(--radius); overflow: hidden; }.chat-body { height: min(50dvh,480px); overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }.cm { display: flex; align-items: baseline; gap: 16px; cursor: pointer; }.cm:hover { color: var(--acc); }.ct { font: 11px var(--mono); color: var(--fnt); }.cx { overflow-wrap: anywhere; min-width: 0; }.chat-bar { padding: 16px; border-top: 1px solid var(--brd); display: flex; gap: 12px; }.chat-bar input { flex: 1; }.chat-status:not(:empty) { padding: 0 16px 16px; color: var(--red); }
 .log-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }.live { display: block; }.live.paused { background: var(--amb); }.count { color: var(--dim); font: 12px var(--mono); }.count:empty { display: none; }.log-search { flex: 1; min-width: 180px; }.log-acts { display: flex; align-items: center; gap: 6px; }.log-acts .active { color: var(--acc); border-color: var(--acc); }
 .log-columns, .le { display: grid; grid-template-columns: 28px 64px 56px minmax(80px,1fr) 48px 100px 100px; gap: 12px; align-items: center; }.log-columns { color: var(--fnt); font-size: 11px; padding: 0 8px 12px; border-bottom: 1px solid var(--brd); }.log-body { max-height: 62dvh; overflow-y: auto; }.le { font: 11px/1.6 var(--mono); padding: 12px 8px; cursor: pointer; border-bottom: 1px solid var(--brd); }.le:hover, .le.expanded { background: var(--srf); }.le-n, .le-time, .le-ip, .le-ua { color: var(--fnt); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.le-path { display: flex; gap: 6px; min-width: 0; }.le-p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.le-m { font-weight: 600; }.le-code.c2 { color: var(--acc); }.le-code.c3 { color: var(--blu); }.le-code.c4 { color: var(--amb); }.le-code.c5 { color: var(--red); }.le-hl { background: var(--accsoft); color: var(--txt); }.le-flag { color: var(--red); font-size: 9px; }
 .le-detail { display: none; padding: 20px; background: var(--srf); }.le-detail.open { display: block; }.ld-grid { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 6px 20px; font: 12px/1.7 var(--mono); margin-bottom: 16px; }.dk { color: var(--fnt); }.dv { overflow-wrap: anywhere; }.dbody-pre, .dcurl { font: 12px/1.7 var(--mono); padding: 16px; background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 4px; margin-top: 12px; max-height: 240px; overflow: auto; }.dcurl { display: flex; gap: 16px; }.dcurl code { flex: 1; min-width: 0; font-size: inherit; }
@@ -2173,10 +2271,10 @@ h2 { font-size: 16px; line-height: 1.4; font-weight: 600; }
 
 /* Top-level navigation and rich chat */
 .app-shell { min-height: calc(100dvh - 112px); }
-.top-nav { display: flex; justify-content: center; gap: 8px; padding: 8px 24px; overflow-x: auto; border-bottom: 1px solid var(--brd); background: var(--bg); position: sticky; top: var(--shell-top); z-index: 35; }
+.top-nav { display: flex; justify-content: center; gap: 8px; padding: 8px 24px; overflow-x: auto; border-bottom: 1px solid var(--brd); background: var(--chrome); position: sticky; top: var(--shell-top); z-index: 35; }
 .top-nav .nav-item { flex: none; padding: 8px 14px; white-space: nowrap; }
 .view-section { scroll-margin-top: calc(var(--shell-top) + 80px); }
-textarea { font: inherit; color: var(--txt); background: var(--bg); border: 1px solid var(--brd2); border-radius: var(--radius); padding: 12px; resize: vertical; min-height: 76px; width: 100%; }
+textarea { font: inherit; color: var(--txt); background: var(--field); border: 1px solid var(--brd2); border-radius: var(--radius); padding: 12px; resize: vertical; min-height: 76px; width: 100%; }
 .chat-body { height: clamp(180px, calc(100dvh - 440px), 560px); gap: 24px; }
 .cm { display: block; padding-bottom: 24px; border-bottom: 1px solid var(--brd); cursor: auto; }
 .cm:last-child { border-bottom: 0; padding-bottom: 0; }.cm:hover { color: inherit; }
@@ -2198,7 +2296,7 @@ textarea { font: inherit; color: var(--txt); background: var(--bg); border: 1px 
 .console-connect { padding-bottom: 28px; border-bottom: 1px solid var(--brd); margin-bottom: 32px; }.console-connect .os-pills { margin-bottom: 16px; }
 .connect-command { display: flex; align-items: center; gap: 16px; padding: 16px; margin: 12px 0; background: var(--srf); border-radius: var(--radius); }.connect-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .console-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }.console-tabs .selected { border-color: var(--acc); color: var(--acc); }
-.browser-terminal { background: #111713; padding: 12px; height: 480px; border-radius: var(--radius); overflow: hidden; }.browser-terminal .xterm { height: 100%; }
+.browser-terminal { background: #181818; padding: 12px; height: 480px; border-radius: var(--radius); overflow: hidden; }.browser-terminal .xterm { height: 100%; }
 #console-terminal-info { margin-top: 12px; }.console-error { color: var(--red); margin: 16px 0; overflow-wrap: anywhere; }.console-error:empty { display: none; }
 .legacy-shells { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--brd); }.legacy-shells>summary { cursor: pointer; color: var(--dim); margin-bottom: 20px; }.legacy-shells>.hint { margin-bottom: 20px; }
 @media(max-width:600px) { .connect-command { flex-direction: column; align-items: stretch; }.console-connect .section-head { flex-wrap: wrap; }#console-unlock { flex-wrap: wrap; }#console-unlock label { min-width: 100%; }.browser-terminal { height: 420px; padding: 8px; } }
@@ -2212,6 +2310,11 @@ body.terminal-view { height: 100dvh; overflow: hidden; }
 .terminal-view #shells > .page-head, .terminal-view .console-connect,
 .terminal-view .console-workspace > .section-head, .terminal-view .console-tabs,
 .terminal-view .legacy-shells, .terminal-view #console-terminal-info { display: none; }
+.terminal-view #console-proxy { display: none; }
+.terminal-view #console-callbacks { display: none; }
+#console-callbacks { margin: 16px 0 24px; }
+#console-callbacks .section-head { margin-bottom: 8px; }
+#console-callbacks .rs-cfg { margin-bottom: 8px; }
 .terminal-view .app-shell { height: 100%; min-height: 0; }
 .terminal-view .workspace { max-width: none; height: 100%; padding: 0; }
 .terminal-view #shells { height: 100%; display: flex; flex-direction: column; }
@@ -2310,7 +2413,7 @@ PAYLOAD_SRC
 # ── Common exports ────────────────────────────────────────────────────────────
 _CONSOLE_PY=$(_mktmp /tmp/expose-console.XXXXXX)
 cat > "$_CONSOLE_PY" <<'CONSOLEPY'
-"""Bounded HTTP relay for foreground PTY connectors."""
+"""Bounded HTTP relay for PTY connectors and a SOCKS5 network proxy."""
 import base64
 import hashlib
 import hmac
@@ -2318,17 +2421,34 @@ import json
 import os
 import secrets
 import shlex
+import socket
+import struct
+import sys
 import threading
 import time
 import urllib.parse
 
 
 class ConsoleService:
+    NET_STREAMS = 256
+    NET_EVENTS = 256
+    NET_QUEUE = 512 * 1024
+    NET_BUFFER = 4 * 1024 * 1024
+    STALE_AFTER = 45
+    SESSION_RETENTION = 24 * 3600
+    CLOSED_RETENTION = 900
+
     def __init__(self, enabled, client_dir):
         self.enabled = enabled
         self.client_dir = client_dir
         self.invites = {}
         self.sessions = {}
+        self.registrations = {}
+        self.callbacks = {}
+        self.proxy_session = ''
+        self.proxy_address = ''
+        self.proxy_stats = {'opens': 0, 'failed': 0, 'sent': 0, 'received': 0}
+        self.event_seen = {}
         self.condition = threading.Condition()
         self.platforms = ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64',
                           'windows-amd64.exe', 'windows-arm64.exe']
@@ -2338,10 +2458,13 @@ class ConsoleService:
             ('X-Content-Type-Options', 'nosniff')))
 
     def body(self, handler, raw=False):
-        size = int(handler.headers.get('Content-Length', '0'))
-        if not 0 <= size <= 65536:
-            raise ValueError('Request exceeds 64 KB')
-        data = handler.rfile.read(size)
+        if not getattr(handler, '_console_body_set', False):
+            size = int(handler.headers.get('Content-Length', '0'))
+            if not 0 <= size <= 65536:
+                raise ValueError('Request exceeds 64 KB')
+            handler._console_body = handler.rfile.read(size)
+            handler._console_body_set = True
+        data = handler._console_body
         if raw:
             return data
         value = json.loads(data or '{}')
@@ -2355,27 +2478,326 @@ class ConsoleService:
     def authorized(self, handler, token):
         return bool(token) and hmac.compare_digest(self.token(handler), token)
 
+    @staticmethod
+    def request_ip(handler):
+        peer = handler.client_address[0]
+        if peer in ('127.0.0.1', '::1'):
+            forwarded = handler.headers.get('X-Forwarded-For', '').split(',')[0].strip()
+            return forwarded or handler.headers.get('X-Real-IP', '').strip() or peer
+        return peer
+
+    @staticmethod
+    def event(kind, message, ip=''):
+        sys.stderr.write(f"{time.strftime('%H:%M:%S')}  {ip:<15}  {kind:<9} {message}\n")
+        sys.stderr.flush()
+
+    def event_once(self, key, kind, message, ip='', window=10):
+        now = time.time()
+        with self.condition:
+            if now - self.event_seen.get(key, 0) < window:
+                return
+            self.event_seen[key] = now
+            for seen_key, seen_at in list(self.event_seen.items()):
+                if now - seen_at > 3600:
+                    self.event_seen.pop(seen_key, None)
+        self.event(kind, message, ip)
+
+    def touch(self, session):
+        now = time.time()
+        resumed = session['connected'] and now - session['seen'] > 60
+        session['seen'] = now
+        if resumed:
+            self.event('CONNECTOR', f"{session['host']} resumed", session.get('ip', ''))
+
     def prune(self):
         now = time.time()
         self.invites = {k: v for k, v in self.invites.items() if v['expires'] > now}
-        for session in self.sessions.values():
-            if now - session['seen'] > 45:
-                session['connected'] = False
-        self.sessions = {k: s for k, s in self.sessions.items()
-                         if s['connected'] or now - s['seen'] < 900}
+        self.registrations = {k: v for k, v in self.registrations.items()
+                              if v['expires'] > now}
+        keep = {}
+        for ident, session in self.sessions.items():
+            retention = self.SESSION_RETENTION if session['connected'] else self.CLOSED_RETENTION
+            if now - session['seen'] < retention:
+                keep[ident] = session
+            else:
+                self._close_net(session)
+                self.event('CONNECTOR', f"{session['host']} expired", session.get('ip', ''))
+        self.sessions = keep
+
+    def _close_net(self, session):
+        for stream in session['net_streams'].values():
+            stream['closed'] = True
+        session['net_events'].clear()
+        for callback in self.callbacks.values():
+            if callback['session'] == session['id']:
+                callback['session'] = ''
+                callback['active'] = False
+                callback['address'] = ''
+                callback['error'] = 'Machine disconnected'
+        self.condition.notify_all()
+
+    def _net_session_locked(self):
+        selected = self.sessions.get(self.proxy_session)
+        if selected and selected['connected']:
+            return selected
+        self.proxy_session = ''
+        live = [s for s in self.sessions.values() if s['connected']]
+        return max(live, key=lambda s: s['seen']) if live else None
+
+    def _queue_net(self, session, event):
+        queued = sum(len(item.get('data', '')) for item in session['net_events'])
+        if len(session['net_events']) >= self.NET_EVENTS or queued >= self.NET_QUEUE:
+            raise ValueError('Network proxy queue is full')
+        session['net_seq'] += 1
+        event['seq'] = session['net_seq']
+        session['net_events'].append(event)
+        self.condition.notify_all()
+
+    def net_open(self, host, port):
+        with self.condition:
+            self.proxy_stats['opens'] += 1
+            try:
+                session = self._net_session_locked()
+                if not session:
+                    raise ValueError('No connected machine; connect a console first')
+                if len(session['net_streams']) >= self.NET_STREAMS:
+                    raise ValueError('Too many active proxy streams')
+                ident, sid = session['id'], secrets.token_hex(8)
+                session['net_streams'][sid] = {'open': None, 'closed': False, 'data': bytearray()}
+                try:
+                    self._queue_net(session, {'type': 'open', 'stream': sid,
+                                              'host': host, 'port': port})
+                except ValueError:
+                    session['net_streams'].pop(sid, None)
+                    raise
+                deadline = time.time() + 7
+                while session['net_streams'].get(sid, {}).get('open') is None:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        break
+                    self.condition.wait(remaining)
+                stream = session['net_streams'].get(sid)
+                if not stream or stream['open'] is not True:
+                    session['net_streams'].pop(sid, None)
+                    try:
+                        self._queue_net(session, {'type': 'close', 'stream': sid})
+                    except ValueError:
+                        pass
+                    raise ValueError('The machine could not reach the target')
+                self.event_once(('socks', host, port), 'SOCKS',
+                                f"{host}:{port} via {session['host']}",
+                                session.get('ip', ''), 15)
+                return ident, sid
+            except Exception as error:
+                self.proxy_stats['failed'] += 1
+                self.event_once(('socksfail', host, port), 'SOCKS',
+                                f"{host}:{port} failed: {error}", '', 30)
+                raise
+
+    def net_read(self, ident, sid, timeout=10):
+        with self.condition:
+            session = self.sessions.get(ident)
+            stream = session and session['net_streams'].get(sid)
+            if not stream:
+                return b'', True
+            deadline = time.time() + timeout
+            while not stream['data'] and not stream['closed']:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                self.condition.wait(remaining)
+            chunk = bytes(stream['data'][:65536])
+            del stream['data'][:len(chunk)]
+            self.condition.notify_all()
+            closed = stream['closed'] and not stream['data']
+            if closed:
+                session['net_streams'].pop(sid, None)
+            return chunk, closed
+
+    def net_write(self, ident, sid, data):
+        deadline = time.time() + 30
+        with self.condition:
+            while True:
+                session = self.sessions.get(ident)
+                stream = session and session['net_streams'].get(sid)
+                if not stream or stream['closed'] or stream['open'] is not True or not session['connected']:
+                    raise ValueError('Proxy stream closed')
+                queued = sum(len(item.get('data', '')) for item in session['net_events'])
+                if len(session['net_events']) < self.NET_EVENTS and queued < self.NET_QUEUE:
+                    break
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise ValueError('Network proxy queue is full')
+                self.condition.wait(remaining)
+            self._queue_net(session, {'type': 'data', 'stream': sid,
+                                      'data': base64.b64encode(data).decode()})
+            self.proxy_stats['sent'] += len(data)
+
+    def net_close(self, ident, sid):
+        with self.condition:
+            session = self.sessions.get(ident)
+            stream = session and session['net_streams'].get(sid)
+            if not stream or stream['closed']:
+                return
+            try:
+                self._queue_net(session, {'type': 'close', 'stream': sid})
+            except ValueError:
+                pass
+            stream['closed'] = True
+            self.condition.notify_all()
+
+    def proxy_info(self):
+        with self.condition:
+            session = self._net_session_locked()
+            return {'enabled': bool(self.proxy_address), 'address': self.proxy_address,
+                    'session': ({'id': session['id'], 'host': session['host']}
+                                if session else None),
+                    'streams': len(session['net_streams']) if session else 0,
+                    'stats': dict(self.proxy_stats)}
+
+    def set_proxy_session(self, ident):
+        with self.condition:
+            if ident and ident not in self.sessions:
+                raise ValueError('Session not found')
+            self.proxy_session = ident or ''
+            self.condition.notify_all()
+        return self.proxy_info()
+
+    def start_proxy(self, bind):
+        proxy = SocksProxy(self, bind)
+        proxy.start()
+        with self.condition:
+            self.proxy_address = proxy.address
+        return proxy
+
+    def callback_info(self, callback):
+        session = self.sessions.get(callback['session'])
+        return {'id': callback['id'], 'local': callback['local'],
+                'remote': callback['remote'], 'active': callback['active'],
+                'address': callback['address'], 'error': callback['error'],
+                'host': session['host'] if session else ''}
+
+    def _bind_callback_locked(self, callback, session):
+        callback['session'] = session['id']
+        callback['active'] = False
+        callback['address'] = ''
+        callback['error'] = 'Binding…'
+        try:
+            self._queue_net(session, {'type': 'listen', 'callback': callback['id'],
+                                      'port': callback['remote']})
+        except ValueError as error:
+            callback['error'] = str(error)
+
+    def add_callback(self, local, remote):
+        if not 1 <= local <= 65535 or not 1 <= remote <= 65535:
+            raise ValueError('Ports must be 1–65535')
+        with self.condition:
+            for existing in self.callbacks.values():
+                if existing['remote'] == remote:
+                    raise ValueError(f'Endpoint port {remote} already has a callback')
+            callback = {'id': secrets.token_hex(6), 'local': local, 'remote': remote,
+                        'session': '', 'active': False, 'address': '',
+                        'error': 'Waiting for a machine'}
+            self.callbacks[callback['id']] = callback
+            session = self._net_session_locked()
+            if session:
+                self._bind_callback_locked(callback, session)
+            return self.callback_info(callback)
+
+    def remove_callback(self, cid):
+        with self.condition:
+            callback = self.callbacks.pop(cid, None)
+            if not callback:
+                raise ValueError('Callback not found')
+            session = self.sessions.get(callback['session'])
+            if session and session['connected']:
+                try:
+                    self._queue_net(session, {'type': 'unlisten', 'callback': cid})
+                except ValueError:
+                    pass
+                for stream in session['net_streams'].values():
+                    if stream.get('callback') == cid:
+                        stream['closed'] = True
+                self.condition.notify_all()
+            return {'ok': True}
+
+    def set_callback_state(self, ident, cid, data):
+        with self.condition:
+            callback = self.callbacks.get(cid)
+            if not callback or callback['session'] != ident:
+                return False
+            callback['active'] = bool(data.get('active'))
+            callback['address'] = str(data.get('address', ''))[:128]
+            callback['error'] = str(data.get('error', ''))[:200]
+            session = self.sessions.get(ident)
+            callback_ip = session.get('ip', '') if session else ''
+            if callback['active']:
+                self.event('CALLBACK', f"{callback['address']} -> 127.0.0.1:{callback['local']}",
+                           callback_ip)
+            elif callback['error']:
+                self.event('CALLBACK', f"127.0.0.1:{callback['local']} failed: {callback['error']}",
+                           callback_ip)
+            self.condition.notify_all()
+            return True
+
+    def callback_stream(self, callback, ident, sid):
+        try:
+            local = socket.create_connection(('127.0.0.1', callback['local']), timeout=10)
+        except OSError:
+            self.net_close(ident, sid)
+            return
+
+        def upstream():
+            try:
+                while True:
+                    data = local.recv(32768)
+                    if not data:
+                        break
+                    self.net_write(ident, sid, data)
+            except (OSError, ValueError):
+                pass
+            finally:
+                try:
+                    self.net_close(ident, sid)
+                except OSError:
+                    pass
+
+        threading.Thread(target=upstream, daemon=True).start()
+        try:
+            while True:
+                data, closed = self.net_read(ident, sid)
+                if data:
+                    local.sendall(data)
+                if closed:
+                    break
+        except OSError:
+            pass
+        finally:
+            try:
+                local.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            local.close()
+            self.net_close(ident, sid)
 
     def available(self):
         return [name for name in self.platforms if os.path.isfile(os.path.join(self.client_dir, name))]
 
     def session_info(self, session):
-        return {key: session[key] for key in ('id', 'host', 'os', 'arch', 'connected', 'seen')}
+        info = {key: session[key] for key in ('id', 'host', 'os', 'arch', 'connected', 'seen')}
+        info['stale'] = time.time() - session['seen'] > self.STALE_AFTER
+        info['ip'] = session.get('ip', '')
+        return info
 
     def handle(self, handler):
         parsed = urllib.parse.urlsplit(handler.path)
         path = parsed.path
         if not (path.startswith('/console/') or path in ('/lin', '/mac', '/win')):
             return False
+        handler._console_body_set = False
         try:
+            if handler.command == 'POST':
+                self.body(handler, raw=True)
             if path == '/console/status' and handler.command == 'GET':
                 self.reply(handler, 200, {'enabled': self.enabled, 'platforms': self.available()})
                 return True
@@ -2392,6 +2814,36 @@ class ConsoleService:
                 self.register(handler)
                 return True
             parts = path.strip('/').split('/')
+            if path == '/console/proxy' and handler.command in ('GET', 'POST'):
+                if handler.command == 'POST':
+                    self.set_proxy_session(self.body(handler).get('session') or '')
+                self.reply(handler, 200, self.proxy_info())
+                return True
+            if path == '/console/callbacks' and handler.command == 'GET':
+                with self.condition:
+                    self.reply(handler, 200, {'callbacks': [
+                        self.callback_info(callback) for callback in self.callbacks.values()]})
+                return True
+            if path == '/console/callbacks' and handler.command == 'POST':
+                data = self.body(handler)
+                local = int(data.get('local') or 0)
+                self.reply(handler, 200, self.add_callback(
+                    local, int(data.get('remote') or local)))
+                return True
+            if (len(parts) == 4 and parts[:2] == ['console', 'callbacks']
+                    and parts[3] == 'remove' and handler.command == 'POST'):
+                self.remove_callback(parts[2])
+                self.reply(handler, 200, {'ok': True})
+                return True
+            if len(parts) == 6 and parts[:2] == ['console', 'agent'] and parts[3] == 'callback':
+                if not self.set_callback_state(parts[2], parts[4], self.body(handler)):
+                    self.reply(handler, 404, {'error': 'Callback not found'})
+                else:
+                    self.reply(handler, 200, {'ok': True})
+                return True
+            if len(parts) == 6 and parts[:2] == ['console', 'agent'] and parts[3] == 'net':
+                self.net_agent(handler, parts[2], parts[4], parts[5])
+                return True
             if len(parts) == 4 and parts[:2] == ['console', 'agent']:
                 self.agent(handler, parts[2], parts[3], urllib.parse.parse_qs(parsed.query))
                 return True
@@ -2425,19 +2877,42 @@ class ConsoleService:
         data = self.body(handler)
         with self.condition:
             ticket = self.token(handler)
+            nonce = str(data.get('nonce', ''))[:64]
+            recent = self.registrations.get(ticket)
+            if nonce and recent and recent['nonce'] == nonce and recent['expires'] > time.time():
+                self.reply(handler, 200, {'id': recent['id'], 'token': recent['token']})
+                return
             invite = self.invites.get(ticket)
             if not invite or invite['expires'] <= time.time():
                 self.reply(handler, 401, {'error': 'Connection link expired or already used'}); return
             if len(self.sessions) >= 32:
-                self.reply(handler, 429, {'error': 'Session limit reached'}); return
+                stale = sorted((s for s in self.sessions.values()
+                                if time.time() - s['seen'] > 600),
+                               key=lambda s: s['seen'])
+                if stale:
+                    victim = stale[0]
+                    self.sessions.pop(victim['id'], None)
+                    self._close_net(victim)
+                else:
+                    self.reply(handler, 429, {'error': 'Session limit reached'}); return
             ident, token = secrets.token_urlsafe(16), secrets.token_urlsafe(32)
-            session = {'id': ident, 'token': token, 'host': str(data.get('host', 'client'))[:100],
+            host = str(data.get('host', 'client'))[:100]
+            session = {'id': ident, 'token': token, 'host': host,
                        'os': str(data.get('os', ''))[:20], 'arch': str(data.get('arch', ''))[:20],
+                       'ip': self.request_ip(handler),
                        'connected': True, 'seen': time.time(), 'events': [], 'seq': 0,
-                       'output': bytearray(), 'offset': 0, 'input_size': 0}
+                       'output': bytearray(), 'offset': 0, 'input_size': 0,
+                       'net_seq': 0, 'net_events': [], 'net_streams': {}}
             self.sessions[ident] = session
+            self.registrations[ticket] = {'nonce': nonce, 'id': ident, 'token': token,
+                                          'expires': time.time() + 600}
             del self.invites[ticket]
+            for callback in self.callbacks.values():
+                if not callback['session'] or callback['session'] not in self.sessions:
+                    self._bind_callback_locked(callback, session)
             self.reply(handler, 200, {'id': ident, 'token': token})
+            self.event('CONNECTOR', f"{host} joined ({session['os']}/{session['arch']})",
+                       session['ip'])
             self.condition.notify_all()
 
     def agent(self, handler, ident, action, query):
@@ -2448,7 +2923,7 @@ class ConsoleService:
                 self.reply(handler, 401, {'error': 'Invalid session'}); return
             if not session['connected']:
                 self.reply(handler, 410, {'error': 'Session closed'}); return
-            session['seen'] = time.time()
+            self.touch(session)
         if action == 'input' and handler.command == 'GET':
             cursor = int(query.get('after', ['0'])[0])
             with self.condition:
@@ -2456,6 +2931,18 @@ class ConsoleService:
                 session['input_size'] = sum(len(e.get('data', '')) for e in session['events'])
                 self.condition.wait_for(lambda: session['events'] or not session['connected'], timeout=10)
                 self.reply(handler, 200, {'events': session['events'], 'closed': not session['connected']})
+        elif action == 'net' and handler.command == 'GET':
+            cursor = int(query.get('after', ['0'])[0])
+            with self.condition:
+                # A cursor only advances after the connector decoded the batch,
+                # so it also acknowledges everything up to that point.
+                if cursor:
+                    session['net_events'] = [e for e in session['net_events'] if e['seq'] > cursor]
+                    self.condition.notify_all()
+                self.condition.wait_for(lambda: session['net_events'] or not session['connected'],
+                                        timeout=10)
+                self.reply(handler, 200, {'events': session['net_events'],
+                                          'closed': not session['connected']})
         elif action == 'output' and handler.command == 'POST':
             data = self.body(handler, raw=True)
             with self.condition:
@@ -2468,10 +2955,90 @@ class ConsoleService:
         elif action == 'exit' and handler.command == 'POST':
             with self.condition:
                 session['connected'] = False
-                self.condition.notify_all()
+                self._close_net(session)
+                self.event('CONNECTOR', f"{session['host']} disconnected", session.get('ip', ''))
             self.reply(handler, 200, {'ok': True})
         else:
             self.reply(handler, 404, {'error': 'Unknown connector operation'})
+
+    def net_agent(self, handler, ident, sid, action):
+        with self.condition:
+            session = self.sessions.get(ident)
+            if not session or not self.authorized(handler, session['token']):
+                handler.close_connection = True
+                self.reply(handler, 401, {'error': 'Invalid session'}); return
+            if not session['connected']:
+                self.reply(handler, 410, {'error': 'Session closed'}); return
+            self.touch(session)
+            stream = session['net_streams'].get(sid)
+            callback = self.callbacks.get(str(self.body(handler).get('callback', ''))) \
+                if action == 'inbound' else None
+        if action == 'inbound' and handler.command == 'POST':
+            if not callback or callback['session'] != ident:
+                self.reply(handler, 404, {'error': 'Callback not found'}); return
+            full = False
+            with self.condition:
+                if len(session['net_streams']) >= self.NET_STREAMS:
+                    full = True
+                else:
+                    peer = str(self.body(handler).get('address', ''))[:100]
+                    session['net_streams'][sid] = {
+                        'open': True, 'closed': False, 'data': bytearray(),
+                        'callback': callback['id'], 'peer': peer}
+                    self.condition.notify_all()
+            if full:
+                self.reply(handler, 429, {'error': 'Too many active streams'}); return
+            self.reply(handler, 200, {'ok': True})
+            self.event('CALLBACK', f"{peer} -> 127.0.0.1:{callback['local']}",
+                       self.request_ip(handler))
+            threading.Thread(target=self.callback_stream,
+                             args=(callback, ident, sid), daemon=True).start()
+            return
+        if not stream:
+            self.reply(handler, 404, {'error': 'Proxy stream not found'}); return
+        if action == 'status' and handler.command == 'POST':
+            ok = bool(self.body(handler).get('ok'))
+            with self.condition:
+                stream['open'] = ok
+                if not ok:
+                    stream['closed'] = True
+                self.condition.notify_all()
+            self.reply(handler, 200, {'ok': True})
+        elif action == 'data' and handler.command == 'POST':
+            data = self.body(handler, raw=True)
+            error = ''
+            deadline = time.time() + 20
+            with self.condition:
+                while True:
+                    if stream['closed']:
+                        error = 'closed'
+                        break
+                    if len(stream['data']) + len(data) <= self.NET_BUFFER:
+                        stream['data'].extend(data)
+                        self.proxy_stats['received'] += len(data)
+                        self.condition.notify_all()
+                        break
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        stream['closed'] = True
+                        self.condition.notify_all()
+                        error = 'full'
+                        break
+                    self.condition.wait(remaining)
+            if error == 'closed':
+                self.reply(handler, 410, {'error': 'Proxy stream closed'})
+            elif error == 'full':
+                self.reply(handler, 413, {'error': 'Proxy buffer full'})
+            else:
+                self.reply(handler, 200, {'ok': True})
+        elif action == 'close' and handler.command == 'POST':
+            self.body(handler)
+            with self.condition:
+                stream['closed'] = True
+                self.condition.notify_all()
+            self.reply(handler, 200, {'ok': True})
+        else:
+            self.reply(handler, 404, {'error': 'Unknown proxy operation'})
 
     def operator(self, handler, ident, action, query):
         with self.condition:
@@ -2492,11 +3059,16 @@ class ConsoleService:
             with self.condition:
                 if action in ('close', 'remove'):
                     session['connected'] = False
+                    self._close_net(session)
+                    self.event('CONNECTOR', f"{session['host']} {'removed' if action == 'remove' else 'closed'}",
+                               session.get('ip', ''))
                     if action == 'remove':
                         self.sessions.pop(ident, None)
                         session['events'].clear()
                         session['output'].clear()
                         session['input_size'] = 0
+                        if self.proxy_session == ident:
+                            self.proxy_session = ''
                 else:
                     if not session['connected']:
                         self.reply(handler, 410, {'error': 'Session closed'}); return
@@ -2563,7 +3135,11 @@ case "$(uname -m)" in x86_64|amd64) arch=amd64; expected={shlex.quote(hashes.get
 work=$(mktemp -d)
 cleanup() {{ rm -f "$work/connector"; rmdir "$work"; }}
 trap cleanup EXIT
-curl --fail --silent --show-error --location {shlex.quote(origin + '/console/client/' + target + '-')}"$arch"{shlex.quote('?ticket=' + ticket)} -o "$work/connector"
+for attempt in 1 2 3 4 5 6; do
+  if curl --fail --silent --show-error --location {shlex.quote(origin + '/console/client/' + target + '-')}"$arch"{shlex.quote('?ticket=' + ticket)} -o "$work/connector"; then break; fi
+  if (( attempt == 6 )); then echo 'Connector download failed' >&2; exit 1; fi
+  sleep 5
+done
 if command -v sha256sum >/dev/null; then actual=$(sha256sum "$work/connector" | cut -d ' ' -f1); else actual=$(shasum -a 256 "$work/connector" | cut -d ' ' -f1); fi
 [[ "$actual" == "$expected" ]] || {{ echo 'Connector checksum mismatch' >&2; exit 1; }}
 chmod 700 "$work/connector"
@@ -2578,7 +3154,10 @@ $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6
 $hashes = @{{ amd64 = '{hashes.get('amd64', 'unavailable')}'; arm64 = '{hashes.get('arm64', 'unavailable')}' }}
 $file = Join-Path ([IO.Path]::GetTempPath()) ('expose-' + [guid]::NewGuid().ToString('N') + '.exe')
 try {{
-  Invoke-WebRequest -UseBasicParsing -Uri ({quote(origin + '/console/client/windows-')} + $arch + {quote('.exe?ticket=' + ticket)}) -OutFile $file
+  for ($attempt = 0; $attempt -lt 6; $attempt++) {{
+    try {{ Invoke-WebRequest -UseBasicParsing -Uri ({quote(origin + '/console/client/windows-')} + $arch + {quote('.exe?ticket=' + ticket)}) -OutFile $file; break }}
+    catch {{ if ($attempt -eq 5) {{ throw }}; Start-Sleep -Seconds 5 }}
+  }}
   if ((Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant() -ne $hashes[$arch]) {{ throw 'Connector checksum mismatch' }}
   $env:EXPOSE_URL = {quote(origin)}
   $env:EXPOSE_TICKET = {quote(ticket)}
@@ -2588,6 +3167,140 @@ try {{
   Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue
 }}
 '''
+
+
+class SocksProxy:
+    """Minimal SOCKS5 CONNECT proxy that dials from the connected machine."""
+    def __init__(self, service, bind):
+        self.service = service
+        self.bind = bind
+        self.sock = None
+        self.address = ''
+
+    @staticmethod
+    def parse_bind(value):
+        value = (value or '').strip()
+        if value.isdigit():
+            return '127.0.0.1', int(value)
+        if value.startswith('['):
+            host, separator, port = value[1:].partition(']:')
+            if not separator or not port.isdigit():
+                raise ValueError('Use host:port for the proxy address')
+            return host, int(port)
+        host, separator, port = value.rpartition(':')
+        if not separator:
+            raise ValueError('Use host:port for the proxy address')
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            raise ValueError('Invalid proxy port')
+        return host or '127.0.0.1', int(port)
+
+    def start(self):
+        host, port = self.parse_bind(self.bind)
+        family = socket.AF_INET6 if ':' in host else socket.AF_INET
+        listener = socket.socket(family, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((host, port))
+        listener.listen(128)
+        self.sock = listener
+        shown = '127.0.0.1' if host in ('', '0.0.0.0') else host
+        self.address = f'socks5://{shown}:{port}'
+        threading.Thread(target=self.serve, daemon=True).start()
+        return self
+
+    def serve(self):
+        while True:
+            try:
+                client, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.handle, args=(client,), daemon=True).start()
+
+    @staticmethod
+    def _read(sock, size):
+        data = b''
+        while len(data) < size:
+            chunk = sock.recv(size - len(data))
+            if not chunk:
+                raise ConnectionError('Client closed the connection')
+            data += chunk
+        return data
+
+    @staticmethod
+    def _reply(client, code):
+        client.sendall(struct.pack('!BBBB4sH', 5, code, 0, 1, b'\0\0\0\0', 0))
+
+    def handle(self, client):
+        ident = sid = None
+        try:
+            client.settimeout(15)
+            version, count = self._read(client, 2)
+            if version != 5:
+                return
+            methods = self._read(client, count)
+            if 0 not in methods:
+                client.sendall(b'\x05\xff')
+                return
+            client.sendall(b'\x05\x00')
+            version, command, _, address_type = self._read(client, 4)
+            if version != 5 or command != 1:
+                self._reply(client, 7)
+                return
+            if address_type == 1:
+                host = socket.inet_ntoa(self._read(client, 4))
+            elif address_type == 3:
+                host = self._read(client, self._read(client, 1)[0]).decode('utf-8', 'replace')
+            elif address_type == 4:
+                host = socket.inet_ntop(socket.AF_INET6, self._read(client, 16))
+            else:
+                self._reply(client, 8)
+                return
+            port = struct.unpack('!H', self._read(client, 2))[0]
+            try:
+                ident, sid = self.service.net_open(host, port)
+            except (ValueError, OSError):
+                self._reply(client, 3)
+                return
+            self._reply(client, 0)
+            client.settimeout(None)
+
+            def upstream():
+                try:
+                    while True:
+                        data = client.recv(32768)
+                        if not data:
+                            break
+                        self.service.net_write(ident, sid, data)
+                except (OSError, ValueError):
+                    pass
+                finally:
+                    try:
+                        self.service.net_close(ident, sid)
+                    except OSError:
+                        pass
+
+            threading.Thread(target=upstream, daemon=True).start()
+            while True:
+                data, closed = self.service.net_read(ident, sid)
+                if data:
+                    client.sendall(data)
+                if closed:
+                    break
+        except (OSError, ValueError, ConnectionError):
+            pass
+        finally:
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                client.close()
+            except OSError:
+                pass
+            if sid:
+                try:
+                    self.service.net_close(ident, sid)
+                except OSError:
+                    pass
 CONSOLEPY
 
 _export_common() {
@@ -2606,6 +3319,10 @@ _export_common() {
   export EXPOSE_ME_HTML="$_ME_HTML"
   export EXPOSE_LOGO_SVG="$_LOGO_SVG"
   export EXPOSE_CONSOLES="$CONSOLES" EXPOSE_CONSOLE_MODULE="$_CONSOLE_PY"
+  export EXPOSE_PROXY="$PROXY"
+  _CALLBACKS_LIST=""
+  (( ${#CALLBACKS[@]} )) && _CALLBACKS_LIST=$(IFS=,; printf '%s' "${CALLBACKS[*]}")
+  export EXPOSE_CALLBACKS="$_CALLBACKS_LIST"
   export EXPOSE_CLIENT_DIR="${EXPOSE_CLIENT_DIR:-$HOME/.local/share/expose/clients}"
 }
 
@@ -2617,6 +3334,7 @@ import datetime
 import email.parser
 import email.policy
 import fcntl
+import hmac
 import html
 import http.server
 import json
@@ -2624,6 +3342,7 @@ import mimetypes
 import os
 import re
 import runpy
+import secrets
 import signal
 import socket
 import socketserver
@@ -2632,6 +3351,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from http import cookies
 
 port = int(os.environ["EXPOSE_PORT"])
 bind_addr = os.environ.get("EXPOSE_BIND", "0.0.0.0")
@@ -2668,6 +3388,91 @@ try:
         logo_svg = logo_file.read()
 except OSError:
     logo_svg = ""
+
+# ── Authentication ───────────────────────────────────────────────────────────
+auth_password = os.environ.get('EXPOSE_AUTH_PASSWORD', '')
+auth_sessions = {}
+auth_failures = {}
+auth_lock = threading.Lock()
+AUTH_COOKIE = 'expose_session'
+AUTH_TTL = 12 * 3600
+AUTH_WINDOW = 300
+AUTH_ATTEMPTS = 10
+LOGIN_HEADERS = (
+    ('Content-Security-Policy',
+     "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'"),
+)
+
+def login_page(error='', next_path='/'):
+    message = html.escape(error)
+    target = html.escape(next_path)
+    brand = logo_svg or '<span>expose</span>'
+    return f'''<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Locked · expose</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#141414;color:#ededed;font:15px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif}}
+.card{{width:min(92vw,380px);background:#1d1d1d;border:1px solid #343434;border-radius:10px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,.35)}}
+.brand{{display:flex;align-items:center;gap:10px;font-weight:650;font-size:20px;letter-spacing:-.5px;margin-bottom:6px}}.brand svg{{width:30px;height:26px;color:#ededed}}
+p.sub{{color:#a3a3a3;font-size:13px;margin:0 0 24px}}label{{display:block;font-size:12px;font-weight:600;color:#bdbdbd;margin-bottom:8px}}
+input{{width:100%;padding:11px 12px;border-radius:6px;border:1px solid #777;background:#161616;color:#ededed;font:inherit;outline:none}}
+input:focus{{border-color:#94baff;box-shadow:0 0 0 3px rgba(148,186,255,.18)}}button{{width:100%;margin-top:16px;padding:11px 14px;border:0;border-radius:6px;background:#2563eb;color:#fff;font:inherit;font-weight:650;cursor:pointer}}
+button:hover{{filter:brightness(.95)}}.err{{min-height:20px;margin:12px 0 0;color:#ff9b96;font-size:12px}}.foot{{margin:20px 0 0;color:#777;font-size:11px;text-align:center}}
+@media(prefers-color-scheme:light){{body{{background:#fafbf8;color:#202b23}}.card{{background:#fff;border-color:#dce3d8;box-shadow:0 20px 60px rgba(0,0,0,.08)}}.brand svg{{color:#202b23}}p.sub,label{{color:#526254}}input{{background:#fafbf8;color:#202b23;border-color:#a4b1a4}}button{{background:#356847}}.err{{color:#a63832}}.foot{{color:#627164}}}}
+</style></head><body><main class="card">
+<div class="brand">{brand}<span>expose</span></div>
+<p class="sub">This session is password protected.</p>
+<form method="post" action="/login">
+<input type="hidden" name="next" value="{target}">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+<button type="submit">Unlock</button>
+<p class="err" role="status" aria-live="polite">{message}</p>
+</form><p class="foot">Authorised use only.</p>
+</main></body></html>'''
+
+def prune_auth():
+    now = time.time()
+    with auth_lock:
+        for token, expires in list(auth_sessions.items()):
+            if expires < now:
+                auth_sessions.pop(token, None)
+        for address, attempts in list(auth_failures.items()):
+            recent = [stamp for stamp in attempts if now - stamp < AUTH_WINDOW]
+            if recent:
+                auth_failures[address] = recent
+            else:
+                auth_failures.pop(address, None)
+
+# ── Operator output ──────────────────────────────────────────────────────────
+hit_lock = threading.Lock()
+hit_seen = {}
+HIT_WINDOW = 60
+INTERNAL_PATHS = {'/log', '/log/clear', '/chat', '/upload/files', '/meta',
+                  '/favicon.ico', '/.expose-health', '/login', '/logout',
+                  '/lin', '/mac', '/win'}
+
+def internal_path(path):
+    return path in INTERNAL_PATHS or path.startswith('/console/')
+
+def event(kind, message, ip=''):
+    sys.stderr.write(f"{datetime.datetime.now().strftime('%H:%M:%S')}  "
+                     f"{ip:<15}  {kind:<9} {message}\n")
+    sys.stderr.flush()
+
+def unique_hit(ip, method, path, code):
+    key = (ip, method, path, code)
+    now = time.time()
+    with hit_lock:
+        for seen_key, seen_at in list(hit_seen.items()):
+            if now - seen_at > HIT_WINDOW:
+                hit_seen.pop(seen_key, None)
+        if key in hit_seen:
+            return False
+        hit_seen[key] = now
+        return True
+
 os.makedirs(upload_dir, exist_ok=True)
 req_counter = 0
 counter_lock = threading.Lock()
@@ -2675,6 +3480,22 @@ _httpd = None
 console_enabled = os.environ.get('EXPOSE_CONSOLES') == '1'
 ConsoleService = runpy.run_path(os.environ['EXPOSE_CONSOLE_MODULE'])['ConsoleService']
 consoles = ConsoleService(console_enabled, os.environ.get('EXPOSE_CLIENT_DIR', ''))
+proxy_bind = os.environ.get('EXPOSE_PROXY', '').strip()
+if proxy_bind and console_enabled:
+    try:
+        consoles.start_proxy(proxy_bind)
+    except (OSError, ValueError) as error:
+        sys.stderr.write(f"\n  Proxy     could not listen on {proxy_bind}: {error}\n")
+        sys.stderr.flush()
+for item in os.environ.get('EXPOSE_CALLBACKS', '').split(','):
+    if not item.strip():
+        continue
+    local, _, remote = item.strip().partition(':')
+    try:
+        consoles.add_callback(int(local), int(remote or local))
+    except (TypeError, ValueError) as error:
+        sys.stderr.write(f"\n  Callback  invalid {item}: {error}\n")
+        sys.stderr.flush()
 
 def rdns(ip):
     try:
@@ -2812,6 +3633,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Server", "expose")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         protected = urllib.parse.urlsplit(self.path).path.startswith('/console/') or urllib.parse.urlsplit(self.path).path in ('/lin', '/mac', '/win')
         for name, value in ([] if protected else custom_headers):
             self.send_header(name, value)
@@ -2836,16 +3661,141 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             length = 0
         return self.rfile.read(length) if length > 0 else b""
 
-    def _check_access(self):
-        return True
+    def _cookie_token(self):
+        for part in self.headers.get('Cookie', '').split(';'):
+            name, separator, value = part.strip().partition('=')
+            if separator and name == AUTH_COOKIE:
+                return value
+        return ''
+
+    def real_ip(self):
+        peer = self.client_address[0]
+        if peer in ('127.0.0.1', '::1'):
+            forwarded = self.headers.get('X-Forwarded-For', '').split(',')[0].strip()
+            return forwarded or self.headers.get('X-Real-IP', '').strip() or peer
+        return peer
+
+    def _session_valid(self):
+        token = self._cookie_token()
+        if not token:
+            return False
+        with auth_lock:
+            expires = auth_sessions.get(token)
+            if not expires or expires < time.time():
+                auth_sessions.pop(token, None)
+                return False
+            return True
+
+    def _new_session(self):
+        token = secrets.token_urlsafe(32)
+        now = time.time()
+        with auth_lock:
+            for key, expires in list(auth_sessions.items()):
+                if expires < now:
+                    auth_sessions.pop(key, None)
+            if len(auth_sessions) >= 64:
+                auth_sessions.pop(next(iter(auth_sessions)), None)
+            auth_sessions[token] = now + AUTH_TTL
+        forwarded = self.headers.get('X-Forwarded-Proto', '').split(',')[0].strip().lower()
+        secure = '; Secure' if forwarded == 'https' else ''
+        return f'{AUTH_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={AUTH_TTL}{secure}'
+
+    def _authorized(self):
+        if not auth_password:
+            return True
+        path = urllib.parse.urlsplit(self.path).path
+        if (path in ('/login', '/logout') or path == '/.expose-health'
+                or path in ('/lin', '/mac', '/win')
+                or path.startswith('/console/client/')
+                or path == '/console/register'
+                or path.startswith('/console/agent/')
+                or self.command == 'OPTIONS'):
+            return True
+        if self._session_valid():
+            return True
+        if self.command == 'GET' and 'text/html' in self.headers.get('Accept', ''):
+            self._send(401, login_page('', path), 'text/html; charset=utf-8', LOGIN_HEADERS)
+        else:
+            self._send(401, json.dumps({'error': 'Password required'}),
+                       'application/json', LOGIN_HEADERS)
+        return False
+
+    def _redirect(self, target):
+        self._send(303, b'', 'text/plain', (('Location', target), ('Cache-Control', 'no-store')))
+
+    def _handle_login(self):
+        if not auth_password:
+            self._redirect('/')
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = -1
+        if not 0 <= length <= 8192:
+            self._send(413, login_page('Request too large.'), 'text/html; charset=utf-8',
+                       LOGIN_HEADERS)
+            return
+        body = self.rfile.read(length)
+        form = urllib.parse.parse_qs(body.decode('utf-8', 'replace'))
+        password = (form.get('password') or [''])[0]
+        next_path = (form.get('next') or ['/'])[0]
+        if (not next_path.startswith('/') or next_path.startswith('//')
+                or '\\' in next_path or '\r' in next_path or '\n' in next_path
+                or len(next_path) > 2048):
+            next_path = '/'
+        address = self.real_ip()
+        prune_auth()
+        with auth_lock:
+            blocked = len(auth_failures.get(address, [])) >= AUTH_ATTEMPTS
+        if hmac.compare_digest(password.encode(), auth_password.encode()):
+            with auth_lock:
+                auth_failures.pop(address, None)
+            event('LOGIN', 'ok', address)
+            self._send(303, b'', 'text/plain', (('Location', next_path),
+                                               ('Set-Cookie', self._new_session()),
+                                               ('Cache-Control', 'no-store')))
+            return
+        with auth_lock:
+            auth_failures.setdefault(address, []).append(time.time())
+        time.sleep(1.0 if blocked else 0.2)
+        if blocked:
+            event('LOGIN', 'blocked', address)
+            self._send(429, login_page('Too many attempts. Wait a minute.', next_path),
+                       'text/html; charset=utf-8', LOGIN_HEADERS)
+        else:
+            event('LOGIN', 'failed', address)
+            self._send(401, login_page('Incorrect password.', next_path),
+                       'text/html; charset=utf-8', LOGIN_HEADERS)
+
+    def _handle_logout(self):
+        token = self._cookie_token()
+        if token:
+            with auth_lock:
+                auth_sessions.pop(token, None)
+        event('LOGIN', 'logout', self.real_ip())
+        self._send(303, b'', 'text/plain', (
+            ('Location', '/login'), ('Cache-Control', 'no-store'),
+            ('Set-Cookie', f'{AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0')))
 
     def do_GET(self):
+        if not self._authorized():
+            return
+        path = urllib.parse.urlsplit(self.path).path
+        if path == '/login':
+            if not auth_password or self._session_valid():
+                self._redirect('/')
+            else:
+                self._send(401, login_page(), 'text/html; charset=utf-8', LOGIN_HEADERS)
+            return
         if consoles.handle(self):
             return
-        if not self._check_access():
-            return
-        if health_token and self.path.split('?', 1)[0] == '/.expose-health':
-            self._send(200, health_token, "text/plain", (("Cache-Control", "no-store"),))
+        if self.path.split('?', 1)[0] == '/.expose-health':
+            query = urllib.parse.parse_qs(self.path.split('?', 1)[1] if '?' in self.path else '')
+            supplied = query.get('session', [''])[0]
+            if health_token and hmac.compare_digest(supplied, health_token):
+                self._send(200, health_token, "text/plain", (("Cache-Control", "no-store"),))
+            else:
+                self._send(404, b"", "text/plain", (("Cache-Control", "no-store"),))
             return
         if redirect_url:
             self._send(302, b"", "text/plain", (("Location", redirect_url),))
@@ -3046,9 +3996,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return None
 
     def do_POST(self):
-        if consoles.handle(self):
+        path = urllib.parse.urlsplit(self.path).path
+        if path == '/login':
+            self._handle_login()
             return
-        if not self._check_access():
+        if path == '/logout':
+            self._handle_logout()
+            return
+        if not self._authorized():
+            return
+        if consoles.handle(self):
             return
         if self.path == '/chat/upload':
             try:
@@ -3112,10 +4069,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send(response_code, b"", "text/plain")
 
     def do_OPTIONS(self):
-        if self._check_access():
+        if self._authorized():
             self._send(204, b"", "text/plain")
 
+    def do_HEAD(self):
+        if not self._authorized():
+            return
+        super().do_HEAD()
+
     def do_DELETE(self):
+        if not self._authorized():
+            return
         if self.path.startswith("/upload/files/"):
             import urllib.parse
             name = urllib.parse.unquote(self.path[len("/upload/files/"):])
@@ -3136,9 +4100,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(405)
 
     def log_message(self, fmt, *args):
-        if urllib.parse.urlsplit(self.path).path.startswith('/console/') or urllib.parse.urlsplit(self.path).path in ('/lin', '/mac', '/win'):
-            return
-        if health_token and self.path.split('?', 1)[0] == '/.expose-health':
+        path = urllib.parse.urlsplit(self.path).path
+        if internal_path(path):
             return
         global req_counter
         with counter_lock:
@@ -3147,77 +4110,81 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ua = self.headers.get("User-Agent", "-") if self.headers else "-"
         code = str(args[1]) if len(args) > 1 else "-"
         now = datetime.datetime.now().strftime("%H:%M:%S")
-        client_ip = self.client_address[0]
+        client_ip = self.real_ip()
         client_port = self.client_address[1]
+        show = unique_hit(client_ip, self.command or "-", path, code)
 
-        if verbose:
-            host_name = rdns(client_ip)
-            browser, os_name = parse_ua(ua)
-            W = "\033[0m"; DM = "\033[2m"; BD = "\033[1m"; BL = "\033[34m"
-            CY = "\033[36m"; YW = "\033[1;33m"; UL = "\033[4m"
-            cc = "\033[32m" if code.startswith("2") else "\033[33m" if code.startswith("3") else "\033[31m"
-            SEP = f"  {DM}│{W}"
-            lines = []
-            lines.append(f"\n  {DM}┌─ #{request_number} ─────────────────────────────────────────────{W}")
-            lines.append(f"{SEP} {DM}{now}{W}  {BD}{self.command or '-'} {CY}{self.path or '-'}{W}  {cc}{code}{W}  {DM}{self.request_version}{W}")
-            client_str = f"{client_ip}:{client_port}"
-            if host_name: client_str += f"  {DM}({host_name}){W}"
-            lines.append(f"{SEP} {BL}Client{W}    {client_str}")
-            xff = self.headers.get("X-Forwarded-For")
-            if xff: lines.append(f"{SEP} {BL}Proxy{W}     {xff}")
-            lines.append(f"{SEP} {BL}Browser{W}   {browser}  {DM}({os_name}){W}")
-            for label, key in [("Host", "Host"), ("Language", "Accept-Language"),
-                               ("Accept", "Accept"), ("Encoding", "Accept-Encoding")]:
-                v = self.headers.get(key)
-                if v: lines.append(f"{SEP} {BL}{label:<9}{W} {v}")
-            ref = self.headers.get("Referer")
-            if ref: lines.append(f"{SEP} {BL}Referer{W}   {UL}{ref}{W}")
-            origin = self.headers.get("Origin")
-            if origin: lines.append(f"{SEP} {BL}Origin{W}    {origin}")
-            cookie = self.headers.get("Cookie")
-            if cookie: lines.append(f"{SEP} {BL}Cookies{W}   {cookie}")
-            conn = self.headers.get("Connection")
-            if conn: lines.append(f"{SEP} {BL}Conn{W}      {conn}")
-            if self.headers.get("DNT") == "1":
-                lines.append(f"{SEP} {BL}DNT{W}       \033[33myes{W}")
-            ct = self.headers.get("Content-Type")
-            cl = self.headers.get("Content-Length", "-")
-            if ct: lines.append(f"{SEP} {BL}Body{W}      {ct} ({cl} bytes)")
-            # Extra headers (Sec-*, Cache-Control, Auth, etc.)
-            extras = []
-            for k in self.headers:
-                kl = k.lower()
-                if kl.startswith("sec-") or kl in ("cache-control", "pragma", "authorization",
-                    "if-modified-since", "if-none-match", "upgrade-insecure-requests"):
-                    extras.append(f"  {k}: {self.headers[k]}")
-            if extras:
-                lines.append(f"{SEP} {DM}──────{W}")
-                for e in extras:
-                    lines.append(f"{SEP} {DM}{e}{W}")
-            lines.append(f"  {DM}└───────────────────────────────────────────────────{W}")
-            sys.stderr.write("\n".join(lines) + "\n")
-        else:
-            cc = "\033[32m" if code.startswith("2") else "\033[33m" if code.startswith("3") else "\033[31m"
-            sys.stderr.write(
-                "\033[2m%s\033[0m  \033[1;33m%-15s\033[0m  \033[1m%-7s\033[0m \033[36m%s\033[0m  %s%s\033[0m  \033[2m%s\033[0m\n"
-                % (now, client_ip, self.command or "-", self.path or "-", cc, code, ua))
-        sys.stderr.flush()
+        if show:
+            if verbose:
+                host_name = rdns(client_ip)
+                browser, os_name = parse_ua(ua)
+                W = "\033[0m"; DM = "\033[2m"; BD = "\033[1m"; BL = "\033[34m"
+                CY = "\033[36m"; YW = "\033[1;33m"; UL = "\033[4m"
+                cc = "\033[32m" if code.startswith("2") else "\033[33m" if code.startswith("3") else "\033[31m"
+                SEP = f"  {DM}│{W}"
+                lines = []
+                lines.append(f"\n  {DM}┌─ #{request_number} ─────────────────────────────────────────────{W}")
+                lines.append(f"{SEP} {DM}{now}{W}  {BD}{self.command or '-'} {CY}{self.path or '-'}{W}  {cc}{code}{W}  {DM}{self.request_version}{W}")
+                client_str = f"{client_ip}:{client_port}"
+                if client_ip != self.client_address[0]:
+                    client_str += f"  {DM}(via {self.client_address[0]}){W}"
+                if host_name: client_str += f"  {DM}({host_name}){W}"
+                lines.append(f"{SEP} {BL}Client{W}    {client_str}")
+                xff = self.headers.get("X-Forwarded-For")
+                if xff: lines.append(f"{SEP} {BL}Proxy{W}     {xff}")
+                lines.append(f"{SEP} {BL}Browser{W}   {browser}  {DM}({os_name}){W}")
+                for label, key in [("Host", "Host"), ("Language", "Accept-Language"),
+                                   ("Accept", "Accept"), ("Encoding", "Accept-Encoding")]:
+                    value = self.headers.get(key)
+                    if value: lines.append(f"{SEP} {BL}{label:<9}{W} {value}")
+                ref = self.headers.get("Referer")
+                if ref: lines.append(f"{SEP} {BL}Referer{W}   {UL}{ref}{W}")
+                origin = self.headers.get("Origin")
+                if origin: lines.append(f"{SEP} {BL}Origin{W}    {origin}")
+                cookie = self.headers.get("Cookie")
+                if cookie: lines.append(f"{SEP} {BL}Cookies{W}   {cookie}")
+                conn = self.headers.get("Connection")
+                if conn: lines.append(f"{SEP} {BL}Conn{W}      {conn}")
+                if self.headers.get("DNT") == "1":
+                    lines.append(f"{SEP} {BL}DNT{W}       \033[33myes{W}")
+                ct = self.headers.get("Content-Type")
+                cl = self.headers.get("Content-Length", "-")
+                if ct: lines.append(f"{SEP} {BL}Body{W}      {ct} ({cl} bytes)")
+                extras = []
+                for k in self.headers:
+                    kl = k.lower()
+                    if kl.startswith("sec-") or kl in ("cache-control", "pragma", "authorization",
+                        "if-modified-since", "if-none-match", "upgrade-insecure-requests"):
+                        extras.append(f"  {k}: {self.headers[k]}")
+                if extras:
+                    lines.append(f"{SEP} {DM}──────{W}")
+                    for extra in extras:
+                        lines.append(f"{SEP} {DM}{extra}{W}")
+                lines.append(f"  {DM}└───────────────────────────────────────────────────{W}")
+                sys.stderr.write("\n".join(lines) + "\n")
+            else:
+                browser, os_name = parse_ua(ua)
+                label = " ".join(part for part in (browser, os_name) if part and part != "-")
+                event("HTTP", f"{self.command or '-'} {self.path or '-'} {code}"
+                              + (f" · {label}" if label else ""), client_ip)
+            sys.stderr.flush()
 
         # Write to JSON log
-        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat'}
+        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat', '/login', '/logout'}
         _path_clean = (self.path or '').split('?')[0]
         if _path_clean not in _skip:
             entry = {"n": request_number, "ts": time.time(), "time": now,
                      "method": self.command or "-", "path": self.path or "-",
                      "httpver": self.request_version or "-",
-                     "ip": client_ip, "port": client_port, "code": code, "ua": ua}
+                     "ip": client_ip, "peer": self.client_address[0],
+                     "port": client_port, "code": code, "ua": ua}
             if self.headers:
                 for k in ("Host", "Accept", "Accept-Language", "Accept-Encoding",
                            "Referer", "Cookie", "Origin", "Connection",
                            "Content-Type", "Content-Length", "X-Forwarded-For",
                            "Authorization", "DNT"):
-                    v = self.headers.get(k)
-                    if v: entry[k.lower().replace("-","_")] = v
+                    value = self.headers.get(k)
+                    if value: entry[k.lower().replace("-","_")] = value
             request_body = getattr(self, "request_body", b"")
             if request_body:
                 entry["body"] = request_body.decode("utf-8", errors="replace")
@@ -3227,6 +4194,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = 128
 
 with Server((bind_addr, port), Handler) as httpd:
     _httpd = httpd

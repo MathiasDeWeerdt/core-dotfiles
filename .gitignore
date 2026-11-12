@@ -18,5 +18,9 @@ env
 # Secrets (ensure no API keys leak)
 *.secret
 
+# Python caches
+__pycache__/
+*.py[cod]
+
 # Local agent runtime state
 .omo/

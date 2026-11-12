@@ -78,7 +78,8 @@ All thin-provisioned qcow2, user-mode NAT networking (stable across WiFi/Etherne
 | `Ctrl+Shift+A` | Screenshot (flameshot) |
 
 ### Custom tooling
-- `expose` — serve files/dirs over HTTP with request inspection (full source in `expose/`)
+- `expose` — serve files/dirs over HTTP with request inspection; password-protected operator UI, browser consoles, SOCKS proxy, and inbound callbacks (full source in `expose/`)
+- `expose-online` — publish `expose` through `singlecore.dev` with an authenticated session and a resilient SSH tunnel
 - `flameshot-gui` — screenshot → clipboard in one shot
 - Nautilus right-click → **Open in Terminal** opens foot (via `nautilus-open-any-terminal`)
 

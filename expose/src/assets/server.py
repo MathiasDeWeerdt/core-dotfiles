@@ -2,6 +2,7 @@ import datetime
 import email.parser
 import email.policy
 import fcntl
+import hmac
 import html
 import http.server
 import json
@@ -9,6 +10,7 @@ import mimetypes
 import os
 import re
 import runpy
+import secrets
 import signal
 import socket
 import socketserver
@@ -17,6 +19,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from http import cookies
 
 port = int(os.environ["EXPOSE_PORT"])
 bind_addr = os.environ.get("EXPOSE_BIND", "0.0.0.0")
@@ -53,6 +56,91 @@ try:
         logo_svg = logo_file.read()
 except OSError:
     logo_svg = ""
+
+# ── Authentication ───────────────────────────────────────────────────────────
+auth_password = os.environ.get('EXPOSE_AUTH_PASSWORD', '')
+auth_sessions = {}
+auth_failures = {}
+auth_lock = threading.Lock()
+AUTH_COOKIE = 'expose_session'
+AUTH_TTL = 12 * 3600
+AUTH_WINDOW = 300
+AUTH_ATTEMPTS = 10
+LOGIN_HEADERS = (
+    ('Content-Security-Policy',
+     "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'"),
+)
+
+def login_page(error='', next_path='/'):
+    message = html.escape(error)
+    target = html.escape(next_path)
+    brand = logo_svg or '<span>expose</span>'
+    return f'''<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Locked · expose</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#141414;color:#ededed;font:15px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif}}
+.card{{width:min(92vw,380px);background:#1d1d1d;border:1px solid #343434;border-radius:10px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,.35)}}
+.brand{{display:flex;align-items:center;gap:10px;font-weight:650;font-size:20px;letter-spacing:-.5px;margin-bottom:6px}}.brand svg{{width:30px;height:26px;color:#ededed}}
+p.sub{{color:#a3a3a3;font-size:13px;margin:0 0 24px}}label{{display:block;font-size:12px;font-weight:600;color:#bdbdbd;margin-bottom:8px}}
+input{{width:100%;padding:11px 12px;border-radius:6px;border:1px solid #777;background:#161616;color:#ededed;font:inherit;outline:none}}
+input:focus{{border-color:#94baff;box-shadow:0 0 0 3px rgba(148,186,255,.18)}}button{{width:100%;margin-top:16px;padding:11px 14px;border:0;border-radius:6px;background:#2563eb;color:#fff;font:inherit;font-weight:650;cursor:pointer}}
+button:hover{{filter:brightness(.95)}}.err{{min-height:20px;margin:12px 0 0;color:#ff9b96;font-size:12px}}.foot{{margin:20px 0 0;color:#777;font-size:11px;text-align:center}}
+@media(prefers-color-scheme:light){{body{{background:#fafbf8;color:#202b23}}.card{{background:#fff;border-color:#dce3d8;box-shadow:0 20px 60px rgba(0,0,0,.08)}}.brand svg{{color:#202b23}}p.sub,label{{color:#526254}}input{{background:#fafbf8;color:#202b23;border-color:#a4b1a4}}button{{background:#356847}}.err{{color:#a63832}}.foot{{color:#627164}}}}
+</style></head><body><main class="card">
+<div class="brand">{brand}<span>expose</span></div>
+<p class="sub">This session is password protected.</p>
+<form method="post" action="/login">
+<input type="hidden" name="next" value="{target}">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+<button type="submit">Unlock</button>
+<p class="err" role="status" aria-live="polite">{message}</p>
+</form><p class="foot">Authorised use only.</p>
+</main></body></html>'''
+
+def prune_auth():
+    now = time.time()
+    with auth_lock:
+        for token, expires in list(auth_sessions.items()):
+            if expires < now:
+                auth_sessions.pop(token, None)
+        for address, attempts in list(auth_failures.items()):
+            recent = [stamp for stamp in attempts if now - stamp < AUTH_WINDOW]
+            if recent:
+                auth_failures[address] = recent
+            else:
+                auth_failures.pop(address, None)
+
+# ── Operator output ──────────────────────────────────────────────────────────
+hit_lock = threading.Lock()
+hit_seen = {}
+HIT_WINDOW = 60
+INTERNAL_PATHS = {'/log', '/log/clear', '/chat', '/upload/files', '/meta',
+                  '/favicon.ico', '/.expose-health', '/login', '/logout',
+                  '/lin', '/mac', '/win'}
+
+def internal_path(path):
+    return path in INTERNAL_PATHS or path.startswith('/console/')
+
+def event(kind, message, ip=''):
+    sys.stderr.write(f"{datetime.datetime.now().strftime('%H:%M:%S')}  "
+                     f"{ip:<15}  {kind:<9} {message}\n")
+    sys.stderr.flush()
+
+def unique_hit(ip, method, path, code):
+    key = (ip, method, path, code)
+    now = time.time()
+    with hit_lock:
+        for seen_key, seen_at in list(hit_seen.items()):
+            if now - seen_at > HIT_WINDOW:
+                hit_seen.pop(seen_key, None)
+        if key in hit_seen:
+            return False
+        hit_seen[key] = now
+        return True
+
 os.makedirs(upload_dir, exist_ok=True)
 req_counter = 0
 counter_lock = threading.Lock()
@@ -60,6 +148,22 @@ _httpd = None
 console_enabled = os.environ.get('EXPOSE_CONSOLES') == '1'
 ConsoleService = runpy.run_path(os.environ['EXPOSE_CONSOLE_MODULE'])['ConsoleService']
 consoles = ConsoleService(console_enabled, os.environ.get('EXPOSE_CLIENT_DIR', ''))
+proxy_bind = os.environ.get('EXPOSE_PROXY', '').strip()
+if proxy_bind and console_enabled:
+    try:
+        consoles.start_proxy(proxy_bind)
+    except (OSError, ValueError) as error:
+        sys.stderr.write(f"\n  Proxy     could not listen on {proxy_bind}: {error}\n")
+        sys.stderr.flush()
+for item in os.environ.get('EXPOSE_CALLBACKS', '').split(','):
+    if not item.strip():
+        continue
+    local, _, remote = item.strip().partition(':')
+    try:
+        consoles.add_callback(int(local), int(remote or local))
+    except (TypeError, ValueError) as error:
+        sys.stderr.write(f"\n  Callback  invalid {item}: {error}\n")
+        sys.stderr.flush()
 
 def rdns(ip):
     try:
@@ -197,6 +301,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Server", "expose")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         protected = urllib.parse.urlsplit(self.path).path.startswith('/console/') or urllib.parse.urlsplit(self.path).path in ('/lin', '/mac', '/win')
         for name, value in ([] if protected else custom_headers):
             self.send_header(name, value)
@@ -221,16 +329,141 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             length = 0
         return self.rfile.read(length) if length > 0 else b""
 
-    def _check_access(self):
-        return True
+    def _cookie_token(self):
+        for part in self.headers.get('Cookie', '').split(';'):
+            name, separator, value = part.strip().partition('=')
+            if separator and name == AUTH_COOKIE:
+                return value
+        return ''
+
+    def real_ip(self):
+        peer = self.client_address[0]
+        if peer in ('127.0.0.1', '::1'):
+            forwarded = self.headers.get('X-Forwarded-For', '').split(',')[0].strip()
+            return forwarded or self.headers.get('X-Real-IP', '').strip() or peer
+        return peer
+
+    def _session_valid(self):
+        token = self._cookie_token()
+        if not token:
+            return False
+        with auth_lock:
+            expires = auth_sessions.get(token)
+            if not expires or expires < time.time():
+                auth_sessions.pop(token, None)
+                return False
+            return True
+
+    def _new_session(self):
+        token = secrets.token_urlsafe(32)
+        now = time.time()
+        with auth_lock:
+            for key, expires in list(auth_sessions.items()):
+                if expires < now:
+                    auth_sessions.pop(key, None)
+            if len(auth_sessions) >= 64:
+                auth_sessions.pop(next(iter(auth_sessions)), None)
+            auth_sessions[token] = now + AUTH_TTL
+        forwarded = self.headers.get('X-Forwarded-Proto', '').split(',')[0].strip().lower()
+        secure = '; Secure' if forwarded == 'https' else ''
+        return f'{AUTH_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={AUTH_TTL}{secure}'
+
+    def _authorized(self):
+        if not auth_password:
+            return True
+        path = urllib.parse.urlsplit(self.path).path
+        if (path in ('/login', '/logout') or path == '/.expose-health'
+                or path in ('/lin', '/mac', '/win')
+                or path.startswith('/console/client/')
+                or path == '/console/register'
+                or path.startswith('/console/agent/')
+                or self.command == 'OPTIONS'):
+            return True
+        if self._session_valid():
+            return True
+        if self.command == 'GET' and 'text/html' in self.headers.get('Accept', ''):
+            self._send(401, login_page('', path), 'text/html; charset=utf-8', LOGIN_HEADERS)
+        else:
+            self._send(401, json.dumps({'error': 'Password required'}),
+                       'application/json', LOGIN_HEADERS)
+        return False
+
+    def _redirect(self, target):
+        self._send(303, b'', 'text/plain', (('Location', target), ('Cache-Control', 'no-store')))
+
+    def _handle_login(self):
+        if not auth_password:
+            self._redirect('/')
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = -1
+        if not 0 <= length <= 8192:
+            self._send(413, login_page('Request too large.'), 'text/html; charset=utf-8',
+                       LOGIN_HEADERS)
+            return
+        body = self.rfile.read(length)
+        form = urllib.parse.parse_qs(body.decode('utf-8', 'replace'))
+        password = (form.get('password') or [''])[0]
+        next_path = (form.get('next') or ['/'])[0]
+        if (not next_path.startswith('/') or next_path.startswith('//')
+                or '\\' in next_path or '\r' in next_path or '\n' in next_path
+                or len(next_path) > 2048):
+            next_path = '/'
+        address = self.real_ip()
+        prune_auth()
+        with auth_lock:
+            blocked = len(auth_failures.get(address, [])) >= AUTH_ATTEMPTS
+        if hmac.compare_digest(password.encode(), auth_password.encode()):
+            with auth_lock:
+                auth_failures.pop(address, None)
+            event('LOGIN', 'ok', address)
+            self._send(303, b'', 'text/plain', (('Location', next_path),
+                                               ('Set-Cookie', self._new_session()),
+                                               ('Cache-Control', 'no-store')))
+            return
+        with auth_lock:
+            auth_failures.setdefault(address, []).append(time.time())
+        time.sleep(1.0 if blocked else 0.2)
+        if blocked:
+            event('LOGIN', 'blocked', address)
+            self._send(429, login_page('Too many attempts. Wait a minute.', next_path),
+                       'text/html; charset=utf-8', LOGIN_HEADERS)
+        else:
+            event('LOGIN', 'failed', address)
+            self._send(401, login_page('Incorrect password.', next_path),
+                       'text/html; charset=utf-8', LOGIN_HEADERS)
+
+    def _handle_logout(self):
+        token = self._cookie_token()
+        if token:
+            with auth_lock:
+                auth_sessions.pop(token, None)
+        event('LOGIN', 'logout', self.real_ip())
+        self._send(303, b'', 'text/plain', (
+            ('Location', '/login'), ('Cache-Control', 'no-store'),
+            ('Set-Cookie', f'{AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0')))
 
     def do_GET(self):
+        if not self._authorized():
+            return
+        path = urllib.parse.urlsplit(self.path).path
+        if path == '/login':
+            if not auth_password or self._session_valid():
+                self._redirect('/')
+            else:
+                self._send(401, login_page(), 'text/html; charset=utf-8', LOGIN_HEADERS)
+            return
         if consoles.handle(self):
             return
-        if not self._check_access():
-            return
-        if health_token and self.path.split('?', 1)[0] == '/.expose-health':
-            self._send(200, health_token, "text/plain", (("Cache-Control", "no-store"),))
+        if self.path.split('?', 1)[0] == '/.expose-health':
+            query = urllib.parse.parse_qs(self.path.split('?', 1)[1] if '?' in self.path else '')
+            supplied = query.get('session', [''])[0]
+            if health_token and hmac.compare_digest(supplied, health_token):
+                self._send(200, health_token, "text/plain", (("Cache-Control", "no-store"),))
+            else:
+                self._send(404, b"", "text/plain", (("Cache-Control", "no-store"),))
             return
         if redirect_url:
             self._send(302, b"", "text/plain", (("Location", redirect_url),))
@@ -431,9 +664,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return None
 
     def do_POST(self):
-        if consoles.handle(self):
+        path = urllib.parse.urlsplit(self.path).path
+        if path == '/login':
+            self._handle_login()
             return
-        if not self._check_access():
+        if path == '/logout':
+            self._handle_logout()
+            return
+        if not self._authorized():
+            return
+        if consoles.handle(self):
             return
         if self.path == '/chat/upload':
             try:
@@ -497,10 +737,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send(response_code, b"", "text/plain")
 
     def do_OPTIONS(self):
-        if self._check_access():
+        if self._authorized():
             self._send(204, b"", "text/plain")
 
+    def do_HEAD(self):
+        if not self._authorized():
+            return
+        super().do_HEAD()
+
     def do_DELETE(self):
+        if not self._authorized():
+            return
         if self.path.startswith("/upload/files/"):
             import urllib.parse
             name = urllib.parse.unquote(self.path[len("/upload/files/"):])
@@ -521,9 +768,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(405)
 
     def log_message(self, fmt, *args):
-        if urllib.parse.urlsplit(self.path).path.startswith('/console/') or urllib.parse.urlsplit(self.path).path in ('/lin', '/mac', '/win'):
-            return
-        if health_token and self.path.split('?', 1)[0] == '/.expose-health':
+        path = urllib.parse.urlsplit(self.path).path
+        if internal_path(path):
             return
         global req_counter
         with counter_lock:
@@ -532,77 +778,81 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ua = self.headers.get("User-Agent", "-") if self.headers else "-"
         code = str(args[1]) if len(args) > 1 else "-"
         now = datetime.datetime.now().strftime("%H:%M:%S")
-        client_ip = self.client_address[0]
+        client_ip = self.real_ip()
         client_port = self.client_address[1]
+        show = unique_hit(client_ip, self.command or "-", path, code)
 
-        if verbose:
-            host_name = rdns(client_ip)
-            browser, os_name = parse_ua(ua)
-            W = "\033[0m"; DM = "\033[2m"; BD = "\033[1m"; BL = "\033[34m"
-            CY = "\033[36m"; YW = "\033[1;33m"; UL = "\033[4m"
-            cc = "\033[32m" if code.startswith("2") else "\033[33m" if code.startswith("3") else "\033[31m"
-            SEP = f"  {DM}│{W}"
-            lines = []
-            lines.append(f"\n  {DM}┌─ #{request_number} ─────────────────────────────────────────────{W}")
-            lines.append(f"{SEP} {DM}{now}{W}  {BD}{self.command or '-'} {CY}{self.path or '-'}{W}  {cc}{code}{W}  {DM}{self.request_version}{W}")
-            client_str = f"{client_ip}:{client_port}"
-            if host_name: client_str += f"  {DM}({host_name}){W}"
-            lines.append(f"{SEP} {BL}Client{W}    {client_str}")
-            xff = self.headers.get("X-Forwarded-For")
-            if xff: lines.append(f"{SEP} {BL}Proxy{W}     {xff}")
-            lines.append(f"{SEP} {BL}Browser{W}   {browser}  {DM}({os_name}){W}")
-            for label, key in [("Host", "Host"), ("Language", "Accept-Language"),
-                               ("Accept", "Accept"), ("Encoding", "Accept-Encoding")]:
-                v = self.headers.get(key)
-                if v: lines.append(f"{SEP} {BL}{label:<9}{W} {v}")
-            ref = self.headers.get("Referer")
-            if ref: lines.append(f"{SEP} {BL}Referer{W}   {UL}{ref}{W}")
-            origin = self.headers.get("Origin")
-            if origin: lines.append(f"{SEP} {BL}Origin{W}    {origin}")
-            cookie = self.headers.get("Cookie")
-            if cookie: lines.append(f"{SEP} {BL}Cookies{W}   {cookie}")
-            conn = self.headers.get("Connection")
-            if conn: lines.append(f"{SEP} {BL}Conn{W}      {conn}")
-            if self.headers.get("DNT") == "1":
-                lines.append(f"{SEP} {BL}DNT{W}       \033[33myes{W}")
-            ct = self.headers.get("Content-Type")
-            cl = self.headers.get("Content-Length", "-")
-            if ct: lines.append(f"{SEP} {BL}Body{W}      {ct} ({cl} bytes)")
-            # Extra headers (Sec-*, Cache-Control, Auth, etc.)
-            extras = []
-            for k in self.headers:
-                kl = k.lower()
-                if kl.startswith("sec-") or kl in ("cache-control", "pragma", "authorization",
-                    "if-modified-since", "if-none-match", "upgrade-insecure-requests"):
-                    extras.append(f"  {k}: {self.headers[k]}")
-            if extras:
-                lines.append(f"{SEP} {DM}──────{W}")
-                for e in extras:
-                    lines.append(f"{SEP} {DM}{e}{W}")
-            lines.append(f"  {DM}└───────────────────────────────────────────────────{W}")
-            sys.stderr.write("\n".join(lines) + "\n")
-        else:
-            cc = "\033[32m" if code.startswith("2") else "\033[33m" if code.startswith("3") else "\033[31m"
-            sys.stderr.write(
-                "\033[2m%s\033[0m  \033[1;33m%-15s\033[0m  \033[1m%-7s\033[0m \033[36m%s\033[0m  %s%s\033[0m  \033[2m%s\033[0m\n"
-                % (now, client_ip, self.command or "-", self.path or "-", cc, code, ua))
-        sys.stderr.flush()
+        if show:
+            if verbose:
+                host_name = rdns(client_ip)
+                browser, os_name = parse_ua(ua)
+                W = "\033[0m"; DM = "\033[2m"; BD = "\033[1m"; BL = "\033[34m"
+                CY = "\033[36m"; YW = "\033[1;33m"; UL = "\033[4m"
+                cc = "\033[32m" if code.startswith("2") else "\033[33m" if code.startswith("3") else "\033[31m"
+                SEP = f"  {DM}│{W}"
+                lines = []
+                lines.append(f"\n  {DM}┌─ #{request_number} ─────────────────────────────────────────────{W}")
+                lines.append(f"{SEP} {DM}{now}{W}  {BD}{self.command or '-'} {CY}{self.path or '-'}{W}  {cc}{code}{W}  {DM}{self.request_version}{W}")
+                client_str = f"{client_ip}:{client_port}"
+                if client_ip != self.client_address[0]:
+                    client_str += f"  {DM}(via {self.client_address[0]}){W}"
+                if host_name: client_str += f"  {DM}({host_name}){W}"
+                lines.append(f"{SEP} {BL}Client{W}    {client_str}")
+                xff = self.headers.get("X-Forwarded-For")
+                if xff: lines.append(f"{SEP} {BL}Proxy{W}     {xff}")
+                lines.append(f"{SEP} {BL}Browser{W}   {browser}  {DM}({os_name}){W}")
+                for label, key in [("Host", "Host"), ("Language", "Accept-Language"),
+                                   ("Accept", "Accept"), ("Encoding", "Accept-Encoding")]:
+                    value = self.headers.get(key)
+                    if value: lines.append(f"{SEP} {BL}{label:<9}{W} {value}")
+                ref = self.headers.get("Referer")
+                if ref: lines.append(f"{SEP} {BL}Referer{W}   {UL}{ref}{W}")
+                origin = self.headers.get("Origin")
+                if origin: lines.append(f"{SEP} {BL}Origin{W}    {origin}")
+                cookie = self.headers.get("Cookie")
+                if cookie: lines.append(f"{SEP} {BL}Cookies{W}   {cookie}")
+                conn = self.headers.get("Connection")
+                if conn: lines.append(f"{SEP} {BL}Conn{W}      {conn}")
+                if self.headers.get("DNT") == "1":
+                    lines.append(f"{SEP} {BL}DNT{W}       \033[33myes{W}")
+                ct = self.headers.get("Content-Type")
+                cl = self.headers.get("Content-Length", "-")
+                if ct: lines.append(f"{SEP} {BL}Body{W}      {ct} ({cl} bytes)")
+                extras = []
+                for k in self.headers:
+                    kl = k.lower()
+                    if kl.startswith("sec-") or kl in ("cache-control", "pragma", "authorization",
+                        "if-modified-since", "if-none-match", "upgrade-insecure-requests"):
+                        extras.append(f"  {k}: {self.headers[k]}")
+                if extras:
+                    lines.append(f"{SEP} {DM}──────{W}")
+                    for extra in extras:
+                        lines.append(f"{SEP} {DM}{extra}{W}")
+                lines.append(f"  {DM}└───────────────────────────────────────────────────{W}")
+                sys.stderr.write("\n".join(lines) + "\n")
+            else:
+                browser, os_name = parse_ua(ua)
+                label = " ".join(part for part in (browser, os_name) if part and part != "-")
+                event("HTTP", f"{self.command or '-'} {self.path or '-'} {code}"
+                              + (f" · {label}" if label else ""), client_ip)
+            sys.stderr.flush()
 
         # Write to JSON log
-        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat'}
+        _skip = {'/log', '/log/clear', '/meta', '/upload/files', '/chat', '/login', '/logout'}
         _path_clean = (self.path or '').split('?')[0]
         if _path_clean not in _skip:
             entry = {"n": request_number, "ts": time.time(), "time": now,
                      "method": self.command or "-", "path": self.path or "-",
                      "httpver": self.request_version or "-",
-                     "ip": client_ip, "port": client_port, "code": code, "ua": ua}
+                     "ip": client_ip, "peer": self.client_address[0],
+                     "port": client_port, "code": code, "ua": ua}
             if self.headers:
                 for k in ("Host", "Accept", "Accept-Language", "Accept-Encoding",
                            "Referer", "Cookie", "Origin", "Connection",
                            "Content-Type", "Content-Length", "X-Forwarded-For",
                            "Authorization", "DNT"):
-                    v = self.headers.get(k)
-                    if v: entry[k.lower().replace("-","_")] = v
+                    value = self.headers.get(k)
+                    if value: entry[k.lower().replace("-","_")] = value
             request_body = getattr(self, "request_body", b"")
             if request_body:
                 entry["body"] = request_body.decode("utf-8", errors="replace")
@@ -612,6 +862,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = 128
 
 with Server((bind_addr, port), Handler) as httpd:
     _httpd = httpd

@@ -1,6 +1,13 @@
 'use strict';
 /* expose — web UI */
 
+// Expired session: return to the login page instead of showing API errors.
+const _exposeFetch=window.fetch.bind(window);
+window.fetch=(...args)=>_exposeFetch(...args).then(response=>{
+  if(response.status===401&&!location.pathname.startsWith('/login'))location.href='/login';
+  return response;
+});
+
 // ── utils ─────────────────────────────────────────────────
 const q=id=>document.getElementById(id);
 function esc(s){const d=document.createElement('span');d.textContent=s;return d.innerHTML}

@@ -16,6 +16,10 @@ ${B}OPTIONS${R}
     -m, --more          Verbose logging (all headers, reverse DNS, parsed UA)
     --catch             Request catcher (dump full headers + body)
     --console           Enable browser terminals (automatic with expose-online)
+    --proxy ${CYN}[addr]${R}       SOCKS5 proxy to the connected machine's network
+                        (default: 127.0.0.1:1080; implies --console)
+    --callback ${CYN}<local[:remote]>${R}  Forward an endpoint listener back to a
+                        local port (repeatable; implies --console)
     --code ${CYN}<N>${R}           HTTP status code for responses (default: 200)
     --header ${CYN}"K: V"${R}     Add response header (repeatable)
     --cors              Add CORS headers (Access-Control-Allow-Origin: *)

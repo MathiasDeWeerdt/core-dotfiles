@@ -17,7 +17,7 @@ executable `dist/expose` is **build output — never edit it directly**.
 ### Build
 
 `build.sh` concatenates sources in a fixed order into one self-contained bash
-script (`dist/expose`, ~100 KB), resolves asset-injection markers with inline
+script (`dist/expose`, ~700 KB), resolves asset-injection markers with inline
 Python, and copies `src/expose-online.sh` to `dist/expose-online`:
 
 ```
@@ -36,10 +36,12 @@ Injection markers (resolved by `build.sh` via `str.replace`, verbatim,
 no escaping needed):
 
 - `@@INJECT:assets/<path>@@` inside heredocs in `serve.sh` — embeds
-  `server.py`, `payloads.sh`, `web/upload.html`,
+  `server.py`, `consoles.py`, `payloads.sh`, `web/upload.html`,
   `web/me.html`, `web/logo.svg`, and `web/fp.js`
-- `@@CSS@@` / `@@JS@@` / `@@FPJS@@` inside `src/assets/web/upload.html` — inlines
-  the stylesheet, client JS, and fingerprint script into a single HTML page
+- `@@CSS@@` / `@@JS@@` / `@@TERM_CSS@@` / `@@TERM_JS@@` / `@@FIT_JS@@` /
+  `@@CONSOLE_JS@@` / `@@FPJS@@` inside `src/assets/web/upload.html` — inlines
+  the stylesheet, client scripts, terminal vendor code, console UI, and
+  fingerprint script into a single HTML page
 - `web/fp.js` is also inlined into `/me` at runtime via the `EXPOSE_FP_JS` env
   var (tempfile path exported by `serve.sh`). It collects browser/device
   signals for display in the browser.
@@ -61,6 +63,14 @@ environment variables, exported by `_export_common()` in `serve.sh`
 (`EXPOSE_CONTENT`, `EXPOSE_LEN`, `EXPOSE_MIME`, `EXPOSE_LOGFILE`,
 `EXPOSE_FP_JS`, …). `EXPOSE_LOGFILE` points at
 `~/.expose/requests.json`, a persistent JSON request log capped at 500 entries.
+`EXPOSE_PROXY` (for example `127.0.0.1:1080`) starts the SOCKS5 listener in the
+same Python process; it only works when `EXPOSE_CONSOLES=1`.
+`EXPOSE_AUTH_PASSWORD` enables the login gate. Connector routes (`/lin`,
+`/mac`, `/win`, `/console/client/*`, `/console/register`, `/console/agent/*`)
+and `/.expose-health` are exempt because they require tickets or bearer
+tokens; all other routes need the session cookie. `expose-online` sets the
+password by default. New routes are protected by default — only extend the
+exemption list for traffic that authenticates itself with a ticket or token.
 **When adding an option: add the global
 in `globals.sh`, parse it in `args.sh`, validate in `validate.sh`, show it in
 `banner.sh` and `usage.sh`, export it in `_export_common()`, consume it in the
@@ -74,6 +84,41 @@ dashboard with sidebar navigation and live overview), `POST /upload`
 `/upload/files[/<name>]`, `/me`, `/log?since=n` + `/log/clear`, `/meta`,
 `/chat`, plus `/content` outside directory mode. The request log is JSON,
 capped at 500 entries; chat is capped at 200 messages.
+
+`src/assets/consoles.py` holds the console relay and the SOCKS5 proxy.
+Console sessions long-poll `/console/agent/<id>/input`; proxy streams use
+`/console/agent/<id>/net` plus per-stream `status`, `data`, and `close`
+endpoints. Inbound callbacks add `listen`/`unlisten` events, a connector
+`/callback/<id>/state` report, and `/net/<id>/inbound` for accepted connections.
+The Go connector (`src/connector/`) dials targets or accepts callback
+connections from the endpoint and pumps bytes over those HTTP endpoints. Keep
+per-session queues bounded.
+
+### Reconnection
+
+Do not turn a network error into a session close.
+
+- The connector retries terminal input/output and network relay requests with
+  exponential backoff (1 s → 60 s) until the context ends. Only 401/403/410 or a
+  dead PTY are fatal.
+- `ConsoleService` keeps sessions for 24 hours and does not flip `connected` on
+  inactivity. `stale` is presentation-only. Explicit `exit`, `close`, or
+  `remove` set `connected=False`.
+- Registration is idempotent for ten minutes when the connector supplies a
+  nonce; keep this behavior so a lost registration response can be retried.
+- `expose-online` retries the SSH tunnel forever with backoff and binds the
+  reverse port to `127.0.0.1` by default.
+
+### Operator output
+`server.py` prints event lines, not every request:
+
+- `internal_path()` hides UI polling and ticket routes from stderr and the JSON
+  log; keep new polling routes there.
+- `unique_hit()` deduplicates external hits for 60 seconds.
+- `event()` formats `time  ip  KIND  message`. Login, connector, SOCKS, and
+  callback transitions use it.
+- Real client IPs come from `X-Forwarded-For`/`X-Real-IP` only when the peer is
+  loopback. Keep the JSON log's `peer` field for tunnel debugging.
 
 ## Conventions
 
