@@ -67,8 +67,12 @@ class ConsoleService:
     def request_ip(handler):
         peer = handler.client_address[0]
         if peer in ('127.0.0.1', '::1'):
-            forwarded = handler.headers.get('X-Forwarded-For', '').split(',')[0].strip()
-            return forwarded or handler.headers.get('X-Real-IP', '').strip() or peer
+            real = handler.headers.get('X-Real-IP', '').strip()
+            if real:
+                return real
+            forwarded = handler.headers.get('X-Forwarded-For', '')
+            if forwarded.strip():
+                return forwarded.split(',')[-1].strip()
         return peer
 
     @staticmethod

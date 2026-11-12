@@ -207,6 +207,9 @@ assert_eq "303" "$login_code"
 assert_eq "online-test" "$(curl -fsS -b "$TEST_HOME/cookies" "http://127.0.0.1:$port/content")"
 assert_eq "online-test" "$(curl -fsS -b "$TEST_HOME/cookies" \
   -H 'X-Forwarded-For: 203.0.113.7' "http://127.0.0.1:$port/content")"
+assert_eq "online-test" "$(curl -fsS -b "$TEST_HOME/cookies" \
+  -H 'X-Forwarded-For: 1.1.1.1, 203.0.113.8' \
+  -H 'X-Real-IP: 203.0.113.9' "http://127.0.0.1:$port/content")"
 curl -fsS -b "$TEST_HOME/cookies" "http://127.0.0.1:$port/log" >/dev/null
 ! rg -q 'GET /log' "$TEST_HOME/online.err"
 rg -q 'LOGIN .*ok' "$TEST_HOME/online.err"
@@ -244,6 +247,8 @@ assert entries
 assert any(entry["path"] == "/content" for entry in entries)
 assert any(entry.get("ip") == "203.0.113.7" and entry.get("peer") == "127.0.0.1"
            for entry in entries)
+assert any(entry.get("ip") == "203.0.113.9" for entry in entries)
+assert not any(entry.get("ip") in ("1.1.1.1", "203.0.113.8") for entry in entries)
 assert not any(entry["path"].startswith("/log") for entry in entries)
 assert not any(entry["path"].startswith("/.expose-health") for entry in entries)
 assert "Sharedpassword778#" not in json.dumps(entries)
