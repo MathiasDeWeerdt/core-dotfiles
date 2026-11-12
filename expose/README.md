@@ -118,6 +118,7 @@ content on `/content`, or 404):
 | `GET /upload/preview/<name>` | Safe inline media / text preview |
 | `GET /lin`, `/mac`, `/win` | Console connector bootstrap (requires a connection ticket) |
 | `POST /console/winenum/ticket` · `GET /console/winenum.ps1?ticket=…` | Windows enumeration script and its short-lived transfer ticket |
+| `GET/POST /console/tools` · `GET /console/tool/<name>?ticket=…` · `GET /console/toolrunner.ps1?ticket=…` | Staged Windows tools, ticket download, and report runner |
 | `/console/*` | Console status, browser control, proxy, callbacks, and connector relay |
 | `GET`/`POST /chat` | Mini chat shared between visitors of the upload page |
 
@@ -263,7 +264,26 @@ The script collects:
 The report is written to `%TEMP%\expose-winenum-<host>-<time>.txt` and uploaded
 through a short-lived ticket to `~/Downloads/expose` on this host. The script
 ticket is issued only to an authenticated operator session; the ticket only
-grants the script download and report upload, and expires after 30 minutes.
+grants the script download and report upload, and expires after one hour.
+
+### Windows tools
+
+Third-party tools are **not bundled**. Upload the official files under
+**Consoles → Windows tools**; expose stores them in
+`~/.local/share/expose/tools` (override `EXPOSE_TOOLS_DIR`) and serves them to
+the endpoint through the same short-lived ticket.
+
+| Tool | Accepted filename | Report |
+|------|-------------------|--------|
+| winPEAS | `winPEAS*.exe` or `.bat` | text transcript |
+| Seatbelt | `Seatbelt.exe` | text transcript |
+| PrivescCheck | `PrivescCheck.ps1` | text transcript |
+| SharpHound | `SharpHound.exe` | ZIP for BloodHound |
+
+The UI warns that these tools can trigger Defender/EDR detection, quarantine,
+or alerts. The tool runner downloads the file to `%TEMP%`, runs it as the
+current user, captures output, and uploads the report/ZIP to
+`~/Downloads/expose` through the ticket. No service or persistence is created.
 
 This is **read-only path identification**, not exploitation. It does not dump
 credentials or modify services, tasks, or ACLs. Validate candidates manually.

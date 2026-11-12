@@ -296,6 +296,7 @@ class AuthFeatures(unittest.TestCase):
         cls.origin = f'http://127.0.0.1:{cls.port}'
         env = dict(os.environ, HOME=str(cls.home), EXPOSE_CLIENT_DIR=str(ROOT/'dist/console-clients'),
                    EXPOSE_CONSOLES='1', EXPOSE_AUTH_PASSWORD='secret123',
+                   EXPOSE_TOOLS_DIR=str(cls.home/'tools'),
                    EXPOSE_HEALTH_TOKEN='health123')
         cls.log = open(cls.home/'server.log', 'wb')
         cls.server = subprocess.Popen([str(ROOT/'dist/expose'), '--bind', '127.0.0.1',
@@ -377,6 +378,36 @@ class AuthFeatures(unittest.TestCase):
         log=(self.home/'.expose/requests.json').read_text()
         self.assertNotIn(ticket,log)
         self.assertIn('ticket=%2A%2A%2A',log)
+
+    def test_windows_tools_staging_and_ticket_download(self):
+        auth,_=self.opener()
+        self.open(auth,'/login',{'password':'secret123'})
+        payload=b'fake-seatbelt'
+        req=urllib.request.Request(self.origin+'/console/tools/Seatbelt.exe',data=payload,
+                                   headers={'Content-Type':'application/octet-stream'})
+        with auth.open(req,timeout=10) as response:
+            self.assertEqual(response.status,200)
+            self.assertEqual(json.loads(response.read())['name'],'Seatbelt.exe')
+        code,_,body=self.open(auth,'/console/tools')
+        self.assertEqual(code,200)
+        self.assertIn('Seatbelt.exe',json.loads(body)['tools'][0]['name'])
+        req=urllib.request.Request(self.origin+'/console/winenum/ticket',data=b'',method='POST')
+        with auth.open(req,timeout=10) as response:
+            ticket=json.loads(response.read())['ticket']
+        anon,_=self.opener()
+        code,_,downloaded=self.open(anon,'/console/tool/Seatbelt.exe?ticket='+ticket)
+        self.assertEqual(code,200); self.assertEqual(downloaded,payload)
+        self.assertEqual(self.open(anon,'/console/tool/Seatbelt.exe?ticket=bad')[0],401)
+        code,_,runner=self.open(anon,'/console/toolrunner.ps1?ticket='+ticket)
+        self.assertEqual(code,200); self.assertIn(b'ExposeKind',runner)
+        req=urllib.request.Request(self.origin+'/console/tools/Seatbelt.exe',data=payload,
+                                   headers={'Content-Type':'application/octet-stream'})
+        try:
+            anon.open(req,timeout=10)
+            self.fail('tool upload allowed anonymous access')
+        except urllib.error.HTTPError as response:
+            with response:
+                self.assertEqual(response.code,401)
 
     def test_password_gate_and_connector_exemptions(self):
         anon,_=self.opener()

@@ -25,6 +25,7 @@ src/
     ├── server.py           # Unified Python HTTP backend
     ├── consoles.py         # Console relay + SOCKS5 network proxy
     ├── winenum.ps1         # Read-only Windows enumeration script
+    ├── toolrunner.ps1      # Downloads staged Windows tools and uploads reports
     ├── payloads.sh         # Built-in payload templates
     └── web/
         ├── upload.html     # HTML skeleton (inject markers: @@CSS@@ / @@JS@@)
