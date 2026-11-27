@@ -81,3 +81,20 @@ manager is available; never contact that manager from disposable-home tests.
 After the authorized historical secret cleanup, other devices need fresh clones.
 Never merge their old history back into cleaned branches. Private backups of old
 history must remain outside this public repository with restricted permissions.
+
+## Managed agent skills
+
+Read `skills/README.md`. `skills/manifest.json` lists explicit upstream sources and
+pins the official Skills CLI; GitHub refs/releases resolve to full commits before
+installation. Public custom skills belong under `skills/custom/<name>/SKILL.md`.
+Private custom sources belong in the private per-user skills.local.json manifest,
+never imported into Git. Never copy global skill directories, built-in skills,
+private skill state, or credential files into this public repository.
+
+Deployment refreshes managed skills unless SKIP_AGENT_SKILLS=true. Local edits to
+managed installs and conflicting user skills block replacement; preserve them as
+separate custom skills. Existing matching Skills CLI installs can be adopted only
+with a private backup. Use `python3 tests/skills.py` for isolated tests; deployment
+tests must set SKIP_AGENT_SKILLS=true and never fetch into the workstation home.
+The Git sync timer does not execute skill updates. Do not run newly fetched skill
+scripts, hooks, or project initialization as an installation side effect.

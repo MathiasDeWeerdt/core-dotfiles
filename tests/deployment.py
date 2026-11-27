@@ -46,7 +46,7 @@ class Deployment(unittest.TestCase):
         cls.temp.cleanup()
 
     def environment(self, home):
-        env = dict(os.environ, HOME=str(home), USER="fixture-user", DESIRED_HOSTNAME="fixture-host", SKIP_CONSOLE_CLIENTS="true")
+        env = dict(os.environ, HOME=str(home), USER="fixture-user", DESIRED_HOSTNAME="fixture-host", SKIP_CONSOLE_CLIENTS="true", SKIP_AGENT_SKILLS="true")
         for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "COPILOT_HOME", "DOTFILES_DIR", "DOTFILES_SYNC_ENABLE"):
             env.pop(key, None)
         return env
@@ -95,6 +95,22 @@ class Deployment(unittest.TestCase):
         enabled = home / ".config/systemd/user/timers.target.wants/core-dotfiles-sync.timer"
         self.assertFalse(enabled.is_symlink())
         self.assertTrue((home / ".config/systemd/user/core-dotfiles-sync.timer").is_symlink())
+
+    def test_shared_deployment_refreshes_skills_by_default(self):
+        home = self.base / "skill-hook-home"
+        home.mkdir()
+        env = self.environment(home)
+        env.pop("SKIP_AGENT_SKILLS")
+        env["EXPOSE_INSTALL_DIR"] = str(home / "bin")
+        helper = self.repo / "scripts/manage-skills.py"
+        original = helper.read_text()
+        try:
+            helper.write_text("from pathlib import Path\nimport sys\nassert sys.argv[1:] == ['sync']\n"
+                              "(Path.home() / 'skill-hook-called').write_text('sync')\n")
+            self.run_script("bash", str(self.repo / "scripts/deploy.sh"), env=env)
+            self.assertEqual((home / "skill-hook-called").read_text(), "sync")
+        finally:
+            helper.write_text(original)
 
     def test_dry_runs_do_not_execute_mutating_commands(self):
         home = self.base / "dry-home"

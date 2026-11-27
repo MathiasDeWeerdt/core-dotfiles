@@ -47,6 +47,20 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | `copilot` (`@github/copilot`) | npm global | GitHub |
 | `pi` (`@earendil-works/pi-coding-agent`) | npm global | Earendil |
 
+### Agent skills
+
+Installation and updates manage selected skills through the official Skills CLI.
+Impeccable follows its latest stable skill release. Public custom skills live in
+`skills/custom/<name>/SKILL.md`; private skills stay outside Git and can be listed
+in private `~/.config/core-dotfiles/skills.local.json`. Existing unlisted skills
+are preserved, and local edits to managed skills block replacement.
+
+Use `dotfiles-skills check` to check versions and `dotfiles-skills sync` to update.
+See [skills/README.md](skills/README.md) for sources, discovery paths, backups, and
+custom-skill setup. Config-only deployment also refreshes skills; set
+`SKIP_AGENT_SKILLS=true` to skip that step. Full bootstrap installs the required
+Node.js; config-only installs need Node.js >=22.20 and npx already available.
+
 ### Dev runtimes
 | Runtime | Manager | Versions |
 |---------|---------|----------|
@@ -113,6 +127,7 @@ core-dotfiles/
 ├── expose/       → Full source for the expose HTTP tool
 ├── systemd/      → Default committed sync; optional update-check user timer
 ├── scripts/      → Deployment, credential checks, GNOME settings, VM manager
+├── skills/       → Managed skill sources and public custom skills
 ├── tests/        → Isolated deployment, security, and sync checks
 └── packages/     → pacman.txt, aur.txt, npm.txt
 ```
@@ -129,7 +144,7 @@ Uses **GNU Stow** to link public configs into `$HOME`. Conflicting files are bac
 ./install.sh --configs-only     # Configs, private memory wiring, expose tools only
 
 ./update.sh                     # Upgrade packages/runtimes/plugins and redeploy
-./update.sh --configs-only      # Redeploy current local sources without pulling
+./update.sh --configs-only      # Redeploy local configs/tools and refresh skills
 ./update.sh --dry-run           # Preview without changes
 ```
 
@@ -188,6 +203,7 @@ bash tests/quickemu.sh
 python3 tests/gnome.py
 python3 tests/secret-checks.py
 python3 tests/sync.py             # Disposable local Git remotes; no network
+python3 tests/skills.py           # Skill ownership, updates, rollback, 100 repeats
 python3 tests/internetshare.py    # requires the system python-flask package
 make -C expose console-clients test
 (cd expose/src/connector && go test ./... && go vet ./...)

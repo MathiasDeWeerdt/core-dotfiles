@@ -36,6 +36,7 @@ jobs:
           .venv/bin/python tests/gnome.py
           .venv/bin/python tests/secret-checks.py
           .venv/bin/python tests/sync.py
+          .venv/bin/python tests/skills.py
           zsh -n zsh/.zshrc zsh/.zshenv
       - name: Build and test expose and all connectors
         run: |

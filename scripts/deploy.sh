@@ -10,6 +10,9 @@ case "${1:-}" in
         if [[ "${DOTFILES_SYNC_ENABLE:-true}" != false ]]; then
             printf 'Would enable reviewed-commit sync and start its user timer when available.\n'
         fi
+        if [[ "${SKIP_AGENT_SKILLS:-false}" != true ]]; then
+            python3 "$ROOT/scripts/manage-skills.py" --dry-run
+        fi
         exit 0 ;;
     '') ;;
     *) printf 'Unknown deployment option: %s\n' "$1" >&2; exit 1 ;;
@@ -41,4 +44,8 @@ done
 
 if command -v go >/dev/null && [[ "${SKIP_CONSOLE_CLIENTS:-false}" != true ]]; then
     make -C "$ROOT/expose" install-console-clients
+fi
+
+if [[ "${SKIP_AGENT_SKILLS:-false}" != true ]]; then
+    python3 "$ROOT/scripts/manage-skills.py" sync
 fi

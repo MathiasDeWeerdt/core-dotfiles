@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "cli_version": "1.9.1",
+  "agents": ["codex", "claude-code", "opencode", "github-copilot", "pi"],
+  "skills": [
+    {
+      "name": "impeccable",
+      "type": "github",
+      "repo": "pbakaus/impeccable",
+      "path": ".agents/skills/impeccable",
+      "release_prefix": "skill-v"
+    }
+  ]
+}
