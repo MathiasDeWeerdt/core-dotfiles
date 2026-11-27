@@ -15,7 +15,7 @@ RULES = {
     "credential-default": re.compile(rb"(?i)\$\{[A-Z0-9_]*(?:PASSWORD|PASSWD|API_KEY|AUTH_TOKEN|SECRET_KEY)(?::-|-)([^}\r\n]+)\}"),
     "credential-dict": re.compile(rb'''(?i)["'](?:wifi_password|password|api_key|secret_key|access_token)["']\s*:\s*["']([^"'\r\n]+)["']'''),
 }
-PRIVATE_NAMES = re.compile(r"(?:^|/)(?:\.env(?:\..+)?|env|secrets?\.(?:zsh|sh|json|env)|id_(?:rsa|ed25519|ecdsa)|(?:credentials|auth)\.json)$")
+PRIVATE_NAMES = re.compile(r"(?:^|/)(?:\.env(?:\..+)?|env|api_key|secrets?\.(?:zsh|sh|json|env)|id_(?:rsa|ed25519|ecdsa)|(?:credentials|auth)\.json)$")
 
 
 def findings(data, filename=""):

@@ -61,6 +61,12 @@ custom-skill setup. Config-only deployment also refreshes skills; set
 `SKIP_AGENT_SKILLS=true` to skip that step. Full bootstrap installs the required
 Node.js; config-only installs need Node.js >=22.20 and npx already available.
 
+The custom DeHashed skill is included with its stdlib client and references.
+Its API key, account state, cache, budget ledger, and exported breach data stay
+outside Git. Configure each device privately with
+`python3 ~/.agents/skills/dehashed/scripts/dehashed.py init` when needed;
+installation neither copies credentials nor performs DeHashed API calls.
+
 ### Dev runtimes
 | Runtime | Manager | Versions |
 |---------|---------|----------|
@@ -209,6 +215,7 @@ python3 tests/gnome.py
 python3 tests/secret-checks.py
 python3 tests/sync.py             # Disposable local Git remotes; no network
 python3 tests/skills.py           # Skill ownership, updates, rollback, 100 repeats
+python3 tests/dehashed.py         # Offline key handling and evidence isolation
 python3 tests/internetshare.py    # requires the system python-flask package
 make -C expose console-clients test
 (cd expose/src/connector && go test ./... && go vet ./...)

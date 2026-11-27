@@ -184,7 +184,7 @@ def require_cli_runtime():
         raise SkillError("The pinned Skills CLI requires Node.js >=22.20; update Node before installing skills")
 
 
-def sync_one(item, target, manifest, state, state_path, storage):
+def sync_one(item, target, manifest, state, state_path, storage, *, allow_adopt=False):
     home = Path.home()
     canonical = home / ".agents/skills" / item["name"]
     outside_repo(canonical)
@@ -215,7 +215,7 @@ def sync_one(item, target, manifest, state, state_path, storage):
         legacy = read_json(home / ".agents/.skill-lock.json", {}).get("skills", {}).get(item["name"], {})
         same_source = (item["type"] == "github" and legacy.get("source") == item["repo"]
                        and legacy.get("skillPath", "").removesuffix("/SKILL.md") == item["path"])
-        if not same_source and (item["type"] != "local" or digest(canonical) != target["revision"]):
+        if not same_source and not allow_adopt and (item["type"] != "local" or digest(canonical) != target["revision"]):
             raise SkillError("An unmanaged skill already exists; it was left untouched")
     links_ready = all(path.exists() and path.resolve() == canonical.resolve() for path in paths)
     if previous and canonical.exists() and previous["revision"] == target["revision"] and links_ready and previous.get("agents") == manifest["agents"]:
@@ -281,8 +281,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", nargs="?", choices=("sync", "check"), default="sync")
     parser.add_argument("--dry-run", action="store_true", help="preview without network or writes")
+    parser.add_argument("--adopt", action="append", default=[], metavar="NAME",
+                        help="back up and replace this explicitly selected unmanaged skill")
     args = parser.parse_args()
     manifest, entries = load_manifest()
+    if args.adopt and (args.command != "sync" or not set(args.adopt) <= {item["name"] for item in entries}):
+        raise SkillError("Adoption applies only to named managed skills during sync")
     if args.dry_run:
         for item in entries:
             print("Would check/install managed skill: " + item["name"] + " (" + item["type"] + ")")
@@ -314,7 +318,7 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = read_json(state_path, {"version": 1, "skills": {}})
         for item in entries:
-            sync_one(item, resolve(item), manifest, state, state_path, storage)
+            sync_one(item, resolve(item), manifest, state, state_path, storage, allow_adopt=item["name"] in args.adopt)
     return 0
 
 

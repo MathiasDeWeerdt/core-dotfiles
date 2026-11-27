@@ -79,6 +79,12 @@ copies, and foreign symlinks are preserved and block a conflicting installation.
 Backups never enter this repository. Removing an entry does not delete an
 installed skill automatically; use the Skills CLI's removal command deliberately.
 
+To migrate a named, existing custom skill into this system after reviewing the
+repo's replacement, run `dotfiles-skills sync --adopt <name>`. This backs up and
+replaces that unmanaged canonical skill only. It does not bypass local-edit or
+source-ownership protection for skills already managed, or overwrite conflicting
+agent-specific copies.
+
 Use `dotfiles-skills` to update managed packages. Its CLI lock entry records the
 resolved commit; it is not a floating upstream ref. Updating or editing a managed
 package through another installer changes its recorded content and will block the

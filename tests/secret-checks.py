@@ -12,6 +12,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SecretChecks(unittest.TestCase):
+    def test_api_key_files_are_rejected_even_without_a_known_token_format(self):
+        with tempfile.TemporaryDirectory(prefix="core-dotfiles-key-file-") as directory:
+            repo = Path(directory)
+            (repo / "scripts").mkdir()
+            scanner = repo / "scripts/check-secrets.py"
+            shutil.copyfile(ROOT / "scripts/check-secrets.py", scanner)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            value = secrets.token_hex(24)
+            (repo / "api_key").write_text(value)
+            subprocess.run(["git", "-C", str(repo), "add", "api_key"], check=True)
+            result = subprocess.run([sys.executable, str(scanner), "--staged"], capture_output=True, text=True)
+            if value in result.stdout + result.stderr:
+                self.fail("The scanner exposed a credential file's contents")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("private credential filename", result.stdout)
+
     def test_unquoted_shell_credentials_are_rejected(self):
         with tempfile.TemporaryDirectory(prefix="core-dotfiles-unquoted-check-") as directory:
             repo = Path(directory)

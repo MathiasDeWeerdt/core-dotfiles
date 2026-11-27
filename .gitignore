@@ -29,6 +29,7 @@ id_ed25519
 id_ecdsa
 secrets.*
 credentials.json
+api_key
 auth.json
 online.env
 .memory.local.md

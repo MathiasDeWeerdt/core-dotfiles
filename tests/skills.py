@@ -123,6 +123,18 @@ class Skills(unittest.TestCase):
         self.installer.assert_not_called()
         self.assertEqual((own / "SKILL.md").read_text(), "Existing user skill")
 
+    def test_explicit_named_adoption_backs_up_an_existing_custom_skill(self):
+        self.canonical.mkdir(parents=True)
+        (self.canonical / "SKILL.md").write_text("Original private user instructions")
+        with self.assertRaises(manager.SkillError):
+            self.run_manager()
+        self.run_manager("sync", "--adopt", "example-workflow")
+        saved = list((self.storage / "backups").glob("*/example-workflow/SKILL.md"))
+        self.assertEqual(saved[0].read_text(), "Original private user instructions")
+        (self.canonical / "SKILL.md").write_text("Further user edits")
+        with self.assertRaises(manager.SkillError):
+            self.run_manager("sync", "--adopt", "example-workflow")
+
     def test_failure_restores_prior_skill_and_removes_first_install_debris(self):
         self.failure = True
         with self.assertRaises(manager.SkillError):
