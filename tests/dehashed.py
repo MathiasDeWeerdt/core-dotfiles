@@ -2,6 +2,7 @@
 """Offline credential and evidence isolation checks for the custom skill."""
 import argparse
 import contextlib
+import email.message
 import importlib.util
 import io
 import json
@@ -108,9 +109,11 @@ class Dehashed(unittest.TestCase):
 
     def test_bad_output_is_rejected_before_authentication_or_spending(self):
         errors = io.StringIO()
-        with contextlib.redirect_stderr(errors):
+        with contextlib.redirect_stderr(errors), mock.patch.object(self.client, "cmd_lookup") as lookup:
             result = self.client.main(["domain", "example.com", "--out", str(self.repo / "result.json"), "--max-credits", "1"])
         self.assertEqual(result, 2)
+        self.assertIn("outside Git", errors.getvalue())
+        lookup.assert_not_called()
         self.network.assert_not_called()
         self.assertFalse(Path(self.client.LEDGER_FILE).exists())
 
@@ -125,9 +128,10 @@ class Dehashed(unittest.TestCase):
                 self.client._write_payload(payload, str(self.repo / path.name), fmt)
 
     def test_only_api_https_origin_is_accepted(self):
-        for url in ("http://api.dehashed.com/v2/info/user", "https://example.invalid/", "https://api.dehashed.com.example.invalid/"):
-            with self.assertRaises(self.client.UsageError):
-                self.client.request("GET", url, sleep=False)
+        with mock.patch.dict(os.environ, {"DEHASHED_API_KEY": self.token}):
+            for url in ("http://api.dehashed.com/v2/info/user", "https://example.invalid/", "https://api.dehashed.com.example.invalid/"):
+                with self.assertRaises(self.client.UsageError):
+                    self.client.request("GET", url, sleep=False)
         self.network.assert_not_called()
 
     def test_redirects_cannot_forward_authentication(self):
@@ -136,7 +140,9 @@ class Dehashed(unittest.TestCase):
         class FixtureHTTPS(urllib.request.HTTPSHandler):
             def https_open(self, request):
                 calls.append(request.full_url)
-                response = urllib.response.addinfourl(io.BytesIO(b""), {"Location": "https://example.invalid/"}, request.full_url, 302)
+                headers = email.message.Message()
+                headers["Location"] = "https://example.invalid/"
+                response = urllib.response.addinfourl(io.BytesIO(b""), headers, request.full_url, 302)
                 response.msg = "Found"
                 return response
 
