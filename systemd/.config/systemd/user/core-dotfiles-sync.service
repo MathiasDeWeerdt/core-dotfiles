@@ -7,7 +7,7 @@ ExecStart=%h/.local/bin/dotfiles-sync
 EnvironmentFile=-%h/.config/core-dotfiles/update.env
 NoNewPrivileges=true
 # SSH agents managed by keychain may keep their socket under /tmp.
-ProtectSystem=strict
-ReadWritePaths=%h
+# Keep the host filesystem view: user mount namespaces can remap the owner of
+# root-owned SSH includes and cause OpenSSH's strict ownership checks to fail.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 TimeoutStartSec=10min

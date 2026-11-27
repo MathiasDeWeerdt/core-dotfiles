@@ -7,7 +7,7 @@ ExecStart=%h/.local/bin/dotfiles-check-updates
 EnvironmentFile=-%h/.config/core-dotfiles/update.env
 NoNewPrivileges=true
 # Share the caller's SSH agent socket, including keychain sockets under /tmp.
-ProtectSystem=strict
-ProtectHome=read-only
+# Keep root-owned SSH includes visible with their real ownership. User mount
+# namespaces can otherwise make OpenSSH reject system-wide configuration.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 TimeoutStartSec=40
