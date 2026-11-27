@@ -110,17 +110,17 @@ session expires.
 | `400 deep pagination error: pages must be fetched sequentially` | skipped a page or session expired |
 | `500 issue with pagination state` | transient; retry |
 
-### Live query quirks (verified 2026-11-25)
+### Query compatibility examples (anonymized)
 
 | Query | Result |
 | --- | --- |
-| `email:test@example.com` | 1,982,342 hits, potentially unrelated first rows — too loose |
-| `email:"test@example.com"` | 5,182 hits, first row exact — **use quotes** |
-| `domain:example.com` | 200, total 0 |
+| `email:test@example.com` | potentially unrelated matches — too loose |
+| `email:"test@example.com"` | exact-address query — **use quotes** |
+| `domain:example.com` | valid unquoted domain syntax |
 | `domain:"example.com"` | 400 `Issue with query format` — **never quote domains** |
 | `email:*@example.com` | 400 — leading wildcards are rejected |
-| `email:test*&domain:example.com` + `wildcard=true` | 200, 83,806 hits |
-| `email:test.*&domain=example.com` + `regex=true` | 200, 83,806 hits |
+| `email:test*&domain:example.com` + `wildcard=true` | valid pattern syntax; results depend on the selector |
+| `email:test.*&domain=example.com` + `regex=true` | valid pattern syntax; results depend on the selector |
 | `domain:example.com&data=collections` | 400 — `&data=` is web-only |
 
 ---

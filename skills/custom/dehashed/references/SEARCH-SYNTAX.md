@@ -1,7 +1,7 @@
 # DeHashed search syntax
 
-Verified against the vendor search guide and live `/v2/search` calls on
-2026-11-25. The v2 API accepts the same `field:value` grammar as the web UI,
+Compatibility notes retained from the existing client. Examples are anonymized;
+installation performs no live `/v2/search` calls. The v2 API accepts the same `field:value` grammar as the web UI,
 but transport parameters (`page`, `size`, `wildcard`, `regex`, `de_dupe`) are
 JSON fields, not URL suffixes.
 
@@ -38,7 +38,7 @@ trusting a large query.
 
 | Value | Correct | Wrong | Evidence |
 | --- | --- | --- | --- |
-| exact email | `email:"test@example.com"` | `email:test@example.com` | unquoted returned 1,982,342 loose hits and a `unrelated@example.net` first row; quoted returned 5,182 hits with `test@example.com` first |
+| exact email | `email:"test@example.com"` | `email:test@example.com` | unquoted values can match unrelated rows; quote the full address |
 | domain | `domain:example.com` | `domain:"example.com"` | quoted domain returns HTTP 400 `Issue with query format` |
 | multi-word name/address | `name:"John Smith"` | `name:John Smith` | space splits the query |
 | wildcard/regex value | `email:joh*` | `email:"joh*"` | quotes make `*` literal |
@@ -205,8 +205,8 @@ With the helper script (add `--max-credits N` to authorise a paid call; the
 default is 0 and `~/.config/dehashed/PAUSE` blocks all paid calls):
 
 ```sh
-python3 scripts/dehashed.py email 'alice@example.com' --max-credits 1
-python3 scripts/dehashed.py domain example.com --size 100 --max-credits 1
-python3 scripts/dehashed.py email-part joh --domain example.com --max-credits 1
-python3 scripts/dehashed.py raw 'email:joh?n(ath[oa]n)&domain:hotmail.com' --regex --max-credits 1
+python3 ~/.agents/skills/dehashed/scripts/dehashed.py email 'alice@example.com' --max-credits 1
+python3 ~/.agents/skills/dehashed/scripts/dehashed.py domain example.com --size 100 --max-credits 1
+python3 ~/.agents/skills/dehashed/scripts/dehashed.py email-part joh --domain example.com --max-credits 1
+python3 ~/.agents/skills/dehashed/scripts/dehashed.py raw 'email:joh?n(ath[oa]n)&domain:hotmail.com' --regex --max-credits 1
 ```
