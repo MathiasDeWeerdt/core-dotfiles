@@ -12,6 +12,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SecretChecks(unittest.TestCase):
+    def test_commit_messages_are_checked_without_revealing_values(self):
+        with tempfile.TemporaryDirectory(prefix="core-dotfiles-message-check-") as directory:
+            repo = Path(directory)
+            (repo / "scripts").mkdir()
+            scanner = repo / "scripts/check-secrets.py"
+            shutil.copyfile(ROOT / "scripts/check-secrets.py", scanner)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            token = "sk-proj-" + secrets.token_hex(32)
+            commit = subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test",
+                                     "-c", "user.email=test@example.invalid", "commit", "-qm",
+                                     "Synthetic leaked credential: " + token], capture_output=True)
+            self.assertEqual(commit.returncode, 0, "Could not create temporary test commit")
+            result = subprocess.run([sys.executable, str(scanner), "--history"], capture_output=True, text=True)
+            if token in result.stdout + result.stderr:
+                self.fail("The scanner exposed a commit-message credential")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("commit-message", result.stdout)
+
     def test_index_and_worktree_are_checked_independently(self):
         with tempfile.TemporaryDirectory(prefix="core-dotfiles-secrets-") as directory:
             repo = Path(directory)

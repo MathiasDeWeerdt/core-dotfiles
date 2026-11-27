@@ -8,5 +8,6 @@ EnvironmentFile=-%h/.config/core-dotfiles/update.env
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
+ReadWritePaths=%h
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 TimeoutStartSec=10min
