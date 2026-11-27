@@ -90,6 +90,11 @@ All thin-provisioned qcow2, user-mode NAT networking (stable across WiFi/Etherne
 |------|--------|
 | `Ctrl+Alt+T` | Terminal (foot -m) |
 | `Ctrl+Shift+A` | Screenshot (flameshot) |
+| `Ctrl+F9` | Open Clipboard Indicator (extension default) |
+
+The full installer uses Clipboard Indicator for text and image history. On systems
+with Clipboard History installed, yay asks you to approve the replacement.
+GNOME may need a new login to load a newly installed extension.
 
 ### Custom tooling
 - `expose` — serve files/dirs over HTTP with request inspection; password-protected operator UI, browser consoles, SOCKS proxy, and inbound callbacks (full source in `expose/`)

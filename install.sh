@@ -332,13 +332,21 @@ AUR_PKGS=(
     burpsuite
     visual-studio-code-bin
     gnome-shell-extension-no-overview
-    gnome-shell-extension-clipboard-history
+    gnome-shell-extension-clipboard-indicator
     gdm-settings
     preload
     nautilus-open-any-terminal
 )
 
 info "Installing ${#AUR_PKGS[@]} AUR packages..."
+if pacman -Q gnome-shell-extension-clipboard-history &>/dev/null; then
+    info "Clipboard Indicator replaces Clipboard History. Review the package replacement before continuing."
+    yay -S --needed gnome-shell-extension-clipboard-indicator
+    if ! pacman -Q gnome-shell-extension-clipboard-indicator &>/dev/null; then
+        err "Clipboard Indicator was not installed. Stopping before the remaining AUR packages."
+        exit 1
+    fi
+fi
 yay -S --needed --noconfirm --answerclean All --answerdiff None --combinedupgrade "${AUR_PKGS[@]}"
 log "AUR packages installed"
 fi  # SKIP_PACKAGES
