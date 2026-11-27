@@ -7,6 +7,9 @@ INSTALL_DIR=${EXPOSE_INSTALL_DIR:-/usr/local/bin}
 case "${1:-}" in
     --dry-run)
         printf 'Would build expose from %s/expose/src, deploy configs with private backups,\nwire private global memory, and install matching expose tools to %s.\n' "$ROOT" "$INSTALL_DIR"
+        if [[ "${DOTFILES_SYNC_ENABLE:-true}" != false ]]; then
+            printf 'Would enable reviewed-commit sync and start its user timer when available.\n'
+        fi
         exit 0 ;;
     '') ;;
     *) printf 'Unknown deployment option: %s\n' "$1" >&2; exit 1 ;;

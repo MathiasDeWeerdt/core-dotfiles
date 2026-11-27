@@ -47,7 +47,7 @@ class Deployment(unittest.TestCase):
 
     def environment(self, home):
         env = dict(os.environ, HOME=str(home), USER="fixture-user", DESIRED_HOSTNAME="fixture-host", SKIP_CONSOLE_CLIENTS="true")
-        for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "COPILOT_HOME", "DOTFILES_DIR"):
+        for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "COPILOT_HOME", "DOTFILES_DIR", "DOTFILES_SYNC_ENABLE"):
             env.pop(key, None)
         return env
 
@@ -82,6 +82,19 @@ class Deployment(unittest.TestCase):
         backups = list((home / ".local/state/core-dotfiles/backups").rglob(".zshrc"))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(), "Existing local configuration\n")
+        enabled = home / ".config/systemd/user/timers.target.wants/core-dotfiles-sync.timer"
+        self.assertTrue(enabled.is_symlink())
+        self.assertEqual(enabled.resolve(), (self.repo / "systemd/.config/systemd/user/core-dotfiles-sync.timer").resolve())
+
+    def test_sync_activation_can_be_skipped(self):
+        home = self.base / "sync-opt-out-home"
+        home.mkdir()
+        env = self.environment(home)
+        env["DOTFILES_SYNC_ENABLE"] = "false"
+        self.run_script("python3", str(self.repo / "scripts/deploy-configs.py"), env=env)
+        enabled = home / ".config/systemd/user/timers.target.wants/core-dotfiles-sync.timer"
+        self.assertFalse(enabled.is_symlink())
+        self.assertTrue((home / ".config/systemd/user/core-dotfiles-sync.timer").is_symlink())
 
     def test_dry_runs_do_not_execute_mutating_commands(self):
         home = self.base / "dry-home"

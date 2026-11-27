@@ -111,7 +111,7 @@ core-dotfiles/
 ├── flameshot/    → ~/.config/flameshot/
 │
 ├── expose/       → Full source for the expose HTTP tool
-├── systemd/      → Opt-in update-check and committed-sync user timers
+├── systemd/      → Default committed sync; optional update-check user timer
 ├── scripts/      → Deployment, credential checks, GNOME settings, VM manager
 ├── tests/        → Isolated deployment, security, and sync checks
 └── packages/     → pacman.txt, aur.txt, npm.txt
@@ -243,19 +243,26 @@ Fetched history is checked for credentials before it can reach linked configs.
 
 ```bash
 ./install.sh --configs-only
-dotfiles-sync                     # Review a foreground run first
-systemctl --user daemon-reload
-systemctl --user enable --now core-dotfiles-sync.timer
+dotfiles-sync                     # Optional immediate foreground run
 journalctl --user -u core-dotfiles-sync.service
 ```
 
-The timer runs after login and every five minutes. A working SSH key/agent with
+Both full installation and config-only deployment enable the sync timer by
+default. It starts immediately when the user manager is available, otherwise at
+the next login. Repeated deployment keeps one timer enabled. The installed command
+finds its own checkout, including custom clone locations; `DOTFILES_DIR` overrides it.
+
+The timer runs after login and every five minutes. It does not create commits.
+An unchanged checkout creates no commit and pushes nothing. A working SSH key/agent with
 GitHub write access is required on each device; authentication never prompts in
 the background. Zsh imports its unlocked agent socket into the user service
 environment. If login starts a different agent, open a terminal and unlock your
 GitHub key; the next timer run retries. No key or password is copied into Git.
 Run `git add` and `git commit` yourself after reviewing edits.
 To pause syncing: `systemctl --user disable --now core-dotfiles-sync.timer`.
+To deploy without activating it, use `DOTFILES_SYNC_ENABLE=false ./install.sh`
+(or the same prefix with `--configs-only` / `./update.sh`). This preserves an
+already enabled timer; disable it explicitly when you want to pause syncing.
 The notification-only update-check timer above is an alternative; it can remain
 disabled when sync is enabled. Both support private `update.env` / `DOTFILES_DIR`.
 

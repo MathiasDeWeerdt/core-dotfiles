@@ -2,6 +2,7 @@
 """Deploy public configs; keep existing private files outside the repository."""
 import argparse
 import os
+import pwd
 import shutil
 import subprocess
 import time
@@ -123,6 +124,35 @@ def deploy(home):
     print("Public configs deployed without adopting host files into Git.")
 
 
+def enable_sync(home):
+    if os.environ.get("DOTFILES_SYNC_ENABLE", "true") == "false":
+        print("Automatic sync activation skipped (DOTFILES_SYNC_ENABLE=false).")
+        return
+    units = home / ".config/systemd/user"
+    timer = units / "core-dotfiles-sync.timer"
+    wanted = units / "timers.target.wants/core-dotfiles-sync.timer"
+    wanted.parent.mkdir(parents=True, exist_ok=True)
+    if wanted.exists() or wanted.is_symlink():
+        if wanted.resolve() != timer.resolve():
+            raise RuntimeError("Existing sync timer enablement points at a different unit")
+    else:
+        wanted.symlink_to("../core-dotfiles-sync.timer")
+    # Creating the WantedBy link also enables the timer for an offline home.
+    # Never contact the workstation's manager when deploying a disposable home.
+    if home.resolve() != Path(pwd.getpwuid(os.getuid()).pw_dir).resolve() or not shutil.which("systemctl"):
+        print("Automatic sync enabled; timer starts at the next user login.")
+        return
+    manager = subprocess.run(["systemctl", "--user", "show", "--property=Version"], capture_output=True)
+    if manager.returncode:
+        print("Automatic sync enabled; user manager unavailable until login.")
+        return
+    if os.environ.get("SSH_AUTH_SOCK"):
+        subprocess.run(["systemctl", "--user", "import-environment", "SSH_AUTH_SOCK"], check=True)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "start", "core-dotfiles-sync.timer"], check=True)
+    print("Automatic committed-change sync enabled and started.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--memory-only", action="store_true")
@@ -132,6 +162,8 @@ def main():
     if not args.memory_only:
         deploy(home)
     wire_memory(home)
+    if not args.memory_only:
+        enable_sync(home)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ class SyncTests(unittest.TestCase):
         self.base = Path(self.tmp.name)
         self.env = dict(os.environ, HOME=str(self.base), XDG_STATE_HOME=str(self.base / "state"),
                         GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, DOTFILES_SYNC_NOTIFY="0")
+        self.env.pop("DOTFILES_DIR", None)
         self.remote = self.base / "remote.git"
         self.a = self.base / "a"
         self.b = self.base / "b"
@@ -63,6 +64,18 @@ class SyncTests(unittest.TestCase):
         self.sync(self.a)
         self.sync(self.b)
         self.assertEqual(head, self.git(self.b, "rev-parse", "HEAD"))
+
+    def test_stowed_command_discovers_custom_checkout(self):
+        command = self.a / "local-bin/.local/bin/dotfiles-sync"
+        command.parent.mkdir(parents=True)
+        shutil.copy(ROOT / "local-bin/.local/bin/dotfiles-sync", command)
+        self.commit(self.a)
+        installed = self.base / ".local/bin/dotfiles-sync"
+        installed.parent.mkdir(parents=True)
+        installed.symlink_to(command)
+        result = subprocess.run([str(installed)], cwd=self.base, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.a, "rev-parse", "HEAD"), self.git(self.remote, "rev-parse", "refs/heads/sync-test"))
 
     def test_dirty_checkout_is_preserved(self):
         (self.a / "config").write_text("unreviewed\n")

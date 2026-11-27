@@ -15,7 +15,12 @@ def main():
     if len(sys.argv) > 1:
         print(__doc__ + "\nSet DOTFILES_DIR for a non-default checkout.")
         return 0 if sys.argv[1:] == ["--help"] else 2
-    repo = Path(os.environ.get("DOTFILES_DIR", str(Path.home() / "Documents/core-dotfiles"))).resolve()
+    # Stow links this command to its checkout, including non-default clone paths.
+    parents = Path(__file__).resolve().parents
+    checkout = parents[3] if len(parents) > 3 else Path.home() / "Documents/core-dotfiles"
+    if not (checkout / "scripts/check-secrets.py").is_file():
+        checkout = Path.home() / "Documents/core-dotfiles"
+    repo = Path(os.environ.get("DOTFILES_DIR", str(checkout))).resolve()
     os.umask(0o077)
     state = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "core-dotfiles"
     state.mkdir(parents=True, exist_ok=True, mode=0o700)

@@ -67,13 +67,16 @@ private memory. Project-specific instructions remain in each project's own files
 
 ## Device synchronization
 
-`dotfiles-sync` and its opt-in user timer synchronize explicit, reviewed commits
+`dotfiles-sync` and its enabled-by-default user timer synchronize explicit, reviewed commits
 on the configured upstream branch. They stop on dirty or diverged checkouts and
 scan local and fetched history. Never add automatic commits, bypass secret hooks,
 auto-stash, force-push, or run privileged package upgrades in this workflow.
 Sync changes stowed configs immediately; installing rebuilt expose tools remains
 an explicit `./update.sh --configs-only` operation. Test changes with
 `python3 tests/sync.py` against disposable local remotes.
+Deployment enables the timer for next login and starts it when the real user's
+manager is available; never contact that manager from disposable-home tests.
+`DOTFILES_SYNC_ENABLE=false` skips activation without disabling an existing timer.
 
 After the authorized historical secret cleanup, other devices need fresh clones.
 Never merge their old history back into cleaned branches. Private backups of old
