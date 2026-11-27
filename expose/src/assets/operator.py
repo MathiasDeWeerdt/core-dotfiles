@@ -232,7 +232,7 @@ def attach(api, session):
     previous = termios.tcgetattr(fd)
     stop = threading.Event()
     remote_closed = threading.Event()
-    resize = threading.Event()
+    resize_pending = True
     failures = []
     pending = queue.Queue(maxsize=128)
     prefix = '/console/sessions/' + urllib.parse.quote(session['id'], safe='')
@@ -269,6 +269,19 @@ def attach(api, session):
         except queue.Full:
             raise OperatorError('Input queue is full; detached without closing the remote shell.')
 
+    def resized(*_):
+        # Signal handlers must not acquire Event locks interrupted on this thread.
+        nonlocal resize_pending
+        resize_pending = True
+
+    def flush_resize():
+        nonlocal resize_pending
+        if resize_pending:
+            resize_pending = False
+            size = os.get_terminal_size(fd)
+            enqueue('resize', {'cols': max(2, min(500, size.columns)),
+                               'rows': max(2, min(200, size.lines))})
+
     def output():
         cursor = max(session.get('output_start', 0), session.get('output_end', 0) - 65536)
         delay = .2
@@ -294,20 +307,20 @@ def attach(api, session):
     try:
         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             old_handlers[number] = signal.signal(number, lambda *_: stop.set())
-        old_handlers[signal.SIGWINCH] = signal.signal(signal.SIGWINCH, lambda *_: resize.set())
-        print('Attached to ' + session['id'] + '. Ctrl+] detaches; Ctrl+C interrupts the remote command.', file=sys.stderr)
-        tty.setraw(fd)
-        resize.set()
+        old_handlers[signal.SIGWINCH] = signal.signal(signal.SIGWINCH, resized)
+        tty.setraw(fd, when=termios.TCSANOW)
+        flush_resize()
+        os.write(fd, ('Attached to ' + session['id'] +
+                      '. Ctrl+] detaches; Ctrl+C interrupts the remote command.\r\n').encode())
         thread = threading.Thread(target=output, daemon=True)
         thread.start()
         threading.Thread(target=writer, daemon=True).start()
         while not stop.is_set():
-            if resize.is_set():
-                resize.clear()
-                size = os.get_terminal_size(fd)
-                enqueue('resize', {'cols': max(2, min(500, size.columns)),
-                                         'rows': max(2, min(200, size.lines))})
+            flush_resize()
             if select.select([fd], [], [], .1)[0]:
+                # A resize signal may have arrived during select. Order it before
+                # the input read in this iteration, just like the initial resize.
+                flush_resize()
                 data = os.read(fd, 4096)
                 if not data:
                     break

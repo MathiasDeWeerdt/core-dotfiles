@@ -229,8 +229,9 @@ class OperatorIntegration(unittest.TestCase):
             second.wait_for(b'PID_' + pid + b'\r\n')
             fcntl.ioctl(second.master, termios.TIOCSWINSZ, struct.pack('HHHH', 43, 119, 0, 0))
             os.kill(second.process.pid, signal.SIGWINCH)
-            time.sleep(.25)
-            second.send(b"printf 'SIZE_'; stty size\r")
+            # Relay application is asynchronous: wait for the observed remote
+            # size instead of assuming an unloaded runner and a 250 ms delay.
+            second.send(b"while [ \"$(stty size)\" != '43 119' ]; do sleep .05; done; printf 'SIZE_%s\\n' \"$(stty size)\"\r")
             second.wait_for(b'SIZE_43 119\r\n')
             second.send(b'sleep 30\r')
             time.sleep(.2); second.send(b'\x03'); time.sleep(.2)
