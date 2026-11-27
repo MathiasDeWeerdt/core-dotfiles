@@ -11,18 +11,27 @@ RULES = {
     "private-key": re.compile(rb"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----\r?\n"),
     "provider-token": re.compile(rb"\b(?:sk-(?:proj-|ant-api\d+-|or-v1-)?[A-Za-z0-9_-]{24,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{20,})\b"),
     "literal-credential": re.compile(rb'''(?im)\b(?:[A-Z0-9_]*(?:PASSWORD|PASSWD|API_KEY|AUTH_TOKEN|ACCESS_TOKEN|SECRET_KEY))\s*=\s*["']([^"'\r\n]+)["']'''),
+    "unquoted-shell-credential": re.compile(rb'''(?m)(?:^|[ \t])(?:export[ \t]+)?[A-Z0-9_]*(?:PASSWORD|PASSWD|API_KEY|AUTH_TOKEN|ACCESS_TOKEN|SECRET_KEY)=([^\s"'`#;]+)'''),
     "credential-default": re.compile(rb"(?i)\$\{[A-Z0-9_]*(?:PASSWORD|PASSWD|API_KEY|AUTH_TOKEN|SECRET_KEY)(?::-|-)([^}\r\n]+)\}"),
     "credential-dict": re.compile(rb'''(?i)["'](?:wifi_password|password|api_key|secret_key|access_token)["']\s*:\s*["']([^"'\r\n]+)["']'''),
 }
 PRIVATE_NAMES = re.compile(r"(?:^|/)(?:\.env(?:\..+)?|env|secrets?\.(?:zsh|sh|json|env)|id_(?:rsa|ed25519|ecdsa)|(?:credentials|auth)\.json)$")
 
 
-def findings(data):
+def findings(data, filename=""):
     for name, pattern in RULES.items():
+        if name == "unquoted-shell-credential" and filename:
+            shell_file = (Path(filename).suffix in (".sh", ".zsh") or
+                          Path(filename).name in (".zshrc", ".zshenv", ".profile", ".bashrc", ".bash_profile") or
+                          bool(re.match(rb"#![^\n]*\b(?:bash|zsh|sh)\b", data[:200])))
+            if not shell_file:
+                continue
         for match in pattern.finditer(data):
-            if name in ("literal-credential", "credential-default", "credential-dict"):
+            if name in ("literal-credential", "unquoted-shell-credential", "credential-default", "credential-dict"):
                 value = match[1].strip()
                 if (value.startswith((b"$", b"<")) or b"..." in value) or value in (b"password", b"new-password"):
+                    continue
+                if re.fullmatch(rb"(?:your[_-][a-z0-9_-]+|[a-z0-9_-]+[_-]here)", value, re.IGNORECASE):
                     continue
             yield name, data.count(b"\n", 0, match.start()) + 1
 
@@ -58,7 +67,7 @@ def main():
                 if PRIVATE_NAMES.search(name) and not name.endswith(".example"):
                     print(f"{oid[:12]} {name}: private credential filename must not be tracked")
                     count += 1
-                for rule, line in findings(data):
+                for rule, line in findings(data, name):
                     print(f"{oid[:12]} {name}:{line}: {rule} (value redacted)")
                     count += 1
         finally:
@@ -83,7 +92,7 @@ def main():
             except FileNotFoundError:
                 continue
             total += 1
-            for rule, line in findings(data):
+            for rule, line in findings(data, name):
                 print(f"{name}:{line}: {rule} (value redacted)")
                 count += 1
     print(f"Checked {total} files/blobs; {count} potential credential findings. Values are never printed.")

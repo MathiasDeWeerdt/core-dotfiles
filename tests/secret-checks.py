@@ -12,6 +12,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SecretChecks(unittest.TestCase):
+    def test_unquoted_shell_credentials_are_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="core-dotfiles-unquoted-check-") as directory:
+            repo = Path(directory)
+            (repo / "scripts").mkdir()
+            scanner = repo / "scripts/check-secrets.py"
+            shutil.copyfile(ROOT / "scripts/check-secrets.py", scanner)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            token = secrets.token_hex(24)
+            source = repo / ".zshrc"
+            source.write_text("export EXAMPLE_" + "PASSWORD" + chr(61) + token + "\n")
+            subprocess.run(["git", "-C", str(repo), "add", ".zshrc"], check=True)
+            result = subprocess.run([sys.executable, str(scanner), "--staged"], capture_output=True, text=True)
+            if token in result.stdout + result.stderr:
+                self.fail("The scanner exposed an unquoted credential")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unquoted-shell-credential", result.stdout)
+
     def test_commit_messages_are_checked_without_revealing_values(self):
         with tempfile.TemporaryDirectory(prefix="core-dotfiles-message-check-") as directory:
             repo = Path(directory)
