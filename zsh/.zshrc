@@ -208,8 +208,13 @@ export PATH=$PATH:$HOME/go/bin
 export CHROME_EXECUTABLE=google-chrome-stable
 
 PATH="$HOME/perl5/bin${PATH:+:${PATH}}"; export PATH;
-PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:${PERL5LIB}}"; export PERL5LIB;
-PERL_LOCAL_LIB_ROOT="$HOME/perl5${PERL_LOCAL_LIB_ROOT:+:${PERL_LOCAL_LIB_ROOT}}"; export PERL_LOCAL_LIB_ROOT;
+if [[ ":${PERL5LIB:-}:" != *":$HOME/perl5/lib/perl5:"* ]]; then
+    PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:${PERL5LIB}}"
+fi
+if [[ ":${PERL_LOCAL_LIB_ROOT:-}:" != *":$HOME/perl5:"* ]]; then
+    PERL_LOCAL_LIB_ROOT="$HOME/perl5${PERL_LOCAL_LIB_ROOT:+:${PERL_LOCAL_LIB_ROOT}}"
+fi
+export PERL5LIB PERL_LOCAL_LIB_ROOT
 PERL_MB_OPT="--install_base \"$HOME/perl5\""; export PERL_MB_OPT;
 PERL_MM_OPT="INSTALL_BASE=$HOME/perl5"; export PERL_MM_OPT;
 
