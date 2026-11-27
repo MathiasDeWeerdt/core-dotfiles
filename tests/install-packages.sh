@@ -51,3 +51,43 @@ check 'removal failure stops install' 0 1 0 false false 1 remove
 check 'installation failure is reported' 1 0 1 false false 1 install
 check 'dry run makes no changes' 0 0 0 true false 0 ''
 check 'skip packages makes no changes' 0 0 0 false true 0 ''
+
+# Run the AUR transaction under errexit, as install.sh does. A cancelled
+# interactive transaction can return success without installing a package.
+cat > "$TEST_DIR/aur.sh" <<'BASH'
+set -eu
+info() { :; }
+log() { :; }
+err() { echo "$*" >&2; }
+pacman() {
+    case "$*" in
+        '-Q gnome-shell-extension-clipboard-history') [[ "$legacy" == yes ]] ;;
+        '-Q gnome-shell-extension-clipboard-indicator') [[ "$replacement" == accepted ]] ;;
+        *) exit 2 ;;
+    esac
+}
+yay() {
+    if [[ "$*" == '-S --needed gnome-shell-extension-clipboard-indicator' ]]; then
+        echo replacement
+        [[ "$replacement" != failed ]]
+    else
+        [[ " $* " == *' --noconfirm '* ]]
+        [[ " $* " == *' gnome-shell-extension-clipboard-indicator '* ]]
+        [[ " $* " != *' gnome-shell-extension-clipboard-history '* ]]
+        echo batch
+    fi
+}
+BASH
+sed -n '/^AUR_PKGS=(/,/^log "AUR packages installed"/p' \
+    "$ROOT/install.sh" >> "$TEST_DIR/aur.sh"
+
+check_aur() {
+    local status=0 calls
+    calls=$(legacy="$1" replacement="$2" bash "$TEST_DIR/aur.sh") || status=$?
+    [[ "$status" == "$3" && "$calls" == "$4" ]]
+}
+check_aur no skipped 0 batch
+check_aur yes accepted 0 $'replacement\nbatch'
+check_aur yes cancelled 1 replacement
+check_aur yes failed 1 replacement
+echo 'PASS: Clipboard Indicator selection and migration'

@@ -10,7 +10,7 @@ quickemu
 burpsuite
 visual-studio-code-bin
 gnome-shell-extension-no-overview
-gnome-shell-extension-clipboard-history
+gnome-shell-extension-clipboard-indicator
 gdm-settings
 preload
 nautilus-open-any-terminal

@@ -28,24 +28,42 @@ gsettings set org.gnome.desktop.wm.keybindings switch-windows "['<Alt>Tab']"
 gsettings set org.gnome.desktop.wm.keybindings switch-windows-backward "['<Shift><Alt>Tab']"
 log "Alt+Tab: individual windows, Super+Tab: app grouping"
 
-# Add our shortcuts once while preserving every unrelated custom shortcut.
+# Preserve unrelated entries and their order when updating a GNOME string list.
+update_list() {
+    local schema=$1 key=$2 add=$3 remove=${4:-} current updated
+    current=$(gsettings get "$schema" "$key")
+    updated=$(python3 - "$current" "$add" "$remove" <<'PY'
+import ast, sys
+current = ast.literal_eval(sys.argv[1].removeprefix('@as '))
+add, remove = sys.argv[2:]
+updated = [entry for entry in current if not remove or entry != remove]
+if add and add not in updated:
+    updated.append(add)
+if updated != current:
+    print(repr(updated))
+PY
+    )
+    if [[ -n "$updated" ]]; then
+        gsettings set "$schema" "$key" "$updated"
+    fi
+}
+
+# Set the preference even if this GNOME session has not discovered the new package yet.
+if pacman -Q gnome-shell-extension-clipboard-indicator &>/dev/null; then
+    indicator=clipboard-indicator@tudmotu.com
+    update_list org.gnome.shell enabled-extensions "$indicator" clipboard-history@alexsaveau.dev
+    update_list org.gnome.shell disabled-extensions '' "$indicator"
+    log "Clipboard Indicator configured"
+fi
+
 shortcut() {
-    local slug=$1 name=$2 binding=$3 command=$4 current updated
+    local slug=$1 name=$2 binding=$3 command=$4
     local key_path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/core-dotfiles-$slug/"
     local schema="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$key_path"
     gsettings set "$schema" name "$name"
     gsettings set "$schema" binding "$binding"
     gsettings set "$schema" command "$command"
-    current=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)
-    updated=$(python3 - "$current" "$key_path" <<'PY'
-import ast, sys
-paths = ast.literal_eval(sys.argv[1].removeprefix('@as '))
-if sys.argv[2] not in paths:
-    paths.append(sys.argv[2])
-print(repr(paths))
-PY
-    )
-    gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$updated"
+    update_list org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$key_path"
 }
 shortcut terminal 'Terminal' '<Control><Alt>t' 'foot -m'
 shortcut screenshot 'Screenshot' '<Control><Shift>a' "$HOME/.local/bin/flameshot-gui"
