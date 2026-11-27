@@ -177,6 +177,11 @@ killport() {
 
 eval "$(keychain --eval id_ed25519 id_rsa 2>/dev/null | sed '/^ \* /d')"
 
+# Background dotfiles sync uses the same unlocked SSH agent as this terminal.
+if [[ -n "${SSH_AUTH_SOCK:-}" ]] && command -v systemctl >/dev/null; then
+    systemctl --user import-environment SSH_AUTH_SOCK 2>/dev/null || true
+fi
+
 export NVM_DIR=~/.nvm
 if [[ -s "$NVM_DIR/nvm.sh" ]]; then
     source "$NVM_DIR/nvm.sh"

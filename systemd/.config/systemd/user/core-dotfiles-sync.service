@@ -6,7 +6,7 @@ Type=oneshot
 ExecStart=%h/.local/bin/dotfiles-sync
 EnvironmentFile=-%h/.config/core-dotfiles/update.env
 NoNewPrivileges=true
-PrivateTmp=true
+# SSH agents managed by keychain may keep their socket under /tmp.
 ProtectSystem=strict
 ReadWritePaths=%h
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

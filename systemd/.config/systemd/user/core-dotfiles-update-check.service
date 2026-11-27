@@ -6,7 +6,7 @@ Type=oneshot
 ExecStart=%h/.local/bin/dotfiles-check-updates
 EnvironmentFile=-%h/.config/core-dotfiles/update.env
 NoNewPrivileges=true
-PrivateTmp=true
+# Share the caller's SSH agent socket, including keychain sockets under /tmp.
 ProtectSystem=strict
 ProtectHome=read-only
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

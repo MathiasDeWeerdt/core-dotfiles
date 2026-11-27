@@ -251,7 +251,10 @@ journalctl --user -u core-dotfiles-sync.service
 
 The timer runs after login and every five minutes. A working SSH key/agent with
 GitHub write access is required on each device; authentication never prompts in
-the background. Run `git add` and `git commit` yourself after reviewing edits.
+the background. Zsh imports its unlocked agent socket into the user service
+environment. If login starts a different agent, open a terminal and unlock your
+GitHub key; the next timer run retries. No key or password is copied into Git.
+Run `git add` and `git commit` yourself after reviewing edits.
 To pause syncing: `systemctl --user disable --now core-dotfiles-sync.timer`.
 The notification-only update-check timer above is an alternative; it can remain
 disabled when sync is enabled. Both support private `update.env` / `DOTFILES_DIR`.
