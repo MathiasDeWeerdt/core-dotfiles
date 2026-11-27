@@ -9,6 +9,7 @@ fi
 # export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$PATH
 
 # Path to your Oh My Zsh installation.
+typeset -U path PATH
 export ZSH="$HOME/.oh-my-zsh"
 
 # Set name of the theme to load --- if set to "random", it will
@@ -177,31 +178,35 @@ killport() {
 eval "$(keychain --eval id_ed25519 id_rsa 2>/dev/null | sed '/^ \* /d')"
 
 export NVM_DIR=~/.nvm
-source /usr/share/nvm/nvm.sh
+if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+    source "$NVM_DIR/nvm.sh"
+elif [[ -s /usr/share/nvm/nvm.sh ]]; then
+    source /usr/share/nvm/nvm.sh
+fi
 
-export PATH=$PATH:/home/mathias/.local/bin
+export PATH=$PATH:$HOME/.local/bin
 
 # export ANDROID_HOME=$HOME/android-sdk
 # export PATH=$PATH:$ANDROID_HOME/platform-tools
 
-export ANDROID_HOME=/home/mathias/android-sdk
+export ANDROID_HOME=$HOME/android-sdk
 export ANDROID_SDK_ROOT=$ANDROID_HOME
 export PATH=$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin
 
 # export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
-# export JAVA_HOME=/home/mathias/Documents/java/graalvm-jdk-23.0.2+7.1
+# export JAVA_HOME=$HOME/Documents/java/graalvm-jdk-23.0.2+7.1
 
-export PATH=$PATH:/home/mathias/go/bin
-# export PATH=/home/mathias/Documents/java/graalvm-jdk-23.0.2+7.1/bin/:$PATH
+export PATH=$PATH:$HOME/go/bin
+# export PATH=$HOME/Documents/java/graalvm-jdk-23.0.2+7.1/bin/:$PATH
 
 
 export CHROME_EXECUTABLE=google-chrome-stable
 
-PATH="/home/mathias/perl5/bin${PATH:+:${PATH}}"; export PATH;
-PERL5LIB="/home/mathias/perl5/lib/perl5${PERL5LIB:+:${PERL5LIB}}"; export PERL5LIB;
-PERL_LOCAL_LIB_ROOT="/home/mathias/perl5${PERL_LOCAL_LIB_ROOT:+:${PERL_LOCAL_LIB_ROOT}}"; export PERL_LOCAL_LIB_ROOT;
-PERL_MB_OPT="--install_base \"/home/mathias/perl5\""; export PERL_MB_OPT;
-PERL_MM_OPT="INSTALL_BASE=/home/mathias/perl5"; export PERL_MM_OPT;
+PATH="$HOME/perl5/bin${PATH:+:${PATH}}"; export PATH;
+PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:${PERL5LIB}}"; export PERL5LIB;
+PERL_LOCAL_LIB_ROOT="$HOME/perl5${PERL_LOCAL_LIB_ROOT:+:${PERL_LOCAL_LIB_ROOT}}"; export PERL_LOCAL_LIB_ROOT;
+PERL_MB_OPT="--install_base \"$HOME/perl5\""; export PERL_MB_OPT;
+PERL_MM_OPT="INSTALL_BASE=$HOME/perl5"; export PERL_MM_OPT;
 
 eval "$(zoxide init zsh)"
 
@@ -240,11 +245,11 @@ export COPILOT_PROVIDER_WIRE_MODEL=deepseek/deepseek-v4-pro
 
 
 # bun completions
-[ -s "/home/mathias/.bun/_bun" ] && source "/home/mathias/.bun/_bun"
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
 # opencode
-export PATH=/home/mathias/.opencode/bin:$PATH
+export PATH=$HOME/.opencode/bin:$PATH
 
 # pi: give the model the real date at every launch. It has no clock, so without
 # this it assumes the year from its training data. See ~/.pi/agent/AGENTS.md.
@@ -252,3 +257,7 @@ pi() {
   command pi --append-system-prompt \
     "Current date: $(date '+%Y-%m-%d, %A'). Trust this over your memory; never assume the year." "$@"
 }
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"

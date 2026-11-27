@@ -1,0 +1,13 @@
+**
+!playground/
+!playground/Dockerfile
+!tests/
+!tests/operator_cli.py
+!src/
+!src/assets/
+!src/assets/consoles.py
+!dist/
+!dist/expose
+!dist/expose-online
+!dist/console-clients/
+!dist/console-clients/linux-amd64

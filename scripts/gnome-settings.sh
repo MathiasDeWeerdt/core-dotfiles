@@ -28,6 +28,28 @@ gsettings set org.gnome.desktop.wm.keybindings switch-windows "['<Alt>Tab']"
 gsettings set org.gnome.desktop.wm.keybindings switch-windows-backward "['<Shift><Alt>Tab']"
 log "Alt+Tab: individual windows, Super+Tab: app grouping"
 
+# Add our shortcuts once while preserving every unrelated custom shortcut.
+shortcut() {
+    local slug=$1 name=$2 binding=$3 command=$4 current updated
+    local key_path="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/core-dotfiles-$slug/"
+    local schema="org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$key_path"
+    gsettings set "$schema" name "$name"
+    gsettings set "$schema" binding "$binding"
+    gsettings set "$schema" command "$command"
+    current=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings)
+    updated=$(python3 - "$current" "$key_path" <<'PY'
+import ast, sys
+paths = ast.literal_eval(sys.argv[1].removeprefix('@as '))
+if sys.argv[2] not in paths:
+    paths.append(sys.argv[2])
+print(repr(paths))
+PY
+    )
+    gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$updated"
+}
+shortcut terminal 'Terminal' '<Control><Alt>t' 'foot -m'
+shortcut screenshot 'Screenshot' '<Control><Shift>a' "$HOME/.local/bin/flameshot-gui"
+
 # Default terminal → foot (Nautilus "Open in Console")
 info "Terminal → foot"
 gsettings set org.gnome.desktop.default-applications.terminal exec foot
@@ -42,15 +64,17 @@ if command -v nautilus &>/dev/null; then
 [Desktop Entry]
 NoDisplay=true
 NAUT_DESKTOP
-    nautilus -q 2>/dev/null || true  # restart to apply
+    # Leave running Nautilus windows intact on reruns.
 fi
 log "Terminal: foot"
 
 # Wallpapers
 BG_DIR="$HOME/.local/share/backgrounds"
-DOTFILES="$HOME/Documents/core-dotfiles"
+DOTFILES=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 mkdir -p "$BG_DIR"
-cp "$DOTFILES/wallpapers/"*.{png,jpg} "$BG_DIR/" 2>/dev/null || true
+for wallpaper in "$DOTFILES/wallpapers/"*.{png,jpg}; do
+    [[ ! -f "$wallpaper" ]] || install -C -m 644 "$wallpaper" "$BG_DIR/"
+done
 
 xml="$BG_DIR/slideshow.xml"
 echo '<background><starttime><year>2026</year><month>01</month><day>01</day><hour>00</hour><minute>00</minute><second>00</second></starttime>' > "$xml"
@@ -83,4 +107,4 @@ if [[ -d /usr/share/themes/Orchis-Dark ]]; then
 fi
 
 echo ""
-log "Done. Alt+F2 → type 'r' → Enter to restart GNOME Shell."
+log "Done. Log out and back in if desktop extensions need to reload."

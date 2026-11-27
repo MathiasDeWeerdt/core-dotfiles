@@ -7,7 +7,7 @@ Think `python3 -m http.server` combined with a request inspector: one command
 gives you a web server with persistent request logging, file uploads (drag &
 drop web UI), and built-in reverse-shell payloads.
 
-**Version:** 2.0 · **Default port:** 9090 · **License:** personal toolkit
+**Version:** 2.1 · **Default port:** 9090 · **License:** personal toolkit
 
 ## Features
 
@@ -20,8 +20,9 @@ drop web UI), and built-in reverse-shell payloads.
 - **Device fingerprinting** — `/me` shows what the visitor's browser leaks: GPU, canvas fingerprint, timezone, screen, CPU/memory, storage APIs… plus a stable SHA-256 visitor id and copy-as-JSON
 - **Smart request viewer** — request bodies are auto-decoded (JSON pretty-print, JWT header+payload, form-urlencoded) and credential-looking bodies are flagged with a red `creds` chip
 - **CLI one-liners** — copy-ready commands per OS (Linux/macOS/Windows) for uploading files, posting to chat, and downloading shared content: curl, wget, nc, socat, python (stdlib + requests), httpie, PowerShell, certutil, bitsadmin
+- **CLI consoles** — attach to the same PTY from your terminal; Ctrl+] detaches without ending the shell.
 - **Browser consoles** — full interactive PTY / ConPTY sessions, Windows/macOS/Linux connection commands, terminal resizing, Ctrl+C, and disconnect controls (automatic with `expose-online`)
-- **Network proxy** — `expose-online` also starts a local SOCKS5 listener; route `proxychains`, `curl`, or other tools through the connected machine's network. Forward proxying only — no reverse shell.
+- **Network proxy** — `expose-online` also starts a local SOCKS5 listener; route `proxychains`, `curl`, or other tools through the connected machine's network. The listener is restricted to loopback; it needs a ticket-enrolled connector before it can relay traffic.
 - **Inbound callbacks** — expose a listener on the connected machine and forward it to a local service, so targets on the endpoint's network can connect back to you.
 - **Windows enumeration** — a read-only `winenum` script and command library for low-privilege host/domain checks and candidate escalation paths, with report upload.
 - **Password-protected session** — `expose-online` gates the UI and API behind a login and session cookie; connector tickets and agent tokens remain self-authenticating.
@@ -40,7 +41,7 @@ drop web UI), and built-in reverse-shell payloads.
 | Dependency | Needed for |
 |------------|------------|
 | `bash`     | everything |
-| `python3`  | HTTP serving, uploads, and request logging |
+| `python3`  | HTTP serving, uploads, and logging; Python 3.11+ for consoles |
 | `ss`, `file`, `mktemp` | standard utilities (pre-flight checks, MIME detection) |
 
 ## Install
@@ -61,10 +62,10 @@ Or run the built binary directly: `./dist/expose "hello world"`.
 expose "hello world"                    # serve a text response
 expose .                                # serve the current directory
 expose -f ./notes.txt                   # serve a single file
-echo "secret" | expose -                # serve stdin
+echo "hello" | expose -                # serve stdin
 expose --catch                          # webhook catcher (dumps bodies)
 expose --payload powershell-reverse     # serve a reverse-shell one-liner
-expose --redirect https://evil.com      # 302 redirect everything
+expose --redirect https://example.com      # 302 redirect everything
 ```
 
 Stop with `Ctrl+C`. The startup banner shows the local and network URLs.
@@ -88,6 +89,7 @@ Stop with `Ctrl+C`. The startup banner shows the local and network URLs.
 | `--collect` | Collect requests to a JSONL log, printed on exit |
 | `--delay <ms>` | Artificial response delay in milliseconds |
 | `-h, --help` | Show help |
+| `-V, --version` | Show the installed version without starting a server |
 
 ### Built-in payloads
 
@@ -122,8 +124,8 @@ content on `/content`, or 404):
 | `/console/*` | Console status, browser control, proxy, callbacks, and connector relay |
 | `GET`/`POST /chat` | Mini chat shared between visitors of the upload page |
 
-Directory mode additionally serves the full file tree under `/` and a JSON
-listing API at `/ls[/path]`.
+Directory mode serves non-hidden files under `/` and a JSON listing API at
+`/ls[/path]`. Hidden paths and symlinks outside the shared root are denied.
 
 ## Examples
 
@@ -139,7 +141,7 @@ expose --collect --catch
 
 ## Browser consoles
 
-Build and install the native connectors once (Go 1.23+):
+Build and install the native connectors (Go 1.26+); rebuild after source updates:
 
 ```bash
 make install-console-clients
@@ -158,9 +160,8 @@ such as `top` and `vim`, terminal resizing, and Ctrl+C use a real PTY (Linux/mac
 or ConPTY (Windows 10 1809+).
 
 The copied command uses the browser's current origin, including its port. Open
-the public HTTPS URL before copying a command for an off-LAN machine. Connecting
-through a LAN address requires the client to reach that LAN; localhost only works
-on the server itself. Traffic returns through the same HTTP(S) server/tunnel,
+the public HTTPS URL before copying a command for an off-LAN machine. Remote and LAN connections require verified HTTPS. Plain HTTP is accepted
+only on loopback for local testing. Traffic returns through the same HTTP(S) server/tunnel,
 with no separate listener port. A proxy must allow the `/console/*`, `/lin`,
 `/mac`, and `/win` routes and requests that wait up to ten seconds.
 
@@ -169,8 +170,10 @@ Connectors for x64 and ARM64 Windows, macOS, and Linux are stored in
 SHA-256 checked before execution. The web UI is password protected when
 `EXPOSE_AUTH_PASSWORD` is set (see below); connector enrollment uses expiring
 single-use tickets and per-session bearer tokens. Console credentials and
-traffic are excluded from the request inspector. Use HTTPS for remote
-connections. Chat and shared files retain the existing public sharing behavior.
+traffic are excluded from the request inspector. Remote connections require
+verified HTTPS. Direct `expose` can share chat and files publicly; console control
+always requires an owner capability or an authenticated operator session.
+`expose-online` requires authentication for shared files and chat as well.
 
 ## Network proxy
 
@@ -180,8 +183,8 @@ reach hosts and services that only that machine can see. This is forward
 proxying — the machine opens outbound connections; it does not receive a shell.
 
 ```bash
-proxychains4 nmap -sT -Pn 10.11.12.0/23
-curl --socks5-hostname 127.0.0.1:1080 http://10.11.12.254/
+expose proxychains curl https://example.com
+curl --socks5-hostname 127.0.0.1:1080 https://example.com
 ```
 
 The proxy uses the newest connected machine. Select another in **Consoles →
@@ -293,9 +296,10 @@ heavily signatured by Defender/EDR, so use this only on authorized systems.
 
 ## Password protection
 
-`expose-online` requires the password `<redacted>` before serving the UI
-or API. Override it with `EXPOSE_AUTH_PASSWORD`; an empty value disables the
-gate. Direct `expose` uses the same variable.
+`expose-online` requires an operator-configured password before serving the UI
+or API. Override it with `EXPOSE_AUTH_PASSWORD`; an empty value is rejected.
+Direct `expose` uses the same variable for optional file-sharing authentication;
+console control is always authenticated independently.
 
 - `GET /login` serves the login page; a correct password sets an HttpOnly,
   SameSite=Strict session cookie valid for 12 hours. `Secure` is added when the
@@ -310,12 +314,10 @@ gate. Direct `expose` uses the same variable.
 - The password is never written to the request log. **Log out** is in the
   header.
 
-The default is hardcoded for convenience; use a unique value for anything
-long-lived:
-
-```bash
-EXPOSE_AUTH_PASSWORD='...' expose-online
-```
+There is no default password. Store `EXPOSE_AUTH_PASSWORD` in
+`~/.config/expose/online.env` (owned by you, mode `0600`), or provide it through
+the environment. The file is shell configuration and must stay outside Git.
+An explicit environment password takes precedence. An empty password is rejected.
 
 ## Reconnection and outages
 
@@ -343,7 +345,7 @@ Both sides retry for long outages instead of exiting.
 | `TUNNEL_RPORT` / `TUNNEL_LPORT` | `9090` / `9090` | Remote/local forward ports |
 | `TUNNEL_RBIND` | `127.0.0.1` | Reverse bind address on the jump host |
 | `PROXY_PORT` / `PROXY_BIND` | `1080` / `127.0.0.1:1080` | SOCKS5 listener |
-| `EXPOSE_AUTH_PASSWORD` | `<redacted>` | UI/API password; empty disables |
+| `EXPOSE_AUTH_PASSWORD` | none | Required UI/API password for `expose-online`; empty is rejected |
 
 The reverse port is bound to `127.0.0.1` on the jump host by default
 (`TUNNEL_RBIND`), so nginx is the only public entry point. SSH runs in batch
@@ -392,9 +394,95 @@ client cannot spoof its address. If nginx is behind Cloudflare or another
 proxy, configure `ngx_http_realip_module` so `$remote_addr` is the real client.
 If the tunnel binds a different address, set `TUNNEL_RBIND`.
 
+## CLI operator shell
+
+Start the server normally in one terminal. Use another terminal to manage it:
+
+```bash
+expose-online
+# In a second terminal:
+expose sessions
+expose attach                  # automatically selects the only connected shell
+expose attach 2                # numbered session, full ID, or unique ID prefix
+expose proxychains curl https://example.com
+```
+
+**Ctrl+] detaches the local CLI without closing the remote shell or proxy.**
+Ctrl+C interrupts the remote command. `exit` or Ctrl+D ends the remote shell.
+Working directory, environment, processes, and PTY remain on the connector when
+the operator detaches. Browser and CLI attach to the same shell; input from
+either controls it. Proxy routing keeps the server’s current selected endpoint. Avoid typing into both at once. Resize and UTF-8 input are
+forwarded, and retry identifiers prevent duplicate command input after a lost
+HTTP acknowledgement. A temporary network failure does not close the connector.
+
+`expose-online sessions`, `attach`, `invite`, `login`, `logout`, and `proxychains`
+are aliases for the corresponding `expose` commands. They do not start or replace
+an HTTP server or SSH tunnel. Running servers from older builds need one planned
+restart before they can support the CLI protocol; active sessions cannot migrate
+across a server restart.
+
+Enroll a new endpoint from the CLI with `expose invite linux`, `expose invite mac`,
+or `expose invite win`. Copy the printed short-lived command only to a machine
+you are authorized to control. It is a credential: do not paste it into Git or
+public logs. Invitations expire after ten minutes and registration consumes them.
+The online wrapper selects its HTTPS public origin; `--origin https://YOUR-HOST`
+overrides it. Connector binaries are checked against the bootstrap's SHA-256 hash.
+On another laptop, log in to the existing public origin and attach there. Start
+one online relay per public hostname/remote port; use the CLI from your other
+machines to share that instance.
+
+For remote operator access:
+
+```bash
+expose login --url https://YOUR-HOST    # asks for the operator password
+expose sessions                       # remembers the selected origin
+expose attach
+expose logout                         # revokes this saved login, keeps shells alive
+```
+
+Local access uses a fresh per-instance key under `~/.expose/instances/` (directory
+`0700`, files `0600`); it is never accepted on forwarded HTTP requests. Remote
+access requires verified HTTPS and the same password/session login as the web UI.
+Cookies are saved privately under `~/.expose/operator/` and expire server-side.
+There is no TLS-verification bypass. Connector bearer tokens, enrollment tickets,
+and operator credentials have separate scopes. Console control remains protected
+even when ordinary file sharing has no password. Browser console control requires
+`EXPOSE_AUTH_PASSWORD`; a local CLI can use its instance key directly.
+
+The online wrapper's HTTP listener and the SOCKS listener bind to loopback.
+SOCKS intentionally has no additional local password; it cannot be bound to a
+public interface. SSH keys protect the jump-host reverse tunnel, HTTPS protects
+public operator/enrollment traffic, and tickets authenticate connectors. If you
+need SOCKS from another machine, use an authenticated SSH local forward.
+Private proxychains configuration is selected automatically by `expose proxychains`.
+
+## Isolated Docker playground
+
+```bash
+./playground.sh test             # build and run the complete clean-container suite
+./playground.sh up               # keep a disposable shell ready for manual use
+./playground.sh sessions
+./playground.sh attach           # Ctrl+] detaches
+./playground.sh proxychains curl http://127.0.0.1:8000
+./playground.sh down             # destroy only this playground
+```
+
+The amd64 playground runs as UID 1000, drops all capabilities, uses a read-only
+root filesystem and bounded tmpfs storage, and has no network interface except
+loopback. It publishes no ports and mounts no host files or Docker socket. Build
+dependencies require internet access; runtime tests are offline. Its server,
+connector, credentials, and tests exist only inside the disposable container.
+Repeated `up` preserves the running playground. Use `down`, rebuild, and `up` to
+test a new image when its current sessions can end.
+The built-in target on port 8000 returns `PLAYGROUND_PROXY_OK` through the real
+connector and SOCKS relay. Hidden files and symlinks outside a shared directory
+are not served, so directory sharing cannot expose private instance keys.
+
 ## Development
 
 The binary is generated — edit `src/` and rebuild with `make build`; never edit
 `dist/expose` directly. Run `make test` for the integration suite. See
 [AGENTS.md](AGENTS.md) for the architecture, build system, and contribution
 conventions.
+
+Building the optional console connector clients requires Go 1.26 or later.

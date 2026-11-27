@@ -8,9 +8,9 @@ EXPOSE_BIN="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/expose"
 
 # Local utility commands do not need a public tunnel and must keep control of
 # the terminal.
-if [[ "${1:-}" == "db" ]]; then
-  exec "$EXPOSE_BIN" "$@"
-fi
+case "${1:-}" in
+  db|sessions|attach|login|logout|invite|proxychains|--help|-h|--version|-V) exec "$EXPOSE_BIN" "$@" ;;
+esac
 
 # ── Config ────────────────────────────────────────────────────────────────────
 TUNNEL_HOST="${TUNNEL_HOST:-213.118.201.119}"
@@ -25,8 +25,28 @@ PROXY_BIND="${EXPOSE_PROXY:-${PROXY_BIND:-127.0.0.1:${PROXY_PORT:-1080}}}"
 [[ "$PROXY_BIND" == "off" || "$PROXY_BIND" == "0" ]] && PROXY_BIND=""
 export EXPOSE_PROXY="$PROXY_BIND"
 # Public HTTP surface requires a password; override with EXPOSE_AUTH_PASSWORD.
-EXPOSE_AUTH_PASSWORD="${EXPOSE_AUTH_PASSWORD-<redacted>}"
+# Read operator credentials only from a private file outside the public repo.
+ONLINE_CONFIG="${EXPOSE_ONLINE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/expose/online.env}"
+if [[ -e "$ONLINE_CONFIG" ]]; then
+  if [[ ! -f "$ONLINE_CONFIG" || ! -O "$ONLINE_CONFIG" ]] ||
+     (( (8#$(stat -c %a "$ONLINE_CONFIG") & 077) != 0 )); then
+    printf 'expose-online: config must be owned by you and mode 0600: %s\n' "$ONLINE_CONFIG" >&2
+    exit 1
+  fi
+  # An explicit environment password takes precedence over the file.
+  _ENV_PASSWORD_SET="${EXPOSE_AUTH_PASSWORD+x}"
+  _ENV_PASSWORD="${EXPOSE_AUTH_PASSWORD-}"
+  # shellcheck disable=SC1090
+  source "$ONLINE_CONFIG"
+  [[ -z "$_ENV_PASSWORD_SET" ]] || EXPOSE_AUTH_PASSWORD="$_ENV_PASSWORD"
+  unset _ENV_PASSWORD _ENV_PASSWORD_SET
+fi
+if [[ -z "${EXPOSE_AUTH_PASSWORD:-}" ]]; then
+  printf 'expose-online: set EXPOSE_AUTH_PASSWORD or configure %s (mode 0600).\n' "$ONLINE_CONFIG" >&2
+  exit 1
+fi
 export EXPOSE_AUTH_PASSWORD
+export EXPOSE_PUBLIC_URL="${EXPOSE_PUBLIC_URL:-https://singlecore.dev}"
 EXPOSE_HEALTH_TOKEN=$(cat /proc/sys/kernel/random/uuid)
 export EXPOSE_HEALTH_TOKEN
 
@@ -130,7 +150,7 @@ if [[ -n "$_local_pid" ]]; then
 fi
 
 # ── Start expose ──────────────────────────────────────────────────────────────
-EXPOSE_CONSOLES=1 EXPOSE_NO_BANNER=1 "$EXPOSE_BIN" --bind 0.0.0.0 -p "$TUNNEL_LPORT" "$@" &
+EXPOSE_CONSOLES=1 EXPOSE_NO_BANNER=1 "$EXPOSE_BIN" --bind 127.0.0.1 -p "$TUNNEL_LPORT" "$@" &
 EXPOSE_PID=$!
 sleep 0.5
 
@@ -143,10 +163,10 @@ fi
 printf '\n  %s%sexpose online%s\n\n' "$BOLD" "$GREEN" "$NC" >&2
 printf '  %-7s %shttps://singlecore.dev%s\n' "Public" "$CYAN" "$NC" >&2
 printf '  %-7s http://127.0.0.1:%s\n' "Local" "$TUNNEL_LPORT" >&2
-printf '  %-7s http://%s:%s\n' "Network" "$(local_ip)" "$TUNNEL_LPORT" >&2
+printf '  %-7s %sexpose attach%s (Ctrl+] detaches)\n' "Shell" "$DIM" "$NC" >&2
 if [[ -n "$PROXY_BIND" ]]; then
   printf '  %-7s socks5://%s\n' "Proxy" "$PROXY_BIND" >&2
-  printf '  %-7s %sproxychains4 <command>%s\n' "Use" "$DIM" "$NC" >&2
+  printf '  %-7s %sexpose proxychains <command>%s\n' "Use" "$DIM" "$NC" >&2
 fi
 [[ -n "$EXPOSE_AUTH_PASSWORD" ]] \
   && printf '  %-7s %spassword required%s\n' "Auth" "$DIM" "$NC" >&2

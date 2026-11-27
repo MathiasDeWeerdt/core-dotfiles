@@ -67,7 +67,7 @@ DEFAULT_CONFIG = {
     "dns_servers": [],
     "dhcp_dns": [],
     "wifi_ssid": "jimber",
-    "wifi_password": "<redacted>",
+    "wifi_password": "",
 }
 
 

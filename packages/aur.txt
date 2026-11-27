@@ -1,6 +1,4 @@
-# AUR packages
-# Install with: yay -S --needed - < packages/aur.txt
-
+# Managed package inventory; kept in sync with install.sh.
 claude-code
 opencode-bin
 jdk8-openjdk
@@ -13,5 +11,6 @@ burpsuite
 visual-studio-code-bin
 gnome-shell-extension-no-overview
 gnome-shell-extension-clipboard-history
+gdm-settings
 preload
 nautilus-open-any-terminal

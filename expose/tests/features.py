@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import secrets
 import unittest
 import urllib.error
 import urllib.parse
@@ -58,6 +59,10 @@ class Features(unittest.TestCase):
             data=json.dumps(data).encode(); headers['Content-Type']='application/json'
         if isinstance(data,str): data=data.encode()
         if token: headers['Authorization']='Bearer '+token
+        else:
+            descriptor = cls.home / '.expose/instances' / f'{cls.port}.json'
+            if descriptor.exists():
+                headers['X-Expose-Operator'] = json.loads(descriptor.read_text())['operator_token']
         if content_type: headers['Content-Type']=content_type
         req=urllib.request.Request(cls.origin+path,data=data,headers=headers)
         try:
@@ -236,7 +241,7 @@ class Features(unittest.TestCase):
             writes=[e for e in forwarded['events'] if e['type']=='data']
             self.assertEqual(base64.b64decode(writes[0]['data']),b'CALLBACK')
             self.assertEqual(self.json(f'{agent}/net/{sid}/close',{},token)[0],200)
-            self.assertEqual(self.json(f'/console/callbacks/{cid}/remove',{},token)[0],200)
+            self.assertEqual(self.json(f'/console/callbacks/{cid}/remove',{})[0],200)
             self.assertEqual(self.json('/console/sessions/'+client['id']+'/remove',{})[0],200)
         finally:
             echo.shutdown(); echo.server_close()
@@ -289,13 +294,14 @@ class Features(unittest.TestCase):
 class AuthFeatures(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.password = secrets.token_urlsafe(32)
         cls.temp = tempfile.TemporaryDirectory(prefix='expose-auth-')
         cls.home = Path(cls.temp.name)
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0)); cls.port = sock.getsockname()[1]
         cls.origin = f'http://127.0.0.1:{cls.port}'
         env = dict(os.environ, HOME=str(cls.home), EXPOSE_CLIENT_DIR=str(ROOT/'dist/console-clients'),
-                   EXPOSE_CONSOLES='1', EXPOSE_AUTH_PASSWORD='<redacted>',
+                   EXPOSE_CONSOLES='1', EXPOSE_AUTH_PASSWORD=cls.password,
                    EXPOSE_TOOLS_DIR=str(cls.home/'tools'),
                    EXPOSE_HEALTH_TOKEN='health123')
         cls.log = open(cls.home/'server.log', 'wb')
@@ -350,7 +356,7 @@ class AuthFeatures(unittest.TestCase):
             with response:
                 self.assertEqual(response.code,401)
         auth,_=self.opener()
-        self.open(auth,'/login',{'password':'<redacted>'})
+        self.open(auth,'/login',{'password':self.password})
         req=urllib.request.Request(self.origin+'/console/winenum/ticket',data=b'',method='POST')
         with auth.open(req,timeout=10) as response:
             ticket=json.loads(response.read())['ticket']
@@ -381,7 +387,7 @@ class AuthFeatures(unittest.TestCase):
 
     def test_windows_tools_staging_and_ticket_download(self):
         auth,_=self.opener()
-        self.open(auth,'/login',{'password':'<redacted>'})
+        self.open(auth,'/login',{'password':self.password})
         payload=b'fake-seatbelt'
         req=urllib.request.Request(self.origin+'/console/tools/Seatbelt.exe',data=payload,
                                    headers={'Content-Type':'application/octet-stream'})
@@ -414,18 +420,18 @@ class AuthFeatures(unittest.TestCase):
         code,headers,body=self.open(anon,'/',accept='text/html')
         self.assertEqual(code,401); self.assertIn(b'This session is password protected',body)
         self.assertEqual(self.open(anon,'/console/status')[0],401)
-        self.assertEqual(self.open(anon,'/login',{'password':'<redacted>'})[0],401)
-        code,_,_=self.open(anon,'/login',{'password':'<redacted>'})
+        self.assertEqual(self.open(anon,'/login',{'password':self.password + '-invalid'})[0],401)
+        code,_,_=self.open(anon,'/login',{'password':self.password})
         self.assertEqual(code,200)
         self.assertEqual(self.open(anon,'/console/status')[0],200)
-        code,_,body=self.open(anon,'/login',{'password':'<redacted>'})
+        code,_,body=self.open(anon,'/login',{'password':self.password + '-invalid'})
         self.assertEqual(code,401)
         self.assertIn(b'Incorrect password',body)
         self.assertEqual(self.open(anon,'/.expose-health?session=health123')[0],200)
         self.assertEqual(self.open(anon,'/.expose-health?session=wrong')[0],404)
 
         auth,jar=self.opener()
-        self.assertEqual(self.open(auth,'/login',{'password':'<redacted>'})[0],200)
+        self.assertEqual(self.open(auth,'/login',{'password':self.password})[0],200)
         self.assertTrue(any(cookie.name=='expose_session' for cookie in jar))
         self.assertEqual(self.open(auth,'/console/status')[0],200)
         req=urllib.request.Request(self.origin+'/console/invites',
@@ -454,7 +460,7 @@ class AuthFeatures(unittest.TestCase):
                 self.assertEqual(response.code,401)  # redirected to the login page
         self.assertEqual(self.open(auth,'/')[0],401)
         log=(self.home/'.expose/requests.json').read_text()
-        self.assertNotIn('secret123',log)
-        self.assertNotIn('secret123',(self.home/'server.log').read_text(errors='replace'))
+        self.assertNotIn(self.password,log)
+        self.assertNotIn(self.password,(self.home/'server.log').read_text(errors='replace'))
 
 if __name__=='__main__':unittest.main(verbosity=2)

@@ -32,6 +32,7 @@ class ConsoleService:
         self.callbacks = {}
         self.proxy_session = ''
         self.proxy_address = ''
+        self.proxy = None
         self.proxy_stats = {'opens': 0, 'failed': 0, 'sent': 0, 'received': 0}
         self.event_seen = {}
         self.script_tickets = {}
@@ -62,10 +63,11 @@ class ConsoleService:
         return value
 
     def token(self, handler):
-        return handler.headers.get('Authorization', '').removeprefix('Bearer ')
+        header = handler.headers.get('Authorization', '')
+        return header[7:] if header.startswith('Bearer ') else ''
 
     def authorized(self, handler, token):
-        return bool(token) and hmac.compare_digest(self.token(handler), token)
+        return bool(token) and hmac.compare_digest(self.token(handler).encode(), token.encode())
 
     @staticmethod
     def request_ip(handler):
@@ -244,6 +246,7 @@ class ConsoleService:
         with self.condition:
             session = self._net_session_locked()
             return {'enabled': bool(self.proxy_address), 'address': self.proxy_address,
+                    'auth_required': False, 'loopback_only': True,
                     'session': ({'id': session['id'], 'host': session['host']}
                                 if session else None),
                     'streams': len(session['net_streams']) if session else 0,
@@ -260,6 +263,7 @@ class ConsoleService:
     def start_proxy(self, bind):
         proxy = SocksProxy(self, bind)
         proxy.start()
+        self.proxy = proxy
         with self.condition:
             self.proxy_address = proxy.address
         return proxy
@@ -401,6 +405,8 @@ class ConsoleService:
         info = {key: session[key] for key in ('id', 'host', 'os', 'arch', 'connected', 'seen')}
         info['stale'] = time.time() - session['seen'] > self.STALE_AFTER
         info['ip'] = session.get('ip', '')
+        info['output_start'] = session['offset']
+        info['output_end'] = session['offset'] + len(session['output'])
         return info
 
     def handle(self, handler):
@@ -410,10 +416,31 @@ class ConsoleService:
             return False
         handler._console_body_set = False
         try:
+            # Connector tokens authorize only that connector's agent routes.
+            public_ticket = (path in ('/lin', '/mac', '/win', '/console/register',
+                                      '/console/winenum.ps1', '/console/toolrunner.ps1')
+                             or path.startswith(('/console/client/', '/console/tool/')))
+            if path.startswith('/console/agent/'):
+                ident = path.split('/')[3]
+                with self.condition:
+                    session = self.sessions.get(ident)
+                    allowed = session and self.authorized(handler, session['token'])
+                if not allowed:
+                    handler.close_connection = True
+                    self.reply(handler, 401, {'error': 'Invalid connector credentials'})
+                    return True
+                if not session['connected']:
+                    self.reply(handler, 410, {'error': 'Session closed'})
+                    return True
+            elif not public_ticket and not handler._operator_authorized():
+                handler.close_connection = True
+                self.reply(handler, 401, {'error': 'Operator authentication required'})
+                return True
             if handler.command == 'POST':
                 self.body(handler, raw=True)
             if path == '/console/status' and handler.command == 'GET':
-                self.reply(handler, 200, {'enabled': self.enabled, 'platforms': self.available()})
+                self.reply(handler, 200, {'enabled': self.enabled, 'platforms': self.available(),
+                                          'cli_attach': True, 'protocol': 2})
                 return True
             if not self.enabled:
                 handler.close_connection = True
@@ -498,7 +525,8 @@ class ConsoleService:
                 self.remove_callback(parts[2])
                 self.reply(handler, 200, {'ok': True})
                 return True
-            if len(parts) == 6 and parts[:2] == ['console', 'agent'] and parts[3] == 'callback':
+            if (len(parts) == 6 and parts[:2] == ['console', 'agent'] and parts[3] == 'callback'
+                    and parts[5] == 'state' and handler.command == 'POST'):
                 if not self.set_callback_state(parts[2], parts[4], self.body(handler)):
                     self.reply(handler, 404, {'error': 'Callback not found'})
                 else:
@@ -516,9 +544,12 @@ class ConsoleService:
             elif path == '/console/invites' and handler.command == 'POST':
                 data = self.body(handler)
                 url = urllib.parse.urlsplit(data.get('origin', ''))
-                if (url.scheme not in ('http', 'https') or not url.hostname or url.username
-                        or url.password or url.path not in ('', '/') or url.query or url.fragment):
+                if (url.scheme not in ('http', 'https') or not url.hostname or url.username is not None
+                        or url.password is not None or url.path not in ('', '/') or url.query or url.fragment):
                     raise ValueError('Use an HTTP(S) origin without a path')
+                _ = url.port
+                if url.scheme == 'http' and url.hostname not in ('localhost', '127.0.0.1', '::1'):
+                    raise ValueError('Remote connectors require HTTPS; HTTP is allowed only on loopback')
                 with self.condition:
                     if len(self.invites) >= 32:
                         raise ValueError('Too many active connection links; wait for them to expire')
@@ -564,7 +595,7 @@ class ConsoleService:
                        'os': str(data.get('os', ''))[:20], 'arch': str(data.get('arch', ''))[:20],
                        'ip': self.request_ip(handler),
                        'connected': True, 'seen': time.time(), 'events': [], 'seq': 0,
-                       'output': bytearray(), 'offset': 0, 'input_size': 0,
+                       'output': bytearray(), 'offset': 0, 'input_size': 0, 'operator_requests': {},
                        'net_seq': 0, 'net_events': [], 'net_streams': {}}
             self.sessions[ident] = session
             self.registrations[ticket] = {'nonce': nonce, 'id': ident, 'token': token,
@@ -735,13 +766,28 @@ class ConsoleService:
                 else:
                     if not session['connected']:
                         self.reply(handler, 410, {'error': 'Session closed'}); return
+                    request_id = data.get('request_id', '')
+                    if not isinstance(request_id, str) or len(request_id) > 64:
+                        raise ValueError('Invalid request identifier')
+                    if request_id and request_id in session['operator_requests']:
+                        self.reply(handler, 200, {'ok': True, 'duplicate': True}); return
+                    now = time.monotonic()
+                    requests = session['operator_requests']
+                    while requests and next(iter(requests.values())) < now - 120:
+                        requests.pop(next(iter(requests)))
+                    if request_id and len(requests) >= 8192:
+                        self.reply(handler, 429, {'error': 'Retry safety cache is full'}); return
                     if len(session['events']) >= 256:
                         self.reply(handler, 429, {'error': 'Input queue is full'}); return
                     event = {}
                     if action == 'input':
-                        raw = data.get('data', '')
-                        if not isinstance(raw, str): raise ValueError('Invalid input')
-                        encoded = base64.b64encode(raw.encode()).decode()
+                        if 'data_b64' in data:
+                            raw = base64.b64decode(data['data_b64'], validate=True)
+                        else:
+                            raw = data.get('data', '')
+                            if not isinstance(raw, str): raise ValueError('Invalid input')
+                            raw = raw.encode()
+                        encoded = base64.b64encode(raw).decode()
                         if session['input_size'] + len(encoded) > 65536:
                             self.reply(handler, 429, {'error': 'Input queue is full'}); return
                         event['data'] = encoded
@@ -752,6 +798,8 @@ class ConsoleService:
                         event['cols'], event['rows'] = cols, rows
                     session['seq'] += 1
                     event['seq'] = session['seq']; session['events'].append(event)
+                    if request_id:
+                        session['operator_requests'][request_id] = now
                 self.condition.notify_all()
             self.reply(handler, 200, {'ok': True})
         else:
@@ -859,13 +907,17 @@ class SocksProxy:
 
     def start(self):
         host, port = self.parse_bind(self.bind)
+        if not 1 <= port <= 65535:
+            raise ValueError('Invalid proxy port')
+        if host not in ('127.0.0.1', '::1', 'localhost'):
+            raise ValueError('The SOCKS proxy must bind to loopback; use an authenticated SSH forward for remote access')
         family = socket.AF_INET6 if ':' in host else socket.AF_INET
         listener = socket.socket(family, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((host, port))
         listener.listen(128)
         self.sock = listener
-        shown = '127.0.0.1' if host in ('', '0.0.0.0') else host
+        shown = f'[{host}]' if ':' in host else host
         self.address = f'socks5://{shown}:{port}'
         threading.Thread(target=self.serve, daemon=True).start()
         return self

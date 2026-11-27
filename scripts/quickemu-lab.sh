@@ -13,7 +13,7 @@
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VM_DIR="$HOME/VMs"
+VM_DIR="${VM_DIR:-$HOME/VMs}"
 mkdir -p "$VM_DIR"
 
 # ── Colors ──────────────────────────────────────────────────────────
@@ -56,7 +56,8 @@ vm_name() {
 # Find the config file quickget generated (naming varies by OS)
 find_conf() {
     local dir="$1"
-    find "$dir" -maxdepth 1 -name '*.conf' ! -name '.*' 2>/dev/null | head -1
+    [[ -d "$dir" ]] || return 0
+    find "$dir" -maxdepth 1 -name '*.conf' ! -name '.*' -print -quit 2>/dev/null
 }
 
 # ── Create all VMs ───────────────────────────────────────────────────
@@ -70,55 +71,51 @@ cmd_create() {
         read -r os release edition disk ram cores extra <<< "$entry"
         extra="${extra:-}"
 
-        local name=$(vm_name "$os" "$release" "$edition")
+        local name
+        name=$(vm_name "$os" "$release" "$edition")
         local vm_path="$VM_DIR/$name"
 
         echo ""
         info "[$count/$total] $name"
 
-        local existing_conf=$(find_conf "$vm_path")
-        if [[ -n "$existing_conf" ]]; then
-            log "Already configured — skipping"
-            continue
-        fi
-
-        mkdir -p "$vm_path"
-
-        # Download ISO + create config using quickget
-        if [[ "$os" == "windows" ]]; then
-            # Windows uses language edition (with spaces), no --path
-            local lang="${edition//_/ }"
-            (cd "$vm_path" && quickget "$os" "$release" "$lang")
-        else
-            quickget "$os" "$release" --path "$vm_path"
-        fi
-
-        # Patch the generated config with our custom settings
-        local conf=$(find_conf "$vm_path")
-        local idx=$((count - 1))
-        local ssh_port=$((2222 + idx))
-
-        if [[ -n "$conf" && -f "$conf" ]]; then
-            # RAM and CPU
-            sed -i "s/^ram=.*/ram=\"${ram}G\"/" "$conf" 2>/dev/null || true
-            sed -i "s/^cpu_cores=.*/cpu_cores=\"$cores\"/" "$conf" 2>/dev/null || true
-
-            # Disk size (thin-provisioned qcow2)
-            if ! grep -q "^disk_size=" "$conf"; then
-                echo "disk_size=\"$disk\"" >> "$conf"
+        local existing_conf
+        existing_conf=$(find_conf "$vm_path")
+        if [[ -z "$existing_conf" ]]; then
+            mkdir -p "$vm_path"
+            # quickget has no --path option; it creates files in its cwd.
+            if [[ "$os" == "windows" ]]; then
+                local lang="${edition//_/ }"
+                (cd "$vm_path" && quickget "$os" "$release" "$lang")
             else
-                sed -i "s/^disk_size=.*/disk_size=\"$disk\"/" "$conf" 2>/dev/null || true
+                (cd "$vm_path" && quickget "$os" "$release")
             fi
-
-            # Networking: user-mode NAT
-            grep -q "^network=" "$conf" || echo "network=\"user\"" >> "$conf"
-
-            # Share host public directory for file transfer
-            grep -q "^public_dir=" "$conf" || echo "public_dir=\"$HOME/Public\"" >> "$conf"
-
-            # Port forwarding: unique SSH port per VM
-            grep -q "^port_forwards=" "$conf" || echo "port_forwards=(\"${name}:22:tcp:${ssh_port}\")" >> "$conf"
+        else
+            log "Reusing existing download and configuration"
         fi
+
+        local conf
+        conf=$(find_conf "$vm_path")
+        [[ -n "$conf" && -f "$conf" ]] || { warn "quickget did not create a config for $name"; return 1; }
+        local ssh_port=$((2222 + count - 1))
+        # Repair old generated settings too; update only when content changes.
+        python3 - "$conf" "$ram" "$cores" "$disk" "$ssh_port" "$HOME/Public" <<'PYCONF'
+import re, shlex, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+settings = dict(ram=sys.argv[2]+'G', cpu_cores=sys.argv[3], disk_size=sys.argv[4],
+                ssh_port=sys.argv[5], public_dir=sys.argv[6], network='user')
+old = path.read_text()
+lines = []
+for line in old.splitlines():
+    if any(re.match(r'^'+key+r'=', line) for key in settings):
+        continue
+    if re.fullmatch(r'port_forwards=\("[^"\n]+:22:tcp:[0-9]+"\)', line):
+        continue  # obsolete core-dotfiles format, unsupported by quickemu
+    lines.append(line)
+new = '\n'.join(lines).rstrip() + '\n' + ''.join(key+'='+shlex.quote(value)+'\n' for key,value in settings.items())
+if new != old:
+    path.write_text(new)
+PYCONF
 
         log "Configured: $vm_path"
         log "  SSH:  localhost:$ssh_port"
@@ -148,8 +145,10 @@ cmd_list() {
     local found=false
     for entry in "${VMS[@]}"; do
         read -r os release edition disk ram cores extra <<< "$entry"
-        local name=$(vm_name "$os" "$release" "$edition")
-        local conf=$(find_conf "$VM_DIR/$name")
+        local name
+        name=$(vm_name "$os" "$release" "$edition")
+        local conf
+        conf=$(find_conf "$VM_DIR/$name")
 
         if [[ -n "$conf" && -f "$conf" ]]; then
             found=true
@@ -172,8 +171,10 @@ cmd_snapshot() {
 
     for entry in "${VMS[@]}"; do
         read -r os release edition disk ram cores extra <<< "$entry"
-        local name=$(vm_name "$os" "$release" "$edition")
-        local conf=$(find_conf "$VM_DIR/$name")
+        local name
+        name=$(vm_name "$os" "$release" "$edition")
+        local conf
+        conf=$(find_conf "$VM_DIR/$name")
 
         if [[ -n "$conf" && -f "$conf" ]]; then
             info "Snapshot '$tag' → $name"
@@ -212,9 +213,7 @@ COMMANDS
 
 VMS CREATED
     ubuntu-26.04-desktop     (64G disk, 4G RAM, 2 cores)
-    ubuntu-26.04-server      (32G disk, 4G RAM, 2 cores)
     ubuntu-24.04-desktop     (64G disk, 4G RAM, 2 cores)
-    ubuntu-24.04-server      (32G disk, 4G RAM, 2 cores)
     windows-11               (128G disk, 4G RAM, 2 cores)
     macos-tahoe              (64G disk, 4G RAM, 2 cores)
 
@@ -225,7 +224,7 @@ NOTES
       and changing IP ranges without reconfiguration.
     - Port forwarding: each VM gets unique SSH/RDP ports on localhost.
     - Snapshots: quickemu --vm <conf> --snapshot create/apply/delete
-    - Windows Server requires manual ISO — see 'windows-server' command.
+    - Windows Server requires a separately provided installation ISO.
 
 STORAGE LOCATION
     ~/VMs/

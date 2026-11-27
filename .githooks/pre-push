@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# History findings must be rotated and scrubbed before publishing again.
+python3 scripts/check-secrets.py --history

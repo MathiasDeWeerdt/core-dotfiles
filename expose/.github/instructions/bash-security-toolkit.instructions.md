@@ -117,3 +117,21 @@ EOF
 - Use `[[ ]]` over `[ ]` for conditionals
 - Redirect errors to stderr: `>&2`
 - Clean up sensitive temp files on exit
+
+## Operator and credential boundaries
+
+Operator subcommands dispatch before normal server parsing. Preserve original
+stdin across the embedded Python heredoc so `proxychains COMMAND` receives the
+caller's input. Detach must restore terminal settings without terminating the
+connector, proxy streams, or server. Never log tickets, session cookies, bearer
+tokens, operator keys, or password values, including in verbose output.
+
+Private instance descriptors and proxy configuration use owner-only directories
+and atomic mode-0600 files. Console operator actions always authenticate, even
+when ordinary file sharing is public. Connector tokens authorize only their own
+agent session; enrollment tickets never authorize operator actions. Remote CLI
+and connector origins require verified HTTPS. SOCKS listeners are loopback-only.
+
+Build output uses atomic replacement and explicit mode 0755; preserve the last
+good build on failure and avoid rewriting unchanged files. Build temporary files
+are managed by build.sh's own cleanup trap rather than runtime helpers.

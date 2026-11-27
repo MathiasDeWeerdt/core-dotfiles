@@ -336,9 +336,16 @@ func run(ctx context.Context) error {
 	origin, ticket := os.Getenv("EXPOSE_URL"), os.Getenv("EXPOSE_TICKET")
 	os.Unsetenv("EXPOSE_URL")
 	os.Unsetenv("EXPOSE_TICKET")
+	os.Unsetenv("EXPOSE_AUTH_PASSWORD")
 	parsed, err := url.Parse(origin)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") || ticket == "" {
 		return errors.New("launch this connector with a fresh connection command from expose")
+	}
+	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" {
+		ip := net.ParseIP(parsed.Hostname())
+		if ip == nil || !ip.IsLoopback() {
+			return errors.New("remote connectors require HTTPS; HTTP is allowed only on loopback")
+		}
 	}
 	r := &relay{origin: strings.TrimRight(origin, "/"), token: ticket, client: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{MaxIdleConns: 256, MaxIdleConnsPerHost: 256, IdleConnTimeout: 90 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	host, _ := os.Hostname()

@@ -2,6 +2,7 @@
 # ── Parse arguments ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --version|-V) trap - EXIT; printf 'expose %s\n' "$VERSION"; exit 0 ;;
     -h|--help)   usage; exit 0 ;;
     -m|--more)   VERBOSE=1; shift ;;
     -p|--port)   [[ -n "${2:-}" ]] || die "Missing port after $1"; PORT="$2"; shift 2 ;;

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Check the tracked upstream without pulling, changing configs, or running sudo.
+set -euo pipefail
+REPO=${DOTFILES_DIR:-$HOME/Documents/core-dotfiles}
+[[ -d "$REPO/.git" ]] || { echo 'Dotfiles checkout not found.' >&2; exit 1; }
+branch=$(git -C "$REPO" symbolic-ref --quiet --short HEAD) || {
+    echo 'Detached checkout; automatic update checks skipped.'; exit 0;
+}
+remote=$(git -C "$REPO" config --get "branch.$branch.remote")
+reference=$(git -C "$REPO" config --get "branch.$branch.merge")
+local_head=$(git -C "$REPO" rev-parse HEAD)
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=10'
+if ! advertised=$(timeout 25 git -C "$REPO" ls-remote --exit-code "$remote" "$reference" 2>/dev/null); then
+    echo 'Could not check upstream; no files or services were changed.' >&2
+    exit 1
+fi
+remote_head=${advertised%%[[:space:]]*}
+if [[ "$remote_head" == "$local_head" ]]; then
+    echo 'Dotfiles match the tracked upstream.'
+else
+    echo 'Upstream differs. Review the checkout and run update.sh when ready.'
+    if command -v notify-send >/dev/null; then
+        notify-send 'Dotfiles revisions differ' 'Review core-dotfiles and run update.sh when ready. Active shells are unchanged.'
+    fi
+fi

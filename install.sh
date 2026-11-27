@@ -10,11 +10,13 @@
 #   ./install.sh --dry-run        Print what would happen, don't execute
 #   ./install.sh --skip-packages  Skip pacman/AUR installs (re-run only)
 # ─────────────────────────────────────────────────────────────────────
-set -uo pipefail
+set -euo pipefail
 
 # ── Argument parsing ─────────────────────────────────────────────────
 DRY_RUN=false
 SKIP_PACKAGES=false
+CONFIGS_ONLY=false
+ASSUME_YES=false
 _ERRORS=()
 
 usage() {
@@ -28,6 +30,8 @@ FLAGS
     --help, -h         Show this help and exit
     --dry-run          Print what would happen without making changes
     --skip-packages    Skip pacman and AUR package installs (for re-runs)
+    --configs-only     Deploy configs, global memory, and expose; no system setup
+    --yes              Accept the full bootstrap confirmation
 
 EXAMPLES
     ./install.sh                        Full bootstrap
@@ -45,6 +49,8 @@ while [[ $# -gt 0 ]]; do
         --help|-h) usage ;;
         --dry-run) DRY_RUN=true; shift ;;
         --skip-packages) SKIP_PACKAGES=true; shift ;;
+        --configs-only) CONFIGS_ONLY=true; shift ;;
+        --yes) ASSUME_YES=true; shift ;;
         *) echo "Unknown flag: $1 (use --help)"; exit 1 ;;
     esac
 done
@@ -68,20 +74,40 @@ run() {
 }
 
 # ── Configuration ───────────────────────────────────────────────────
-# Load env file: env.example provides defaults, env overrides them
+# Explicit environment values win over the optional local env file.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+declare -A CONFIG_OVERRIDES=()
+for key in TARGET_USER DESIRED_HOSTNAME DOTFILES_DIR SSH_KEY_TYPE; do
+    [[ ! -v "$key" ]] || CONFIG_OVERRIDES[$key]="${!key}"
+done
 if [[ -f "$SCRIPT_DIR/env" ]]; then
     source "$SCRIPT_DIR/env"
-elif [[ -f "$SCRIPT_DIR/env.example" ]]; then
-    source "$SCRIPT_DIR/env.example"
 fi
-
-# CLI environment overrides take precedence (e.g. TARGET_USER=foo ./install.sh)
-TARGET_USER="${TARGET_USER:-mathias}"
-DESIRED_HOSTNAME="${DESIRED_HOSTNAME:-bytebadger}"
-DOTFILES_DIR="${DOTFILES_DIR:-$HOME/Documents/core-dotfiles}"
+for key in "${!CONFIG_OVERRIDES[@]}"; do
+    printf -v "$key" '%s' "${CONFIG_OVERRIDES[$key]}"
+done
+TARGET_USER="${TARGET_USER:-$USER}"
+DESIRED_HOSTNAME="${DESIRED_HOSTNAME:-$(hostname)}"
+DOTFILES_DIR="${DOTFILES_DIR:-$SCRIPT_DIR}"
 SSH_KEY_TYPE="${SSH_KEY_TYPE:-ed25519}"
 DOTFILES="$DOTFILES_DIR"
+
+# Exit before any writes, downloads, prompts, sudo, or service commands.
+if $DRY_RUN; then
+    printf 'Target user: %s; hostname: %s; repository: %s\n' "$TARGET_USER" "$DESIRED_HOSTNAME" "$DOTFILES"
+    if ! $CONFIGS_ONLY; then
+        printf 'Would configure hostname/hosts, ensure SSH key, install runtimes/plugins,\nconfigure firewall/Docker/GNOME, and set the login shell.\n'
+        $SKIP_PACKAGES || printf 'Would install official/AUR packages from the maintained package lists.\n'
+    fi
+    exec bash "$DOTFILES/scripts/deploy.sh" --dry-run
+fi
+if $CONFIGS_ONLY; then
+    if [[ "$EUID" -eq 0 || "$(id -un)" != "$TARGET_USER" ]]; then
+        printf 'Deploy as the target user without sudo.\n' >&2
+        exit 1
+    fi
+    exec bash "$DOTFILES/scripts/deploy.sh"
+fi
 
 # ── Colors ──────────────────────────────────────────────────────────
 BOLD='\033[1m'
@@ -103,23 +129,15 @@ if [[ "$(whoami)" == "root" ]]; then
 fi
 
 # ── Distro detection ─────────────────────────────────────────────────
-detect_distro() {
-    if [[ -f /etc/os-release ]]; then
-        source /etc/os-release 2>/dev/null
-        echo "${ID:-unknown}"
-    else
-        echo "unknown"
-    fi
-}
-
-DISTRO=$(detect_distro)
+[[ ! -r /etc/os-release ]] || source /etc/os-release
+DISTRO=${ID:-unknown}
 ARCH_BASED=("arch" "cachyos" "endeavouros" "manjaro" "artix" "arcolinux" "garuda")
 
 is_arch_based() {
     for d in "${ARCH_BASED[@]}"; do
         [[ "$DISTRO" == "$d" ]] && return 0
     done
-    [[ "$ID_LIKE" == *"arch"* ]] && return 0
+    [[ "${ID_LIKE:-}" == *"arch"* ]] && return 0
     return 1
 }
 
@@ -133,8 +151,9 @@ log "Detected Arch-based distro: ${PRETTY_NAME:-$DISTRO}"
 
 # ── User check ───────────────────────────────────────────────────────
 if [[ "$(whoami)" != "$TARGET_USER" ]]; then
-    warn "Running as '$(whoami)', but target user is '$TARGET_USER'."
-    warn "Override with: TARGET_USER=yourname ./install.sh"
+    err "Running as '$(whoami)', but target user is '$TARGET_USER'."
+    err "Run as the target user, or set TARGET_USER=$USER."
+    exit 1
 fi
 
 # ── Confirmation ─────────────────────────────────────────────────────
@@ -150,7 +169,7 @@ echo -e "    • Set hostname to ${YELLOW}${DESIRED_HOSTNAME}${NC}"
 echo -e "    • Change default shell to ${YELLOW}zsh${NC}"
 echo -e "    • Generate SSH key if none exists"
 echo ""
-read -rp "  Continue? [y/N] " REPLY
+if $ASSUME_YES; then REPLY=y; else read -rp "  Continue? [y/N] " REPLY; fi
 echo ""
 if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
     err "Aborted by user."
@@ -169,7 +188,7 @@ fi
 
 # Ensure /etc/hosts has the hostname entry (avoids "unable to resolve hostname" warnings)
 HOSTS_LINE="127.0.0.1 $DESIRED_HOSTNAME"
-if grep -qF "$HOSTS_LINE" /etc/hosts 2>/dev/null; then
+if awk -v host="$DESIRED_HOSTNAME" '$1 !~ /^#/ { for (i=2;i<=NF;i++) if ($i==host) found=1 } END {exit !found}' /etc/hosts; then
     log "/etc/hosts already has '$DESIRED_HOSTNAME' entry"
 else
     info "Adding '$DESIRED_HOSTNAME' to /etc/hosts..."
@@ -178,11 +197,12 @@ else
 fi
 
 # ── SSH keys ────────────────────────────────────────────────────────
-SSH_KEY="$HOME/.ssh/id_ed25519"
+case "$SSH_KEY_TYPE" in ed25519|rsa|ecdsa) ;; *) err "Unsupported SSH_KEY_TYPE"; exit 1 ;; esac
+SSH_KEY="$HOME/.ssh/id_$SSH_KEY_TYPE"
 if [[ -f "$SSH_KEY" ]]; then
     log "SSH key already exists: $SSH_KEY"
 else
-    info "Generating new ed25519 SSH key..."
+    info "Generating new $SSH_KEY_TYPE SSH key..."
     mkdir -p "$HOME/.ssh"
     chmod 700 "$HOME/.ssh"
     ssh-keygen -t "$SSH_KEY_TYPE" -f "$SSH_KEY" -N "" -C "$TARGET_USER@$DESIRED_HOSTNAME"
@@ -221,7 +241,7 @@ PACMAN_PKGS=(
     keychain tree rsync aria2 lsof
 
     # Dev runtimes
-    go dotnet-sdk python python-pip python-pipx python-setuptools
+    go dotnet-sdk python python-pip python-pipx python-setuptools nvm python-flask dnsmasq
 
     # Java — all LTS versions (including latest)
     jdk17-openjdk jdk21-openjdk jdk-openjdk
@@ -230,7 +250,7 @@ PACMAN_PKGS=(
     docker docker-buildx docker-compose
 
     # Virtualization
-    qemu-desktop
+    qemu-desktop virt-manager
 
     # Build tools
     base-devel cmake gcc
@@ -387,15 +407,7 @@ else
     log "TPM installed"
 fi
 
-# Install tmux plugins silently (only on first run)
-PLUGINS_INSTALLED="$HOME/.tmux/plugins/tmux-sensible"
-if [[ -d "$PLUGINS_INSTALLED" ]]; then
-    log "Tmux plugins already installed"
-else
-    info "Installing tmux plugins..."
-    "$TPM_DIR/bin/install_plugins" 2>/dev/null || true
-    log "Tmux plugins installed"
-fi
+# Plugins are installed after the new tmux config is deployed.
 
 # ── 6. Fonts — MesloLGS NF ──────────────────────────────────────────
 section "6/11 — Nerd Fonts"
@@ -411,28 +423,18 @@ fc-cache -fv "$FONT_DIR" >/dev/null 2>&1 || true
 # ── 7. Language runtimes ────────────────────────────────────────────
 section "7/11 — Language runtimes"
 
-# Node.js via nvm
+# Node.js via nvm. Support existing user-managed installations too.
 export NVM_DIR="$HOME/.nvm"
 if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-    log "nvm already installed"
+    source "$NVM_DIR/nvm.sh"
+elif [[ -s /usr/share/nvm/nvm.sh ]]; then
+    source /usr/share/nvm/nvm.sh
 else
-    info "Installing nvm..."
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash
-    log "nvm installed"
+    err "nvm is missing; install the nvm package or rerun without --skip-packages."
+    exit 1
 fi
-
-# Load nvm for this session
-[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
-
-# Install Node LTS
-if command -v node &>/dev/null; then
-    log "Node.js $(node --version) already present"
-else
-    info "Installing Node.js LTS via nvm..."
-    nvm install --lts
-    nvm alias default 'lts/*'
-    log "Node.js LTS installed: $(node --version)"
-fi
+nvm install --lts
+nvm alias default 'lts/*'
 
 # Rust via rustup
 if command -v rustup &>/dev/null; then
@@ -488,7 +490,7 @@ else
 fi
 
 # Add user to docker group
-if groups "$USER" | grep -q docker; then
+if id -nG "$USER" | tr ' ' '\n' | grep -qx docker; then
     log "User already in docker group"
 else
     info "Adding $USER to docker group..."
@@ -509,6 +511,7 @@ fi
 NPM_GLOBALS=(
     codewhale
     "@openai/codex"
+    "@github/copilot"
     bun
     "@nestjs/cli"
     "@earendil-works/pi-coding-agent"
@@ -523,18 +526,7 @@ for pkg in "${NPM_GLOBALS[@]}"; do
     fi
 done
 
-# GitHub Copilot CLI (gh extension)
-if command -v gh &>/dev/null; then
-    if gh extension list 2>/dev/null | grep -q 'gh-copilot'; then
-        log "GitHub Copilot CLI already installed"
-    else
-        info "Installing GitHub Copilot CLI extension..."
-        gh extension install github/gh-copilot 2>/dev/null || \
-            warn "Copilot CLI install failed — run: gh auth login && gh extension install github/gh-copilot"
-    fi
-else
-    warn "gh CLI not found — skipping Copilot CLI (install github-cli and run 'gh auth login')"
-fi
+# Copilot uses the standalone @github/copilot package above.
 
 # Python security tools via pipx (isolated environments)
 PIPX_TOOLS=(
@@ -549,184 +541,27 @@ for entry in "${PIPX_TOOLS[@]}"; do
         log "pipx: $name already installed"
     else
         info "pipx: installing $name..."
-        pipx install "$pkg" 2>/dev/null || warn "$name install failed — install manually if needed"
+        pipx install "$pkg" || { warn "$name install failed"; _ERRORS+=("pipx: $name"); }
     fi
 done
 
 log "Coding agents ready"
 
-# ── Wire global memory (~/.memory.md) into each harness ─────────────
-# Creates harness-specific global instruction files that point to the
-# single source of truth at ~/.memory.md. Idempotent — won't overwrite
-# existing files so you can customize per-harness instructions safely.
-
-section "10b/11 — Cross-harness memory wiring"
-
-MEMORY_REF_LINE="Follow all preferences in ~/.memory.md. At the start of every session, read that file and incorporate its content."
-CLAUDE_IMPORT="@~/.memory.md"
-
-# Claude Code — native @import syntax, bulletproof
-CLAUDE_GLOBAL="$HOME/.claude/CLAUDE.md"
-if [[ -f "$CLAUDE_GLOBAL" ]]; then
-    log "Claude Code global CLAUDE.md already exists — skipping"
-else
-    info "Wiring Claude Code → ~/.memory.md (native @import)..."
-    mkdir -p "$(dirname "$CLAUDE_GLOBAL")"
-    cat > "$CLAUDE_GLOBAL" <<'CLAUDE_EOF'
-@~/.memory.md
-
-# Claude Code — Global Instructions
-# Add Claude-specific preferences below this line.
-CLAUDE_EOF
-    log "Claude Code wired"
+# ── Deploy public configs, private memory, and matching expose tools ──
+section "11/11 — Dotfiles and expose"
+bash "$DOTFILES/scripts/deploy.sh"
+if [[ -x "$TPM_DIR/bin/install_plugins" ]]; then
+    "$TPM_DIR/bin/install_plugins"
 fi
-
-# Codex — instruction-based reference
-CODEX_GLOBAL="$HOME/.codex/AGENTS.md"
-if [[ -f "$CODEX_GLOBAL" ]]; then
-    log "Codex global AGENTS.md already exists — skipping"
-else
-    info "Wiring Codex → ~/.memory.md..."
-    mkdir -p "$(dirname "$CODEX_GLOBAL")"
-    cat > "$CODEX_GLOBAL" <<CODEX_EOF
-# Codex — Global Instructions
-$MEMORY_REF_LINE
-
-# Add Codex-specific preferences below this line.
-CODEX_EOF
-    log "Codex wired"
-fi
-
-# Pi — instruction-based reference
-PI_GLOBAL="$HOME/.pi/agent/AGENTS.md"
-if [[ -f "$PI_GLOBAL" ]]; then
-    log "Pi global AGENTS.md already exists — skipping"
-else
-    info "Wiring Pi → ~/.memory.md..."
-    mkdir -p "$(dirname "$PI_GLOBAL")"
-    cat > "$PI_GLOBAL" <<PI_EOF
-# Pi — Global Instructions
-$MEMORY_REF_LINE
-
-# Add Pi-specific preferences below this line.
-PI_EOF
-    log "Pi wired"
-fi
-
-# OpenCode — instruction-based reference
-OPENCODE_GLOBAL="$HOME/.config/opencode/AGENTS.md"
-if [[ -f "$OPENCODE_GLOBAL" ]]; then
-    log "OpenCode global AGENTS.md already exists — skipping"
-else
-    info "Wiring OpenCode → ~/.memory.md..."
-    mkdir -p "$(dirname "$OPENCODE_GLOBAL")"
-    cat > "$OPENCODE_GLOBAL" <<OC_EOF
-# OpenCode — Global Instructions
-$MEMORY_REF_LINE
-
-# Add OpenCode-specific preferences below this line.
-OC_EOF
-    log "OpenCode wired"
-fi
-
-# Codewhale — append memory reference to existing instructions.md
-CODEWHALE_INSTRUCTIONS="$HOME/.codewhale/instructions.md"
-CODEWHALE_REF="At session start, read ~/.memory.md and treat it as authoritative user preferences. These preferences override defaults but yield to explicit current-turn requests."
-if [[ -f "$CODEWHALE_INSTRUCTIONS" ]]; then
-    if grep -qF '~/.memory.md' "$CODEWHALE_INSTRUCTIONS" 2>/dev/null; then
-        log "Codewhale already references ~/.memory.md"
-    else
-        info "Wiring Codewhale → ~/.memory.md..."
-        printf '\n%s\n' "$CODEWHALE_REF" >> "$CODEWHALE_INSTRUCTIONS"
-        log "Codewhale wired"
-    fi
-else
-    info "Creating Codewhale instructions.md with memory reference..."
-    mkdir -p "$(dirname "$CODEWHALE_INSTRUCTIONS")"
-    echo "$CODEWHALE_REF" > "$CODEWHALE_INSTRUCTIONS"
-    log "Codewhale wired"
-fi
-
-log "Harness memory wiring complete"
-
-# ── 10. Deploy dotfiles (stow) ──────────────────────────────────────
-section "11/11 — Dotfiles (stow)"
-
-cd "$DOTFILES"
-
-# ── Build expose before stowing ──────────────────────────────────────
-# The binaries staged in local-bin/.local/bin are committed as fallback;
-# a fresh build replaces them with the latest source. If the build fails
-# we keep the staged versions so expose is still deployable.
-if [[ -f "$DOTFILES/expose/build.sh" ]]; then
-  info "Building expose..."
-  if bash "$DOTFILES/expose/build.sh" && [[ -f "$DOTFILES/expose/dist/expose" ]]; then
-    cp "$DOTFILES/expose/dist/expose" "$DOTFILES/local-bin/.local/bin/expose"
-    cp "$DOTFILES/expose/dist/expose-online" "$DOTFILES/local-bin/.local/bin/expose-online"
-    if command -v go &>/dev/null; then
-      run "Build and install browser console connectors" make -C "$DOTFILES/expose" install-console-clients || true
-    else
-      warn "Go is required to build optional browser console connectors"
-    fi
-  else
-    warn "expose build failed — deploying pre-staged binaries instead"
-  fi
-fi
-
-# Ensure local-bin executables are executable
-chmod +x "$DOTFILES/local-bin/.local/bin/"* 2>/dev/null || true
-
-STOW_PACKAGES=(zsh p10k foot tmux git fonts local-bin flameshot memory)
-
-if command -v stow &>/dev/null; then
-  info "Stowing dotfiles..."
-  stow -d "$DOTFILES" -t "$HOME" -R --adopt "${STOW_PACKAGES[@]}" 2>/dev/null || \
-      stow -d "$DOTFILES" -t "$HOME" --adopt "${STOW_PACKAGES[@]}"
-  log "Dotfiles deployed"
-else
-  warn "stow not found — dotfiles not symlinked; expose tools still deployed directly"
-fi
-
-# ── Guarantee expose & expose-online are installed and usable ────────
-# stow's errors are suppressed above, so don't trust it: verify both
-# tools landed in ~/.local/bin, fall back to a direct copy if not, and
-# sanity-check the result before reporting success.
-BIN_DIR="$HOME/.local/bin"
-mkdir -p "$BIN_DIR"
-for _tool in expose expose-online; do
-  _staged="$DOTFILES/local-bin/.local/bin/$_tool"
-  _target="$BIN_DIR/$_tool"
-  if [[ ! -x "$_target" ]]; then
-    warn "$_tool missing after stow — installing directly to $BIN_DIR"
-    if [[ -f "$_staged" ]]; then
-      cp -f "$_staged" "$_target" && chmod +x "$_target" || _ERRORS+=("$_tool: direct install failed")
-    else
-      _ERRORS+=("$_tool: no staged binary found")
-      continue
-    fi
-  fi
-  if bash -n "$_target" 2>/dev/null; then
-    log "$_tool ready: $BIN_DIR/$_tool"
-  else
-    _ERRORS+=("$_tool: syntax check failed")
-    warn "$_tool present but fails bash syntax check"
-  fi
-done
-if [[ -x "$BIN_DIR/expose" ]] && ! "$BIN_DIR/expose" --help >/dev/null 2>&1; then
-  warn "expose --help sanity check failed"
-fi
-
-# ~/.local/bin must be on PATH for the tools to be usable in new shells
-if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-  warn "$BIN_DIR is not on PATH — expose tools may not resolve in this shell"
-fi
+# Fonts are available only after deployment.
+fc-cache -f "$HOME/.local/share/fonts"
 
 # ── GNOME settings (run separately if D-Bus is unresponsive) ─────────
 if command -v gsettings &>/dev/null && [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]; then
     info "Configuring GNOME settings (desktop, wallpaper, theme, power)..."
 
     # Delegate to dedicated script
-    if [[ -x "$DOTFILES/scripts/gnome-settings.sh" ]]; then
+    if [[ -f "$DOTFILES/scripts/gnome-settings.sh" ]]; then
         bash "$DOTFILES/scripts/gnome-settings.sh" 2>&1 | while IFS= read -r line; do info "  $line"; done
     fi
 
@@ -734,7 +569,8 @@ fi
 
 # ── Set default shell ────────────────────────────────────────────────
 ZSH_PATH=$(command -v zsh || echo "/usr/bin/zsh")
-if [[ "$SHELL" == "$ZSH_PATH" ]]; then
+LOGIN_SHELL=$(getent passwd "$USER" | cut -d: -f7)
+if [[ "$LOGIN_SHELL" == "$ZSH_PATH" ]]; then
     log "Default shell is already zsh"
 else
     info "Setting default shell to zsh..."
@@ -773,3 +609,5 @@ echo -e "${YELLOW}Notes:${NC}"
 echo "  - Log out and back in for docker group membership."
 echo "  - Run 'p10k configure' to customize your prompt."
 echo "  - Set API keys for Copilot / OpenRouter in your environment."
+
+(( ${#_ERRORS[@]} == 0 ))

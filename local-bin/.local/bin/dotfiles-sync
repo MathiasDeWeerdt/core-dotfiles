@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Synchronize reviewed commits only; never commit, stash, merge, or force-push."""
+import fcntl
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+class SyncError(Exception):
+    pass
+
+
+def main():
+    if len(sys.argv) > 1:
+        print(__doc__ + "\nSet DOTFILES_DIR for a non-default checkout.")
+        return 0 if sys.argv[1:] == ["--help"] else 2
+    repo = Path(os.environ.get("DOTFILES_DIR", str(Path.home() / "Documents/core-dotfiles"))).resolve()
+    os.umask(0o077)
+    state = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "core-dotfiles"
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0",
+               GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10")
+
+    def run(*args, timeout=90):
+        try:
+            result = subprocess.run(args, cwd=repo, env=env, capture_output=True, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SyncError("A sync command could not finish; inspect the checkout manually.") from exc
+        if result.returncode:
+            # Git error output can contain credential-bearing URLs or config values.
+            raise SyncError("Sync stopped at " + args[0] + " " + args[1] + "; inspect Git or the redacting secret checker manually.")
+        return result.stdout.decode().strip()
+
+    def git(*args):
+        return run("git", *args)
+
+    with (state / "sync.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("Another dotfiles sync is running; skipped.")
+            return 0
+        if git("rev-parse", "--show-toplevel") != str(repo):
+            raise SyncError("DOTFILES_DIR must be the checkout root.")
+        if git("status", "--porcelain", "--untracked-files=normal"):
+            raise SyncError("Local edits need review and an explicit commit; nothing was synchronized.")
+        for operation in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "BISECT_LOG"):
+            if (repo / git("rev-parse", "--git-path", operation)).exists():
+                raise SyncError("Finish the pending Git operation before synchronization.")
+        branch = git("symbolic-ref", "--quiet", "--short", "HEAD")
+        remote = git("config", "--get", f"branch.{branch}.remote")
+        reference = git("config", "--get", f"branch.{branch}.merge")
+        if remote not in git("remote").splitlines() or remote.startswith("-") or not reference.startswith("refs/heads/"):
+            raise SyncError("Configure a named remote and tracked branch first.")
+        if git("config", "--get", "core.hooksPath") != ".githooks" or not (repo / ".githooks/pre-push").is_file():
+            raise SyncError("Install the repository's Git hooks before automatic synchronization.")
+        checker = str(repo / "scripts/check-secrets.py")
+        run(sys.executable, checker)
+        run(sys.executable, checker, "--history")
+        before = git("rev-parse", "HEAD")
+        git("fetch", "--no-tags", "--", remote, reference)
+        incoming = git("rev-parse", "FETCH_HEAD")
+        run(sys.executable, checker, "--history", "--revision", incoming)
+        counts = git("rev-list", "--left-right", "--count", f"HEAD...{incoming}").split()
+        ahead, behind = map(int, counts)
+        if ahead and behind:
+            raise SyncError("Device histories diverged; review and resolve them manually. No merge or push occurred.")
+        # An editor may have changed a stowed config while fetch was running.
+        if git("status", "--porcelain", "--untracked-files=normal") or git("rev-parse", "HEAD") != before:
+            raise SyncError("Checkout changed during sync; stopped before merge or push.")
+        if behind:
+            git("merge", "--ff-only", incoming)
+            print("Fast-forwarded public configs. Run update.sh --configs-only to rebuild installed tools.")
+        elif ahead:
+            git("push", "--", remote, f"HEAD:{reference}")
+            print("Pushed reviewed commits through the secret-checking hook.")
+        else:
+            print("Committed dotfiles already match upstream.")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except SyncError as error:
+        message = str(error)
+        print(message, file=sys.stderr)
+        if os.environ.get("DOTFILES_SYNC_NOTIFY", "1") == "1":
+            try:
+                subprocess.run(["notify-send", "Dotfiles sync needs attention", message], timeout=5, capture_output=True)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        sys.exit(1)

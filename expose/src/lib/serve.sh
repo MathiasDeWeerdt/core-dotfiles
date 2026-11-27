@@ -2,9 +2,12 @@
 # ── Persistent request log ────────────────────────────────────────────────────
 _LOG_DIR="${HOME}/.expose"
 _LOGFILE="${_LOG_DIR}/requests.json"
+umask 077
 mkdir -p "$_LOG_DIR" || die "Cannot create log directory: $_LOG_DIR"
+chmod 700 "$_LOG_DIR" || die "Cannot protect log directory: $_LOG_DIR"
 [[ -f "$_LOGFILE" ]] || echo '[]' > "$_LOGFILE" \
   || die "Cannot write request log: $_LOGFILE"
+chmod 600 "$_LOGFILE" || die "Cannot protect request log: $_LOGFILE"
 # ── Collect file (JSONL) ──────────────────────────────────────────────────────
 if [[ $COLLECT -eq 1 ]]; then
   _COLLECT_FILE=$(_mktmp /tmp/expose-collect.XXXXXX)

@@ -11,6 +11,13 @@ fi
 if [[ -n "$PROXY" ]]; then
   [[ "$PROXY" =~ ^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]*)?:[0-9]+$ || "$PROXY" =~ ^[0-9]+$ ]] \
     || die "Invalid proxy address: $PROXY (use host:port)"
+  case "${PROXY%:*}" in
+    127.0.0.1|localhost|'[::1]') ;;
+    *) die "SOCKS must bind to loopback; use an authenticated SSH forward for remote access" ;;
+  esac
+  _proxy_port=${PROXY##*:}
+  (( ${#_proxy_port} <= 5 )) && (( 10#$_proxy_port >= 1 && 10#$_proxy_port <= 65535 )) \
+    || die "Invalid SOCKS port (must be 1–65535)"
 fi
 for _callback in "${CALLBACKS[@]}"; do
   [[ "$_callback" =~ ^[0-9]+(:[0-9]+)?$ ]] \

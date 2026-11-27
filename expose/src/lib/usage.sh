@@ -9,6 +9,11 @@ ${B}USAGE${R}
     expose [opts] ${CYN}.${R}                Serve the current directory
     expose [opts] ${CYN}--redirect <url>${R} 302 redirect all requests
     expose [opts] ${CYN}--payload <name>${R} Serve a built-in pentest payload
+    expose ${CYN}sessions${R}               List shells on a running instance
+    expose ${CYN}attach [id]${R}            Attach; Ctrl+] detaches without closing
+    expose ${CYN}invite linux|mac|win${R}   Create a short-lived enrollment command
+    expose ${CYN}login --url https://host${R} Authenticate a remote operator
+    expose ${CYN}proxychains <command>${R}  Use the running local SOCKS listener
 
 ${B}OPTIONS${R}
     -p, --port ${CYN}<port>${R}     Listen port  (default: ${PORT})
@@ -28,6 +33,7 @@ ${B}OPTIONS${R}
     --collect           Collect requests to JSONL log (dump on exit)
     --delay ${CYN}<ms>${R}        Artificial response delay in milliseconds
     -h, --help          Show this help
+    -V, --version       Show the installed build version
 
 ${B}BUILT-IN PAYLOADS${R}
     php-reverse-shell   PHP reverse shell (set LHOST, LPORT via -p)

@@ -159,11 +159,10 @@ proxy_port=$(free_port)
   >"$TEST_HOME/server.out" 2>"$TEST_HOME/server.err" &
 SERVER_PID=$!
 for _ in {1..50}; do
-  proxy_result=$(curl -fsS "http://127.0.0.1:$port/console/proxy" 2>/dev/null) && break
+  proxy_result=$("$EXPOSE" sessions --json --url "http://127.0.0.1:$port" 2>/dev/null) && break
   sleep 0.05
 done
-[[ "$proxy_result" == *'"enabled": true'* ]]
-[[ "$proxy_result" == *"socks5://127.0.0.1:$proxy_port"* ]]
+assert_eq '[]' "$proxy_result"
 ss -tln "sport = :$proxy_port" 2>/dev/null | grep -q ":$proxy_port"
 stop_server
 
@@ -192,6 +191,7 @@ chmod +x "$TEST_HOME/bin/ssh" "$TEST_HOME/bin/expose" "$TEST_HOME/bin/curl"
 ln -s "$ROOT/dist/expose-online" "$TEST_HOME/bin/expose-online"
 port=$(free_port)
 proxy_port=$(free_port)
+export EXPOSE_AUTH_PASSWORD="$(cat /proc/sys/kernel/random/uuid)"
 PATH="$TEST_HOME/bin:$PATH" TUNNEL_LPORT="$port" PROXY_BIND="127.0.0.1:$proxy_port" \
   "$TEST_HOME/bin/expose-online" online-test \
   >"$TEST_HOME/online.out" 2>"$TEST_HOME/online.err" &
@@ -204,7 +204,7 @@ login_page=$(curl -s -H 'Accept: text/html' "http://127.0.0.1:$port/")
 [[ "$login_page" == *'This session is password protected'* ]]
 assert_eq "401" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/content")"
 login_code=$(curl -s -c "$TEST_HOME/cookies" -o /dev/null -w '%{http_code}' \
-  -d 'password=<redacted>' "http://127.0.0.1:$port/login")
+  --data-urlencode "password=$EXPOSE_AUTH_PASSWORD" "http://127.0.0.1:$port/login")
 assert_eq "303" "$login_code"
 assert_eq "online-test" "$(curl -fsS -b "$TEST_HOME/cookies" "http://127.0.0.1:$port/content")"
 assert_eq "online-test" "$(curl -fsS -b "$TEST_HOME/cookies" \
@@ -241,6 +241,7 @@ SERVER_PID=""
 
 python3 - "$TEST_HOME/.expose/requests.json" <<'PY'
 import json
+import os
 import sys
 
 with open(sys.argv[1]) as log_file:
@@ -253,7 +254,7 @@ assert any(entry.get("ip") == "203.0.113.9" for entry in entries)
 assert not any(entry.get("ip") in ("1.1.1.1", "203.0.113.8") for entry in entries)
 assert not any(entry["path"].startswith("/log") for entry in entries)
 assert not any(entry["path"].startswith("/.expose-health") for entry in entries)
-assert "<redacted>" not in json.dumps(entries)
+assert os.environ["EXPOSE_AUTH_PASSWORD"] not in json.dumps(entries)
 PY
 
 echo "integration tests passed"

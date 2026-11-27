@@ -1,2 +1,2 @@
 export PATH="$HOME/development/flutter/bin:$PATH"
-. "$HOME/.cargo/env"
+[[ ! -r "$HOME/.cargo/env" ]] || . "$HOME/.cargo/env"

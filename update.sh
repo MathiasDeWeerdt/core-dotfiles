@@ -1,136 +1,85 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────
-# Core Dotfiles — Update everything
-# ─────────────────────────────────────────────────────────────────────
-# Upgrades all packages, runtimes, agents, and dotfiles in one shot.
-# Run this whenever you want to bring everything current.
-# ─────────────────────────────────────────────────────────────────────
-set -uo pipefail
-
-GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; NC='\033[0m'
-log()  { echo -e "${GREEN}[✓]${NC} $*"; }
-info() { echo -e "${BLUE}[→]${NC} $*"; }
-warn() { echo -e "${YELLOW}[!]${NC} $*"; }
-
-DOTFILES="$HOME/Documents/core-dotfiles"
+# Upgrade packages and redeploy the same configs/tools as install.sh.
+set -euo pipefail
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+DRY_RUN=false
+CONFIGS_ONLY=false
 ERRORS=()
-
-step()  { echo ""; echo -e "${BLUE}═══ $* ═══${NC}"; echo ""; }
-fail()  { ERRORS+=("$*"); warn "Failed: $*"; }
-
-# ── 1. System packages ──────────────────────────────────────────────
-step "System packages"
-
-info "Upgrading official packages..."
-sudo pacman -Syu --noconfirm || fail "pacman update"
-
-if command -v yay &>/dev/null; then
-    info "Upgrading AUR packages..."
-    yay -Syu --noconfirm --answerclean All --answerdiff None || fail "yay update"
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+        --configs-only) CONFIGS_ONLY=true ;;
+        --help|-h) printf 'Usage: ./update.sh [--dry-run] [--configs-only]\n'; exit 0 ;;
+        *) printf 'Unknown option: %s\n' "$arg" >&2; exit 1 ;;
+    esac
+done
+if $DRY_RUN; then
+    $CONFIGS_ONLY || printf 'Would update system/AUR packages, clean Git checkouts, runtimes, npm globals, pipx and shell plugins.\n'
+    exec bash "$ROOT/scripts/deploy.sh" --dry-run
+fi
+if $CONFIGS_ONLY; then
+    exec bash "$ROOT/scripts/deploy.sh"
 fi
 
-log "System packages current"
+run() {
+    local description=$1
+    shift
+    printf '\n%s\n' "$description"
+    if "$@"; then
+        printf 'OK: %s\n' "$description"
+    else
+        ERRORS+=("$description")
+        printf 'FAILED: %s\n' "$description" >&2
+    fi
+}
 
-# ── 2. Dotfiles ──────────────────────────────────────────────────────
-step "Dotfiles"
-
-if [[ -d "$DOTFILES" ]]; then
-    info "Pulling latest dotfiles..."
-    cd "$DOTFILES"
-    git pull --ff-only 2>/dev/null || warn "git pull failed — resolve manually"
-    stow -d "$DOTFILES" -t "$HOME" -R --adopt zsh p10k foot tmux git fonts local-bin flameshot 2>/dev/null || true
-    log "Dotfiles updated"
-else
-    warn "Dotfiles not found at $DOTFILES — run install.sh first"
+# Never auto-stash, merge, or replace local edits, including stowed dotfiles.
+update_checkout() {
+    local directory=$1
+    if [[ -n "$(git -C "$directory" status --porcelain)" ]]; then
+        printf 'Checkout has local changes; pull skipped: %s\n' "$directory" >&2
+        return 1
+    fi
+    git -C "$directory" pull --ff-only
+}
+run 'Update repository' update_checkout "$ROOT"
+run 'Update official packages' sudo pacman -Syu --noconfirm
+if command -v yay >/dev/null; then
+    run 'Update AUR packages' yay -Sua --noconfirm --answerclean All --answerdiff None
 fi
 
-# ── 3. Runtimes ─────────────────────────────────────────────────────
-step "Language runtimes"
-
-# Node
-if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
-    export NVM_DIR="$HOME/.nvm"
-    source "$NVM_DIR/nvm.sh"
-    info "Upgrading Node.js LTS..."
-    nvm install --lts --reinstall-packages-from=current 2>/dev/null || \
-        nvm install --lts 2>/dev/null || fail "nvm"
-    nvm alias default 'lts/*' 2>/dev/null || true
-    log "Node: $(node --version 2>/dev/null || echo '?')"
-fi
-
-# Rust
-if command -v rustup &>/dev/null; then
-    info "Upgrading Rust..."
-    rustup update 2>/dev/null || fail "rustup"
-    log "Rust: $(rustc --version 2>/dev/null || echo '?')"
-fi
-
-# Java — just show status
-if command -v archlinux-java &>/dev/null; then
-    archlinux-java status 2>/dev/null
-fi
-
-# ── 4. Package managers ──────────────────────────────────────────────
-step "Package managers"
-
-# npm globals
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
-
-if command -v npm &>/dev/null; then
-    info "Upgrading npm global packages..."
-    npm update -g 2>/dev/null || fail "npm update"
-    log "npm globals updated"
+if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+    # User-managed nvm is separate from the packaged version.
+    run 'Update user-managed nvm' update_checkout "$NVM_DIR"
+    source "$NVM_DIR/nvm.sh"
+elif [[ -s /usr/share/nvm/nvm.sh ]]; then
+    source /usr/share/nvm/nvm.sh
 fi
-
-# pipx
-if command -v pipx &>/dev/null; then
-    info "Upgrading pipx packages..."
-    pipx upgrade-all 2>/dev/null || warn "pipx upgrade (some may fail)"
+if command -v nvm >/dev/null; then
+    run 'Update Node.js LTS' nvm install --lts --reinstall-packages-from=current
+    run 'Set default Node.js LTS' nvm alias default 'lts/*'
 fi
+command -v rustup >/dev/null && run 'Update Rust' rustup update
+command -v npm >/dev/null && run 'Update npm globals' npm update -g
+command -v pipx >/dev/null && run 'Update pipx tools' pipx upgrade-all
 
-# ── 5. Shell & tools ────────────────────────────────────────────────
-step "Shell & tools"
-
-# Oh My Zsh
-if [[ -d "$HOME/.oh-my-zsh" ]]; then
-    info "Upgrading Oh My Zsh..."
-    zsh -c 'source "$ZSH/oh-my-zsh.sh" && omz update' 2>/dev/null || warn "omz update"
+ZSH_DIR=${ZSH:-$HOME/.oh-my-zsh}
+[[ ! -d "$ZSH_DIR/.git" ]] || run 'Update Oh My Zsh' update_checkout "$ZSH_DIR"
+CUSTOM_DIR=${ZSH_CUSTOM:-$ZSH_DIR/custom}
+for directory in "$CUSTOM_DIR/themes/powerlevel10k" \
+    "$CUSTOM_DIR/plugins/fzf-tab" "$CUSTOM_DIR/plugins/zsh-autosuggestions" \
+    "$CUSTOM_DIR/plugins/zsh-syntax-highlighting"; do
+    [[ ! -d "$directory/.git" ]] || run "Update $directory" update_checkout "$directory"
+done
+if [[ -x "$HOME/.tmux/plugins/tpm/bin/update_plugins" ]]; then
+    run 'Update tmux plugins' "$HOME/.tmux/plugins/tpm/bin/update_plugins" all
 fi
+run 'Deploy configs, global memory, and expose' bash "$ROOT/scripts/deploy.sh"
 
-# Tmux plugins
-if [[ -f "$HOME/.tmux/plugins/tpm/bin/update_plugins" ]]; then
-    info "Upgrading tmux plugins..."
-    "$HOME/.tmux/plugins/tpm/bin/update_plugins" all 2>/dev/null || true
+if (( ${#ERRORS[@]} )); then
+    printf '\nUpdate incomplete (%s failed or skipped steps):\n' "${#ERRORS[@]}" >&2
+    printf '  %s\n' "${ERRORS[@]}" >&2
+    exit 1
 fi
-
-# Powerlevel10k
-P10K_DIR="$HOME/.oh-my-zsh/custom/themes/powerlevel10k"
-if [[ -d "$P10K_DIR" ]]; then
-    info "Upgrading Powerlevel10k..."
-    (cd "$P10K_DIR" && git pull --ff-only 2>/dev/null) || warn "p10k update"
-fi
-
-# ── Summary ──────────────────────────────────────────────────────────
-echo ""
-echo -e "${BLUE}═══ Done ═══${NC}"
-echo ""
-
-if [[ ${#ERRORS[@]} -gt 0 ]]; then
-    echo -e "  ${YELLOW}${#ERRORS[@]} step(s) had issues:${NC}"
-    for e in "${ERRORS[@]}"; do
-        echo -e "    ✗ $e"
-    done
-else
-    echo -e "  ${GREEN}Everything is up to date.${NC}"
-fi
-
-echo ""
-echo "  System:  $(pacman -Q | wc -l) packages"
-echo "  Shell:   zsh $(zsh --version 2>/dev/null | awk '{print $2}')"
-echo "  Node:    $(node --version 2>/dev/null || echo '—')"
-echo "  Go:      $(go version 2>/dev/null | awk '{print $3}' || echo '—')"
-echo "  Rust:    $(rustc --version 2>/dev/null | awk '{print $2}' || echo '—')"
-echo "  Java:    $(java --version 2>/dev/null | head -1 || echo '—')"
-echo "  Docker:  $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo '—')"
-echo ""
+printf '\nAll requested updates and deployment completed successfully.\n'

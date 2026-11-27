@@ -1,0 +1,12 @@
+[Unit]
+Description=Safely synchronize committed public dotfiles
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/dotfiles-sync
+EnvironmentFile=-%h/.config/core-dotfiles/update.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+TimeoutStartSec=10min

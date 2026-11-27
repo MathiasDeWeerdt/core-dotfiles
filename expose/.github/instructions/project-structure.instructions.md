@@ -1,110 +1,47 @@
 ---
-description: "Use when adding new files, refactoring, creating build steps, or working on the project structure. Covers source layout, the build system, asset injection, Makefile targets, and install conventions."
+description: "Source layout, build outputs, asset injection, installation, and tests."
 applyTo: "**"
 ---
 
-# Project Structure & Build System
+# Source and build conventions
 
-## Source Layout
+Read `expose/AGENTS.md` for architecture and security boundaries. Develop in
+`src/`; never hand-edit generated executables.
 
-All development happens under `src/`. The `dist/` folder is build output only — never edit files there directly.
+- `globals.sh`: defaults and version.
+- `lib/operator.sh`: existing-instance CLI dispatch before `args.sh`; embeds
+  `assets/operator.py`. Other modules handle argument parsing, validation,
+  banners, cleanup, and serving.
+- `assets/server.py`: shared HTTP backend, authentication, and local descriptors.
+- `assets/consoles.py`: connector sessions, tickets, SOCKS, and callbacks.
+- `connector/`: native Go PTY/ConPTY connector and security tests.
+- `assets/web/`: self-contained UI sources and pinned terminal vendor assets.
+- `expose-online.sh`: private configuration and SSH reverse-tunnel wrapper.
+- `tests/`: tunnel, feature, integration, and operator CLI tests.
+- `playground/` and `playground.sh`: isolated Docker tests and interactive lab.
 
-```
-src/
-├── globals.sh              # Top-level variables (VERSION, PORT, MODE, …)
-├── expose-online.sh        # SSH tunnel wrapper, copied to dist/
-├── lib/
-│   ├── colors.sh           # Terminal color detection
-│   ├── helpers.sh          # log, die, _mktmp, cleanup, traps
-│   ├── usage.sh            # usage()
-│   ├── args.sh             # Argument parsing
-│   ├── validate.sh         # Input validation + pre-flight checks
-│   ├── banner.sh           # Startup banner
-│   └── serve.sh            # Runtime serve logic (contains @@INJECT@@ markers)
-└── assets/
-    ├── server.py           # Unified Python HTTP backend
-    ├── consoles.py         # Console relay + SOCKS5 network proxy
-    ├── winenum.ps1         # Read-only Windows enumeration script
-    ├── toolrunner.ps1      # Downloads staged Windows tools and uploads reports
-    ├── payloads.sh         # Built-in payload templates
-    └── web/
-        ├── upload.html     # HTML skeleton (inject markers: @@CSS@@ / @@JS@@)
-        ├── upload.css      # All styles — edited here, injected at build time
-        ├── upload.js       # All client JS — edited here, injected at build time
-        └── me.html         # Request/fingerprint page template
-```
+`build.sh` assembles modules and resolves `@@INJECT:assets/<path>@@` markers in
+both operator and serve modules. HTML markers inline CSS, JavaScript, and terminal
+assets. New modules must be added to the assembly order explicitly. Failed builds
+must preserve the last good output; unchanged builds must preserve file contents.
 
-## Build System
-
-The build process is: `build.sh` → `dist/<tool>` → `make install` → `/usr/local/bin/<tool>`.
-
-**Never manually concatenate** source files. Always use `build.sh` to assemble.
-
-```
-make build      # runs build.sh → dist/expose
-make install    # install dist/expose and dist/expose-online to /usr/local/bin
-make uninstall  # sudo rm -f /usr/local/bin/expose
-make clean      # rm -rf dist/
-make run        # build + ./dist/expose $(ARGS)
+```bash
+make build                     # dist/expose and dist/expose-online
+make install                   # both scripts; INSTALL_DIR defaults /usr/local/bin
+make install-console-clients    # six targets; requires Go 1.26+
+make console-clients test       # full expose suite
+./playground.sh test            # non-root, offline Docker suite
+make uninstall                 # both installed scripts
+make clean                     # generated dist/ only
 ```
 
-Install target is always `/usr/local/bin/<tool>` (never `/usr/bin` or `~/.local/bin` unless explicitly requested).
+`dist/` is ignored. The parent dotfiles repository intentionally tracks generated
+copies under `local-bin/.local/bin/`. Refresh those from successful builds via
+its deployment helper or `install -C -m755`. The parent installs and verifies
+`/usr/local/bin` too, preventing an older system copy from shadowing it.
+Optional installation directories are supported; keep make targets `.PHONY`.
 
-## Asset Injection Markers
-
-Assets are embedded verbatim into the built binary via marker substitution in `build.sh`.
-
-### In `src/lib/serve.sh` (inside heredoc bodies):
-```sh
-cat > "$_UPLOAD_HTML" << 'UPLOADHTML'
-@@INJECT:assets/web/upload.html@@
-UPLOADHTML
-```
-
-### In `src/assets/web/upload.html` (within tags):
-```html
-<style>@@CSS@@</style>
-<script>@@JS@@</script>
-```
-
-`build.sh` uses Python `str.replace()` to substitute markers — safe for multi-line content, no escaping needed.
-
-## Adding a New Asset
-
-1. Create the file under `src/assets/`
-2. Add an `@@INJECT:assets/your-file@@` marker inside the relevant heredoc in `serve.sh`
-3. `build.sh` resolves it automatically — no other changes needed
-
-## Adding a New Source Module
-
-1. Create `src/lib/newmodule.sh`
-2. Add it to the assembly order in `build.sh` (the `for f in ...` loop), before `serve.sh`
-
-## dist/ and .gitignore
-
-`dist/` is always gitignored. The built binary is never committed. Commit `src/`, `build.sh`, and `Makefile`.
-
-## build.sh Conventions
-
-- Written in `bash` with `set -uo pipefail`
-- Uses Python 3 (inline `python3 - args << 'PY'` pattern) for marker substitution
-- Outputs a single executable at `dist/<tool>`, `chmod +x`
-- Print `Building dist/<tool> …` at start, `  OK  dist/<tool>  (N bytes)` on success
-
-## Makefile Conventions
-
-```makefile
-INSTALL_DIR ?= /usr/local/bin
-BINARY      := expose
-DIST        := dist/$(BINARY)
-
-.DEFAULT_GOAL := build
-
-.PHONY: build install uninstall clean run
-
-# Usage: make run ARGS='"hello world"'
-run: build
-	./$(DIST) $(ARGS)
-```
-
-Always declare all targets as `.PHONY`. Default goal is `build`.
+The Docker build context is deny-by-default. Never add host home directories,
+credentials, Docker socket mounts, published ports, or external networking to the
+playground. Runtime tickets, cookies, private descriptors, and request captures
+remain outside Git. Keep legacy `old_expose` unchanged as a reference.

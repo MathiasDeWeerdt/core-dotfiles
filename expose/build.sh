@@ -2,13 +2,15 @@
 # build.sh — assembles src/ into a single-file binary at dist/expose
 set -uo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 SRC=src
 OUT=dist/expose
 ONLINE_OUT=dist/expose-online
 
-mkdir -p dist
+mkdir -p dist || exit 1
+TEMP_OUT=$(mktemp dist/.expose.XXXXXX) || exit 1
+trap 'rm -f "$TEMP_OUT"' EXIT
 
 echo "Building $OUT …"
 
@@ -39,8 +41,8 @@ PY
 
 # Step 2 — resolve a serve.sh @@INJECT:path@@ line with the file's content
 # We build an injected version of serve.sh into a tempfile before concatenating
-resolve_serve() {
-  python3 - "$SRC/lib/serve.sh" "$SRC" << 'PY'
+resolve_module() {
+  python3 - "$1" "$SRC" << 'PY'
 import sys, re
 
 serve_path = sys.argv[1]
@@ -108,22 +110,30 @@ PY
     "$SRC/lib/colors.sh" \
     "$SRC/lib/helpers.sh" \
     "$SRC/lib/usage.sh" \
+    "$SRC/lib/operator.sh" \
     "$SRC/lib/args.sh" \
     "$SRC/lib/validate.sh" \
     "$SRC/lib/banner.sh"
   do
     printf '\n'
-    cat "$f"
+    if [[ "$f" == "$SRC/lib/operator.sh" ]]; then
+      resolve_module "$f" || exit 1
+    else
+      cat "$f" || exit 1
+    fi
   done
 
   printf '\n'
-  resolve_serve
+  resolve_module "$SRC/lib/serve.sh" || exit 1
 
-} > "$OUT"
+} > "$TEMP_OUT"
 
-chmod +x "$OUT"
-cp "$SRC/expose-online.sh" "$ONLINE_OUT"
-chmod +x "$ONLINE_OUT"
+chmod 755 "$TEMP_OUT" || exit 1
+if ! cmp -s "$TEMP_OUT" "$OUT"; then
+  mv "$TEMP_OUT" "$OUT" || exit 1
+fi
+chmod 755 "$OUT" || exit 1
+install -C -m 755 "$SRC/expose-online.sh" "$ONLINE_OUT" || exit 1
 
 SIZE=$(wc -c < "$OUT")
 echo "  OK  $OUT  (${SIZE} bytes)"

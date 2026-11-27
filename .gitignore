@@ -17,6 +17,29 @@ env
 
 # Secrets (ensure no API keys leak)
 *.secret
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+id_ecdsa
+secrets.*
+credentials.json
+auth.json
+online.env
+.memory.local.md
+.venv/
+
+# Private runtime captures and credential-bearing security-tool output
+.expose/
+reports/
+loot/
+*.pcap
+*.pcapng
 
 # Python caches
 __pycache__/

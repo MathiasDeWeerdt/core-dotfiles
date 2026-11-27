@@ -7,7 +7,7 @@ Guidance for coding agents working on this repository. For user-facing docs see
 
 ## What this is
 
-`expose` (v2.0) is a single-file bash CLI that serves text, files, or
+`expose` (v2.1) is a single-file bash CLI that serves text, files, or
 directories over HTTP on a LAN: quick sharing, webhook catching, request
 inspection, and pentest payloads. All development happens in `src/`; the
 executable `dist/expose` is **build output — never edit it directly**.
@@ -17,7 +17,7 @@ executable `dist/expose` is **build output — never edit it directly**.
 ### Build
 
 `build.sh` concatenates sources in a fixed order into one self-contained bash
-script (`dist/expose`, ~700 KB), resolves asset-injection markers with inline
+script (`dist/expose`), resolves asset-injection markers with inline
 Python, and copies `src/expose-online.sh` to `dist/expose-online`:
 
 ```
@@ -26,6 +26,7 @@ src/globals.sh     → variables/defaults (VERSION, PORT, MODE, …)
 src/lib/colors.sh  → terminal color detection (no color when stderr isn't a tty)
 src/lib/helpers.sh → log, die, _mktmp, cleanup, INT/TERM/EXIT traps
 src/lib/usage.sh   → usage() heredoc
+src/lib/operator.sh → existing-instance CLI dispatch (embeds operator.py)
 src/lib/args.sh    → top-level while/case argument parsing (not a function!)
 src/lib/validate.sh→ input validation and port-in-use prompt
 src/lib/banner.sh  → startup banner + mode_label()
@@ -35,8 +36,8 @@ src/lib/serve.sh   → serve text/file/dir/redirect/payload modes
 Injection markers (resolved by `build.sh` via `str.replace`, verbatim,
 no escaping needed):
 
-- `@@INJECT:assets/<path>@@` inside heredocs in `serve.sh` — embeds
-  `server.py`, `consoles.py`, `winenum.ps1`, `payloads.sh`, `web/upload.html`,
+- `@@INJECT:assets/<path>@@` inside heredocs in `operator.sh` and `serve.sh` — embeds
+  `operator.py`, `server.py`, `consoles.py`, `winenum.ps1`, `payloads.sh`, `web/upload.html`,
   `web/me.html`, `web/logo.svg`, and `web/fp.js`
 - `@@CSS@@` / `@@JS@@` / `@@TERM_CSS@@` / `@@TERM_JS@@` / `@@FIT_JS@@` /
   `@@CONSOLE_JS@@` / `@@FPJS@@` inside `src/assets/web/upload.html` — inlines
@@ -69,7 +70,7 @@ same Python process; it only works when `EXPOSE_CONSOLES=1`.
 `/mac`, `/win`, `/console/client/*`, `/console/register`, `/console/agent/*`)
 and `/.expose-health` are exempt because they require tickets or bearer
 tokens; all other routes need the session cookie. `expose-online` sets the
-password by default. New routes are protected by default — only extend the
+password from private configuration. New routes are protected by default — only extend the
 exemption list for traffic that authenticates itself with a ticket or token.
 **When adding an option: add the global
 in `globals.sh`, parse it in `args.sh`, validate in `validate.sh`, show it in
@@ -79,7 +80,7 @@ handler.**
 ### Shared HTTP surface
 
 `server.py` implements the shared built-in routes: `/` + `/upload` (upload
-dashboard with sidebar navigation and live overview), `POST /upload`
+dashboard with top navigation), `POST /upload`
 (multipart → `~/Downloads/expose`),
 `/upload/files[/<name>]`, `/me`, `/log?since=n` + `/log/clear`, `/meta`,
 `/chat`, plus `/content` outside directory mode. The request log is JSON,
@@ -141,19 +142,42 @@ Do not turn a network error into a session close.
 - Temp files only via `_mktmp` (registers for cleanup on EXIT).
 - `make build` → `dist/expose` and `dist/expose-online`; install target
   `/usr/local/bin`;
-  `dist/` is gitignored and never committed.
+  `dist/` is gitignored. The parent repository tracks generated copies under
+  `local-bin/.local/bin/`; refresh them from build output, never edit them manually.
 - `old_expose` is the legacy v1.1 monolith kept for reference only — not part
   of the build; don't modify it.
 
 ## Testing a change
 
 ```bash
-make build
-./dist/expose -p 18090 "hi" &        # then curl it
-curl -s localhost:18090/content
-curl -s -F "files=@/etc/hostname" localhost:18090/upload
-kill %1
+make console-clients test
+(cd src/connector && go test ./... && go vet ./...)
+./playground.sh test
 ```
 
 Note the port-in-use check in `validate.sh` prompts on `/dev/tty` — always use a
 free test port and a non-interactive shell.
+
+## CLI operator and security boundaries
+
+`src/lib/operator.sh` dispatches operator subcommands before server argument
+parsing and embeds `src/assets/operator.py`. `sessions`, `attach`, `invite`,
+`login`, `logout`, and `proxychains` operate on an existing server. Detach is
+Ctrl+]; it must never send close/remove/exit to a connector. Keep the PTY and
+SOCKS relay alive, restore local termios and terminal modes, and preserve binary
+input and resize events. Input retries use bounded, expiring deduplication IDs.
+
+Every console operator route requires a browser session or the per-instance
+local capability. Keys live only in private `~/.expose/instances/` descriptors,
+never in Git; forwarded requests cannot use the local capability. Connector
+tokens only authorize that connector's agent routes, including callback state.
+Tickets enroll connectors, expire, and cannot authorize operator actions. Remote
+operators and connectors require verified HTTPS. SOCKS stays on loopback without
+additional local authentication. Directory sharing must not serve hidden/private
+paths or follow symlinks outside the shared root, including through HEAD.
+
+`tests/operator_cli.py` covers real PTY detach/reattach, resize, interrupt, UTF-8,
+lost acknowledgements, credential roles, HTTPS login, and secret redaction.
+`./playground.sh test` repeats those tests in an offline non-root Docker container.
+The playground must not mount host files, credentials, or the Docker socket, and
+must not publish ports. It uses only generated runtime credentials.

@@ -17,11 +17,11 @@ console-clients:
 
 install-console-clients: console-clients
 	@mkdir -p "$(CLIENT_INSTALL_DIR)"
-	@cp dist/console-clients/* "$(CLIENT_INSTALL_DIR)/"
+	@for client in dist/console-clients/*; do install -C -m 755 "$$client" "$(CLIENT_INSTALL_DIR)/"; done
 
 install: build
-	sudo install -m 755 $(DIST) $(INSTALL_DIR)/$(BINARY)
-	sudo install -m 755 $(ONLINE) $(INSTALL_DIR)/expose-online
+	sudo install -C -m 755 $(DIST) $(INSTALL_DIR)/$(BINARY)
+	sudo install -C -m 755 $(ONLINE) $(INSTALL_DIR)/expose-online
 	@echo "Installed expose and expose-online to $(INSTALL_DIR)"
 
 uninstall:
@@ -41,3 +41,4 @@ test: build
 	@bash tests/tunnel-status.sh
 	@bash tests/integration.sh
 	@$(PYTHON) tests/features.py
+	@$(PYTHON) tests/operator_cli.py

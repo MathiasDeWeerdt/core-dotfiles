@@ -1,3 +1,4 @@
+import atexit
 import datetime
 import email.parser
 import email.policy
@@ -17,9 +18,11 @@ import socketserver
 import stat
 import sys
 import threading
+import tempfile
 import time
 import urllib.parse
 from http import cookies
+from pathlib import Path
 
 port = int(os.environ["EXPOSE_PORT"])
 bind_addr = os.environ.get("EXPOSE_BIND", "0.0.0.0")
@@ -35,6 +38,7 @@ chat_file = os.environ.get("EXPOSE_CHAT_FILE", "")
 content_path = os.environ.get("EXPOSE_CONTENT", "")
 content_mime = os.environ.get("EXPOSE_MIME", "application/octet-stream")
 content_name = os.environ.get("EXPOSE_FILENAME", "")
+share_root = Path.cwd().resolve()
 response_code = int(os.environ.get("EXPOSE_RESP_CODE", "200"))
 redirect_url = os.environ.get("EXPOSE_REDIRECT", "")
 delay_seconds = int(os.environ.get("EXPOSE_DELAY_MS", "0")) / 1000
@@ -59,6 +63,7 @@ except OSError:
 
 # ── Authentication ───────────────────────────────────────────────────────────
 auth_password = os.environ.get('EXPOSE_AUTH_PASSWORD', '')
+operator_token = secrets.token_urlsafe(32)
 auth_sessions = {}
 auth_failures = {}
 auth_lock = threading.Lock()
@@ -134,6 +139,11 @@ def redact_path(path):
     pairs = [(key, '***' if key == 'ticket' else value) for key, value in pairs]
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
                                     urllib.parse.urlencode(pairs), parsed.fragment))
+
+def redact_header(name, value):
+    if name.lower() in ('cookie', 'authorization', 'proxy-authorization', 'x-expose-operator'):
+        return '[redacted]'
+    return value
 
 def event(kind, message, ip=''):
     sys.stderr.write(f"{datetime.datetime.now().strftime('%H:%M:%S')}  "
@@ -324,7 +334,29 @@ def _append_chat(msg, attachments=None):
 class Handler(http.server.SimpleHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def safe_shared_path(self, path):
+        candidate = Path(path)
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(share_root)
+        except (ValueError, OSError, RuntimeError):
+            return False
+        # Include absolute resolved components: sharing from within ~/.expose
+        # must not turn its instance keys into public files either.
+        return not any(part.startswith('.') for part in candidate.absolute().parts + resolved.parts)
+
+    def send_head(self):
+        if mode != 'dir':
+            self.send_error(405)
+            return None
+        if not self.safe_shared_path(self.translate_path(self.path)):
+            self.send_error(403)
+            return None
+        return super().send_head()
+
     def end_headers(self):
+        if self.close_connection:
+            self.send_header('Connection', 'close')
         self.send_header("Server", "expose")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Frame-Options", "DENY")
@@ -436,6 +468,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return f'{AUTH_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={AUTH_TTL}{secure}'
 
     def _authorized(self):
+        path = urllib.parse.urlsplit(self.path).path
+        if (path == '/console/status' and self.command == 'GET' and not auth_password
+                and not self._operator_authorized()):
+            # The public file-sharing UI probes this endpoint on startup. Do not
+            # redirect that UI into a login loop or disclose operator metadata.
+            self._send(200, json.dumps({'enabled': False, 'platforms': [],
+                                       'authentication_required': True}), 'application/json')
+            return False
+        console_operator = (path.startswith('/console/')
+                            and not path.startswith(('/console/agent/', '/console/client/', '/console/tool/'))
+                            and path not in ('/console/register', '/console/winenum.ps1', '/console/toolrunner.ps1'))
+        if console_operator:
+            if self._operator_authorized():
+                return True
+            self.close_connection = True
+            self._send(401, json.dumps({'error': 'Operator authentication required'}), 'application/json')
+            return False
         if not auth_password:
             return True
         path = urllib.parse.urlsplit(self.path).path
@@ -458,6 +507,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send(401, json.dumps({'error': 'Password required'}),
                        'application/json', LOGIN_HEADERS)
         return False
+
+    def _local_operator(self):
+        # The local capability never authorizes forwarded requests from a tunnel.
+        return (self.client_address[0] in ('127.0.0.1', '::1')
+                and not any(self.headers.get(name) for name in
+                            ('X-Forwarded-For', 'X-Real-IP', 'Forwarded'))
+                and hmac.compare_digest(self.headers.get('X-Expose-Operator', '').encode(),
+                                        operator_token.encode()))
+
+    def _operator_authorized(self):
+        origin = self.headers.get('Origin')
+        if origin:
+            parsed = urllib.parse.urlsplit(origin)
+            if parsed.netloc != self.headers.get('Host') or parsed.scheme not in ('http', 'https'):
+                return False
+        if self.headers.get('Sec-Fetch-Site') == 'cross-site':
+            return False
+        return self._local_operator() or (bool(auth_password) and self._session_valid())
 
     def _redirect(self, target):
         self._send(303, b'', 'text/plain', (('Location', target), ('Cache-Control', 'no-store')))
@@ -486,6 +553,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         prune_auth()
         with auth_lock:
             blocked = len(auth_failures.get(address, [])) >= AUTH_ATTEMPTS
+        if blocked:
+            self._send(429, login_page('Too many attempts. Try again later.', next_path),
+                       'text/html; charset=utf-8', LOGIN_HEADERS)
+            return
         if hmac.compare_digest(password.encode(), auth_password.encode()):
             with auth_lock:
                 auth_failures.pop(address, None)
@@ -580,17 +651,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(result)
         elif self.path == '/ls' or self.path.startswith('/ls/'):
+            if mode != 'dir':
+                self.send_error(404); return
             raw = urllib.parse.unquote(self.path[3:]) or '/'
             base = os.path.realpath(os.getcwd())
             rel = raw.lstrip('/')
             full = os.path.realpath(os.path.join(base, rel))
-            if os.path.commonpath((base, full)) != base:
+            if os.path.commonpath((base, full)) != base or not self.safe_shared_path(full):
                 self.send_error(403); return
             if not os.path.isdir(full):
                 self.send_error(404); return
             entries = []
             for name in sorted(os.listdir(full)):
                 p = os.path.join(full, name)
+                if not self.safe_shared_path(p):
+                    continue
                 try:
                     s = os.stat(p)
                     if stat.S_ISDIR(s.st_mode):
@@ -892,7 +967,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 origin = self.headers.get("Origin")
                 if origin: lines.append(f"{SEP} {BL}Origin{W}    {origin}")
                 cookie = self.headers.get("Cookie")
-                if cookie: lines.append(f"{SEP} {BL}Cookies{W}   {cookie}")
+                if cookie: lines.append(f"{SEP} {BL}Cookies{W}   [redacted]")
                 conn = self.headers.get("Connection")
                 if conn: lines.append(f"{SEP} {BL}Conn{W}      {conn}")
                 if self.headers.get("DNT") == "1":
@@ -905,7 +980,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     kl = k.lower()
                     if kl.startswith("sec-") or kl in ("cache-control", "pragma", "authorization",
                         "if-modified-since", "if-none-match", "upgrade-insecure-requests"):
-                        extras.append(f"  {k}: {self.headers[k]}")
+                        extras.append(f"  {k}: {redact_header(k, self.headers[k])}")
                 if extras:
                     lines.append(f"{SEP} {DM}──────{W}")
                     for extra in extras:
@@ -934,7 +1009,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                            "Content-Type", "Content-Length", "X-Forwarded-For",
                            "Authorization", "DNT"):
                     value = self.headers.get(k)
-                    if value: entry[k.lower().replace("-","_")] = value
+                    if value: entry[k.lower().replace("-","_")] = redact_header(k, value)
             request_body = getattr(self, "request_body", b"")
             if request_body:
                 entry["body"] = request_body.decode("utf-8", errors="replace")
@@ -946,6 +1021,49 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
     request_queue_size = 128
 
+
+def write_private(path, content):
+    fd, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(content)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def publish_local_instance():
+    if not console_enabled:
+        return
+    directory = Path.home() / '.expose' / 'instances'
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory.chmod(0o700)
+    descriptor = directory / f'{port}.json'
+    instance = {'pid': os.getpid(), 'port': port, 'operator_token': operator_token,
+                'origin': f'http://127.0.0.1:{port}',
+                'public_origin': os.environ.get('EXPOSE_PUBLIC_URL', '')}
+    config = directory / f'{port}.proxychains.conf'
+    if consoles.proxy:
+        proxy = consoles.proxy
+        host, proxy_port = proxy.parse_bind(proxy.bind)
+        instance['proxy'] = {'host': host, 'port': proxy_port,
+                             'loopback_only': True}
+        instance['proxy_config'] = str(config)
+        write_private(config, 'strict_chain\nproxy_dns\ntcp_read_time_out 15000\n'
+                      'tcp_connect_time_out 8000\n[ProxyList]\n'
+                      f'socks5 {host} {proxy_port}\n')
+    write_private(descriptor, json.dumps(instance))
+
+    def remove_instance():
+        try:
+            if json.loads(descriptor.read_text()).get('pid') == os.getpid():
+                descriptor.unlink()
+                config.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
+    atexit.register(remove_instance)
+
 with Server((bind_addr, port), Handler) as httpd:
     _httpd = httpd
 
@@ -954,5 +1072,5 @@ with Server((bind_addr, port), Handler) as httpd:
 
     signal.signal(signal.SIGINT, stop_server)
     signal.signal(signal.SIGTERM, stop_server)
-
+    publish_local_instance()
     httpd.serve_forever()

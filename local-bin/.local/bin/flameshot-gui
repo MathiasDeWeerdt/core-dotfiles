@@ -1,1 +1,7 @@
-flameshot gui -r | xclip -selection clipboard -t image/png
+#!/bin/sh
+# Region screenshot into the clipboard. wl-copy on Wayland, xclip on X11.
+if [ -n "$WAYLAND_DISPLAY" ] && command -v wl-copy >/dev/null 2>&1; then
+	flameshot gui -r | wl-copy -t image/png
+else
+	flameshot gui -r | xclip -selection clipboard -t image/png
+fi

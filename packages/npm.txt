@@ -1,8 +1,7 @@
-# npm global packages
-# Install with: npm install -g $(cat packages/npm.txt)
-
+# Managed package inventory; kept in sync with install.sh.
 codewhale
 @openai/codex
+@github/copilot
 bun
 @nestjs/cli
 @earendil-works/pi-coding-agent
