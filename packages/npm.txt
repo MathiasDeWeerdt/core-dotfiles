@@ -1,5 +1,5 @@
 # Managed package inventory; kept in sync with install.sh.
-codewhale
+@deepseek-ai/dsh
 @openai/codex
 @github/copilot
 bun

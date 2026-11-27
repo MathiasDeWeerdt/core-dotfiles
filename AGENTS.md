@@ -24,6 +24,9 @@ that tool's build and runtime conventions. Edit its sources, then rebuild.
 - `./update.sh`: update packages/runtimes/plugins, then use the same deployment.
 - Existing private `~/.memory.md` is preserved, never stowed. `memory/.memory.md`
   is a public starter template used only when no private memory exists.
+- `./check.sh` checks private credential presence and permissions without sourcing
+  configuration, printing values, changing files, or authenticating to services.
+  Use `--require expose,dehashed,ssh,dsh` to require those feature credentials.
 - Conflicting configs are backed up outside Git under
   `~/.local/state/core-dotfiles/backups/`.
 
@@ -41,7 +44,7 @@ Validation: `bash tests/install-packages.sh`, `python3 tests/deployment.py`,
 | OpenCode | `opencode` | AUR: `opencode-bin` |
 | GitHub Copilot CLI | `copilot` | npm: `@github/copilot` |
 | Pi | `pi` | npm: `@earendil-works/pi-coding-agent` |
-| Codewhale | `codewhale` | npm: `codewhale` (optional global wiring when installed) |
+| DeepSeek Harness | `dsh web` | official npm: `@deepseek-ai/dsh`, isolated user prefix |
 
 Use each tool's native login or private configuration. Never add API keys here.
 The retired `github/gh-copilot` extension is not the standalone Copilot CLI.
@@ -58,7 +61,7 @@ Deployment preserves custom instructions and adds one shared memory reference:
 | OpenCode | `~/.config/opencode/AGENTS.md` |
 | Pi | `~/.pi/agent/AGENTS.md` |
 | Copilot CLI | `~/.copilot/copilot-instructions.md` |
-| Codewhale | `~/.codewhale/instructions.md` when installed |
+| DeepSeek Harness | `~/.dsh/AGENTS.md` (`DSH_HOME` respected) |
 
 Standard harness directory overrides are respected. These private files and
 harness-generated project memories are never synchronized back into this repo.

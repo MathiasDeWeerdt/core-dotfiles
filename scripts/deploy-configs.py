@@ -53,12 +53,12 @@ def wire_memory(home):
         Path(os.environ.get("PI_CODING_AGENT_DIR", home / ".pi/agent")) / "AGENTS.md": MEMORY_REF,
         Path(os.environ.get("XDG_CONFIG_HOME", home / ".config")) / "opencode/AGENTS.md": MEMORY_REF,
         Path(os.environ.get("COPILOT_HOME", home / ".copilot")) / "copilot-instructions.md": MEMORY_REF,
+        Path(os.environ.get("DSH_HOME", home / ".dsh")) / "AGENTS.md": MEMORY_REF,
     }
-    # Codewhale is optional; retain support for existing installations.
-    if shutil.which("codewhale") or (home / ".codewhale").exists():
-        destinations[home / ".codewhale/instructions.md"] = MEMORY_REF
     for path, reference in destinations.items():
         outside_repo(path)
+        if path == Path(os.environ.get("DSH_HOME", home / ".dsh")) / "AGENTS.md":
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         current = path.read_text() if path.exists() else ""
         if reference not in current:
             current = current.rstrip() + "\n\n<!-- core-dotfiles: shared private memory -->\n" + reference + "\n"

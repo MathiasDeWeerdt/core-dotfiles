@@ -62,6 +62,7 @@ if command -v nvm >/dev/null; then
 fi
 command -v rustup >/dev/null && run 'Update Rust' rustup update
 command -v npm >/dev/null && run 'Update npm globals' npm update -g
+run 'Update official DeepSeek Harness' python3 "$ROOT/scripts/install-dsh.py"
 command -v pipx >/dev/null && run 'Update pipx tools' pipx upgrade-all
 
 ZSH_DIR=${ZSH:-$HOME/.oh-my-zsh}

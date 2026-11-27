@@ -517,7 +517,7 @@ if [ -s "$NVM_DIR/nvm.sh" ]; then
 fi
 
 NPM_GLOBALS=(
-    codewhale
+    "@deepseek-ai/dsh"
     "@openai/codex"
     "@github/copilot"
     bun
@@ -526,6 +526,10 @@ NPM_GLOBALS=(
 )
 
 for pkg in "${NPM_GLOBALS[@]}"; do
+    if [[ "$pkg" == "@deepseek-ai/dsh" ]]; then
+        python3 "$DOTFILES/scripts/install-dsh.py"
+        continue
+    fi
     if npm list -g "$pkg" --depth=0 2>/dev/null | grep -q "$pkg@"; then
         log "npm: $pkg already installed"
     else

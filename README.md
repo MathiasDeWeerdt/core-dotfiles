@@ -35,17 +35,31 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | Transfer | `flameshot` `xclip` `wl-clipboard` |
 | Browsers | `chromium` `firefox` `google-chrome` |
 
-### 6 CLI coding agents
+### 6 coding agents
 [See AGENTS.md](AGENTS.md) for installation and private configuration conventions.
 
 | Agent | Install | Vendor |
 |-------|---------|--------|
-| `codewhale` | npm global | CodeWhale |
+| `dsh web` (`@deepseek-ai/dsh`) | isolated user npm prefix | DeepSeek |
 | `codex` (`@openai/codex`) | npm global | OpenAI |
 | `claude-code` | AUR | Anthropic |
 | `opencode` | AUR | OpenCode |
 | `copilot` (`@github/copilot`) | npm global | GitHub |
 | `pi` (`@earendil-works/pi-coding-agent`) | npm global | Earendil |
+
+DeepSeek Harness uses the [official Linux npm package](https://github.com/deepseek-ai/deepseek-harness).
+Run `dsh web` for its local browser UI (default `127.0.0.1:3080`). Installation
+does not start a server. This is a developer preview and can have breaking changes.
+The full installer/updater resolves npm `latest` and installs into
+`~/.local/share/core-dotfiles/dsh`, skipping an already installed matching version.
+Node.js >=24.9 is required. To update only DSH, run
+`python3 scripts/install-dsh.py`. Config-only deployment installs its launcher;
+the runtime still needs this command or the full installer.
+Configure providers through Models in the UI. DSH's private credential store is
+`${DSH_HOME:-~/.dsh}/.credentials.yaml`; keep it outside Git with mode `0600`.
+DSH shares managed skills under `~/.agents/skills/` and reads private global
+instructions from `~/.dsh/AGENTS.md`. Codewhale is no longer managed; existing
+private Codewhale data is preserved.
 
 ### Agent skills
 
@@ -204,6 +218,30 @@ be rotated; deleting them from the current checkout does not remove old commits.
 The privileged `internetshare` web UI binds to loopback and prints a temporary
 launch URL. Open that URL to authenticate; cross-site requests are rejected.
 
+### Checking private configuration
+
+Keep credentials outside this checkout, including ignored files: shell exports
+belong in `~/.config/core-dotfiles/secrets.zsh`, the expose password in
+`~/.config/expose/online.env`, and the DeHashed key in `~/.config/dehashed/api_key`.
+Use mode `0700` for private config directories and `0600` for their files.
+Native agent login stores remain private in their own directories.
+
+```bash
+./check.sh                          # Read-only local presence/permission check
+./check.sh --require expose,dehashed,ssh,dsh
+./check.sh --strict                 # Warnings also cause failure
+```
+
+Missing optional credentials are skipped; an unsafe existing file fails even
+when optional. `--require shell` requires a nonempty private secrets file, not
+every provider key. Exit codes are 0 for success, 1 for failures (or strict
+warnings), and 2 for invalid arguments. Values and private paths are never
+printed. The checker does not source config, change permissions, contact APIs,
+or validate logins. It recognizes simple literal shell assignments; computed
+values need manual review. SSH checks metadata and agent-socket presence, not
+loaded keys or remote authorization. DSH's managed store is checked for safe
+permissions and nonempty file size; its provider records are not parsed.
+
 ## Local verification
 
 ```bash
@@ -216,6 +254,8 @@ python3 tests/secret-checks.py
 python3 tests/sync.py             # Disposable local Git remotes; no network
 python3 tests/skills.py           # Skill ownership, updates, rollback, 100 repeats
 python3 tests/dehashed.py         # Offline key handling and evidence isolation
+python3 tests/check-config.py     # Read-only checks, permissions, no secret output
+python3 tests/dsh.py              # Isolated official package installation/updates
 python3 tests/internetshare.py    # requires the system python-flask package
 make -C expose console-clients test
 (cd expose/src/connector && go test ./... && go vet ./...)

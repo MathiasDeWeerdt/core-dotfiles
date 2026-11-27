@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Official Linux npm runtime, isolated from old private launcher toolchains.
+set -euo pipefail
+DSH_BINARY="$HOME/.local/share/core-dotfiles/dsh/bin/dsh"
+if [[ ! -x "$DSH_BINARY" ]]; then
+    printf 'DSH is not installed. Run install.sh or scripts/install-dsh.py from core-dotfiles.\n' >&2
+    exit 1
+fi
+exec "$DSH_BINARY" "$@"

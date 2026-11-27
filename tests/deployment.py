@@ -47,7 +47,7 @@ class Deployment(unittest.TestCase):
 
     def environment(self, home):
         env = dict(os.environ, HOME=str(home), USER="fixture-user", DESIRED_HOSTNAME="fixture-host", SKIP_CONSOLE_CLIENTS="true", SKIP_AGENT_SKILLS="true")
-        for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "COPILOT_HOME", "DOTFILES_DIR", "DOTFILES_SYNC_ENABLE"):
+        for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "COPILOT_HOME", "DSH_HOME", "DOTFILES_DIR", "DOTFILES_SYNC_ENABLE"):
             env.pop(key, None)
         return env
 
@@ -64,6 +64,8 @@ class Deployment(unittest.TestCase):
         (home / ".zshrc").write_text("Existing local configuration\n")
         (home / ".pi/agent").mkdir(parents=True)
         (home / ".pi/agent/AGENTS.md").write_text("Custom Pi instructions\n")
+        (home / ".dsh").mkdir(mode=0o700)
+        (home / ".dsh/AGENTS.md").write_text("Custom DSH instructions\n")
         # A legacy Stow directory link must never cause source files to move.
         (home / ".config").mkdir()
         (home / ".config/foot").symlink_to(self.repo / "foot/.config/foot", target_is_directory=True)
@@ -78,6 +80,8 @@ class Deployment(unittest.TestCase):
         self.assertEqual((home / ".memory.md").read_text(), "Private current workstation context\n")
         self.assertIn("Custom Pi instructions", (home / ".pi/agent/AGENTS.md").read_text())
         self.assertEqual((home / ".pi/agent/AGENTS.md").read_text().count("<!-- core-dotfiles:"), 1)
+        self.assertIn("Custom DSH instructions", (home / ".dsh/AGENTS.md").read_text())
+        self.assertEqual((home / ".dsh/AGENTS.md").read_text().count("<!-- core-dotfiles:"), 1)
         self.assertEqual((home / ".memory.md").stat().st_mode & 0o777, 0o600)
         backups = list((home / ".local/state/core-dotfiles/backups").rglob(".zshrc"))
         self.assertEqual(len(backups), 1)

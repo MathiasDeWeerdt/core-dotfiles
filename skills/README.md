@@ -34,8 +34,9 @@ The pinned CLI installs shared files under `~/.agents/skills/`. Codex, Pi,
 OpenCode, and Copilot use its shared global discovery flow; the CLI deliberately
 avoids redundant agent-specific copies. Claude Code gets its native global
 discovery link, respecting `CLAUDE_CONFIG_DIR`. Private manifest/state paths
-respect XDG overrides. Codewhale
-has no configured skill integration here; do not invent an unsupported loader.
+respect XDG overrides. DeepSeek Harness natively discovers the same shared
+`~/.agents/skills/` directory; it needs no separate Skills CLI agent installation.
+Keep `DSH_AGENTS_HOME` unset to use this shared default.
 Reload your agent after an update; newly installed skills are available next turn.
 
 ## Custom skills
