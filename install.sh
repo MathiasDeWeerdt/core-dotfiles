@@ -262,7 +262,7 @@ PACMAN_PKGS=(
     noto-fonts noto-fonts-cjk ttf-dejavu
 
     # Communication
-    discord telegram-desktop
+    discord telegram-desktop msmtp
 
     # Browsers
     chromium firefox

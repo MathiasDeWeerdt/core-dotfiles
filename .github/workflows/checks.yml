@@ -18,7 +18,7 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y stow ripgrep zsh proxychains4 openssl
+          sudo apt-get install -y stow ripgrep zsh proxychains4 openssl jq
           python -m venv .venv
           .venv/bin/pip install flask
       - name: Reject credentials in public files
@@ -37,6 +37,7 @@ jobs:
           .venv/bin/python tests/secret-checks.py
           .venv/bin/python tests/sync.py
           .venv/bin/python tests/skills.py
+          .venv/bin/python tests/mail-5sim.py
           .venv/bin/python tests/dehashed.py
           .venv/bin/python tests/check-config.py
           .venv/bin/python tests/dsh.py

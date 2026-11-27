@@ -46,6 +46,7 @@ noto-fonts-cjk
 ttf-dejavu
 discord
 telegram-desktop
+msmtp
 chromium
 firefox
 nmap

@@ -81,6 +81,10 @@ outside Git. Configure each device privately with
 `python3 ~/.agents/skills/dehashed/scripts/dehashed.py init` when needed;
 installation neither copies credentials nor performs DeHashed API calls.
 
+The [mail](skills/custom/mail/SKILL.md) and [5sim](skills/custom/5sim/SKILL.md)
+skills include their command-line helpers. Each device uses its own credentials.
+If a device already has OpenCode copies, see the [migration steps](skills/custom/README.md#migrate-an-existing-opencode-copy).
+
 ### Dev runtimes
 | Runtime | Manager | Versions |
 |---------|---------|----------|
@@ -253,6 +257,7 @@ python3 tests/gnome.py
 python3 tests/secret-checks.py
 python3 tests/sync.py             # Disposable local Git remotes; no network
 python3 tests/skills.py           # Skill ownership, updates, rollback, 100 repeats
+python3 tests/mail-5sim.py        # Offline mailbox and SMS order tests
 python3 tests/dehashed.py         # Offline key handling and evidence isolation
 python3 tests/check-config.py     # Read-only checks, permissions, no secret output
 python3 tests/dsh.py              # Isolated official package installation/updates

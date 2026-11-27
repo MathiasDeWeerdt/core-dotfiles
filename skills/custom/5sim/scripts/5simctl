@@ -1,0 +1,435 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+config_dir=${XDG_CONFIG_HOME:-$HOME/.config}
+TOKEN_FILE=${FIVESIM_TOKEN_FILE:-$config_dir/core-dotfiles/5sim/token}
+if [[ -z ${FIVESIM_TOKEN_FILE:-} && ! -e $TOKEN_FILE ]]; then
+  TOKEN_FILE=$config_dir/5sim/token
+fi
+STATE_DIR=${FIVESIM_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/5sim}
+ATTEMPTS=$STATE_DIR/attempts.jsonl
+
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+integer() { [[ $1 =~ ^[1-9][0-9]{0,8}$ ]] || die "expected a positive integer"; }
+decimal() { [[ $1 =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]] || die "expected a nonnegative decimal"; }
+
+get() {
+  local url="https://5sim.net/v1$1" token
+  local options=(--disable --fail --silent --show-error --max-time 40 --header 'Accept: application/json')
+  if [[ ${2:-} == auth ]]; then
+    [[ -f $TOKEN_FILE && -O $TOKEN_FILE && $(stat -Lc %a -- "$TOKEN_FILE") =~ ^[46]00$ ]] ||
+      die "set a private 5SIM token file with mode 0600"
+    token=$(<"$TOKEN_FILE")
+    [[ -n $token && ! $token =~ [[:space:]] ]] || die "invalid token file"
+    printf 'Authorization: Bearer %s\n' "$token" | curl "${options[@]}" --header @- "$url"
+  else
+    curl "${options[@]}" "$url"
+  fi
+}
+
+json() {
+  jq -ce 'select(type == "object")' <<<"$1" 2>/dev/null || die "${2:-request}: unexpected API response"
+}
+
+usage() {
+  cat <<'EOF'
+5simctl balance | countries | products [country] | search <term>
+5simctl prices <product> [--country C] [--min-rate N] [--all] [--limit N] [--json]
+5simctl cheapest <product> [--country C] [--min-rate N]
+5simctl cheapest-any [--country C] [--min-rate N] [--limit N]
+5simctl buy <product> [--country C] [--operator O] [--max-price N] [--min-rate N] [--dry-run] [--force]
+5simctl orders [--limit N] [--status S] | attempts [--product P]
+5simctl check <id> | wait <id> [--timeout N] [--interval N] [--code-only]
+5simctl finish <id> | cancel <id> | ban <id>
+EOF
+}
+
+slug() {
+  [[ $1 =~ ^[a-z0-9_]+$ ]] || die "invalid name '$1' (expected lowercase slug, e.g. netherlands or telegram)"
+}
+
+price_rows() {
+  local product=$1 country=${2:-} all=${3:-0} min_rate=${4:-0}
+  slug "$product"
+  [[ -z "$country" ]] || slug "$country"
+  local body
+  body=$(get "/guest/prices?product=$product")
+  [[ ${body:0:1} == '{' ]] || die "unexpected price response"
+  if [[ $(printf '%s' "$body" | jq -r --arg p "$product" 'has($p)') != true ]]; then
+    die "unknown product '$product' (find the slug with: 5simctl search <term>)"
+  fi
+  printf '%s' "$body" | jq --arg p "$product" --arg c "$country" --argjson all "$all" --argjson mr "$min_rate" '
+    .[$p]
+    | [ to_entries[] | .key as $country | .value | to_entries[]
+        | {country: $country, operator: .key,
+           cost: .value.cost, count: (.value.count // 0), rate: (.value.rate // 0)} ]
+    | map(select(.cost | type == "number" and . >= 0))
+    | map(select(($c == "") or (.country == $c)))
+    | map(select((.count > 0 or $all == 1) and (.rate >= $mr)))
+    | sort_by([(.count == 0), .cost, -.rate])
+  '
+}
+
+cmd_balance() {
+  local body
+  body=$(json "$(get /user/profile auth)" profile)
+  printf '%s' "$body" | jq -r '"balance=\(.balance) rating=\(.rating // "-")"'
+}
+
+cmd_countries() {
+  local body
+  body=$(json "$(get /guest/countries)" countries)
+  if [[ ${1:-} == --json ]]; then
+    printf '%s' "$body" | jq .
+    return
+  fi
+  printf 'COUNTRY\tNAME\n'
+  printf '%s' "$body" | jq -r 'to_entries | sort_by(.value.text_en)[] | [.key, .value.text_en] | @tsv'
+}
+
+cmd_products() {
+  local country=${1:-any}
+  slug "$country"
+  local body
+  body=$(json "$(get "/guest/products/$country/any")" products)
+  printf 'PRODUCT\tCATEGORY\tPRICE\tQTY\n'
+  printf '%s' "$body" | jq -r 'to_entries | sort_by(.value.Price)[] | [.key, .value.Category, (.value.Price|tostring), (.value.Qty|tostring)] | @tsv'
+}
+
+cmd_search() {
+  local term=${1:-}
+  [[ -n "$term" ]] || die "usage: 5simctl search <term>"
+  local body
+  body=$(json "$(get /guest/products/any/any)" search)
+  printf '%s' "$body" | jq -r --arg t "${term,,}" '
+    to_entries
+    | map(select(.key | ascii_downcase | contains($t)))
+    | sort_by(.value.Price)
+    | .[]
+    | [.key, .value.Category, (.value.Price|tostring), (.value.Qty|tostring)] | @tsv
+  ' | { printf 'PRODUCT\tCATEGORY\tPRICE\tQTY\n'; cat; }
+}
+
+cmd_prices() {
+  local product=${1:-}
+  shift || true
+  [[ -n "$product" ]] || die "usage: 5simctl prices <product> [--country C] [--all] [--limit N] [--json]"
+  local country="" all=0 limit=0 min_rate=0 as_json=0
+  while (($#)); do
+    case $1 in
+      --country) country=${2:-}; shift 2 ;;
+      --all) all=1; shift ;;
+      --limit) limit=${2:?missing value}; integer "$limit"; shift 2 ;;
+      --min-rate) min_rate=${2:?missing value}; decimal "$min_rate"; shift 2 ;;
+      --json) as_json=1; shift ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  local rows
+  rows=$(price_rows "$product" "$country" "$all" "$min_rate")
+  if ((limit > 0)); then
+    rows=$(printf '%s' "$rows" | jq --argjson n "$limit" '.[:$n]')
+  fi
+  if ((as_json)); then
+    printf '%s' "$rows" | jq .
+    return
+  fi
+  if [[ $(printf '%s' "$rows" | jq 'length') -eq 0 ]]; then
+    die "no matches for '$product'${country:+ in $country} (try --all, or fewer filters)"
+  fi
+  printf 'COUNTRY\tOPERATOR\tCOST\tQTY\tRATE\n'
+  printf '%s' "$rows" | jq -r '.[] | [.country, .operator, (.cost|tostring), (.count|tostring), (.rate|tostring)] | @tsv'
+}
+
+cmd_cheapest() {
+  local product=${1:-}
+  shift || true
+  [[ -n "$product" ]] || die "usage: 5simctl cheapest <product> [--country C] [--min-rate N]"
+  local country="" min_rate=0
+  while (($#)); do
+    case $1 in
+      --country) country=${2:-}; shift 2 ;;
+      --min-rate) min_rate=${2:?missing value}; decimal "$min_rate"; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  local rows
+  rows=$(price_rows "$product" "$country" 0 "$min_rate")
+  [[ $(printf '%s' "$rows" | jq 'length') -gt 0 ]] || die "no in-stock number for '$product'${country:+ in $country}"
+  printf '%s' "$rows" | jq -r '.[0] | [.country, .operator, (.cost|tostring), (.count|tostring), (.rate|tostring)] | @tsv'
+}
+
+order_page() {
+  local body
+  body=$(get "/user/orders?category=activation&order=id&reverse=true&limit=$1&offset=$2" auth)
+  jq -ce 'select((.Data | type) == "array")' <<<"$body" || die "unexpected order history"
+}
+
+check_open_orders() {
+  local page size offset=0 open
+  while :; do
+    page=$(order_page 50 "$offset")
+    open=$(jq -r '[.Data[] | select(.status == "PENDING" or .status == "RECEIVED")][0].id // empty' <<<"$page")
+    [[ -z $open ]] || die "order $open is open; settle it before another purchase"
+    size=$(jq '.Data | length' <<<"$page")
+    ((size > 0)) || return 0
+    offset=$((offset + size))
+    if jq -e --argjson n "$offset" 'if (.Total | type) == "number" then .Total <= $n else (.Data | length) < 50 end' <<<"$page" >/dev/null; then
+      return 0
+    fi
+  done
+}
+
+check_attempts() {
+  local product=$1 now=$2 count last
+  [[ -f $ATTEMPTS ]] || return 0
+  local history
+  history=$(jq -sc --arg p "$product" --argjson now "$now" '
+    map(select(.product == $p and .ts > $now - 86400 and (.outcome == "attempted" or .outcome == "bought")))
+  ' "$ATTEMPTS")
+  count=$(jq 'length' <<<"$history")
+  last=$(jq 'map(.ts) | max // 0' <<<"$history")
+  ((count < 3)) || die "three purchase attempts for this product in 24 hours"
+  ((now - last >= 120)) || die "wait at least two minutes between attempts"
+}
+
+record_order() {
+  local outcome=$1 body=$2
+  mkdir -p -- "$STATE_DIR" &&
+    jq -c --argjson ts "$(date +%s)" --arg outcome "$outcome" '
+      {ts:$ts, outcome:$outcome, order:.id, product:.product, country:.country, operator:.operator, price:.price}
+    ' <<<"$body" >>"$ATTEMPTS"
+}
+
+cmd_buy() {
+  local product=${1:?missing product} country="" operator=any cap="" rate=0 dry=0 force=0
+  shift
+  while (($#)); do
+    case $1 in
+      --country) country=${2:?missing country}; shift 2 ;;
+      --operator) operator=${2:?missing operator}; shift 2 ;;
+      --max-price) cap=${2:?missing price}; decimal "$cap"; shift 2 ;;
+      --min-rate) rate=${2:?missing rate}; decimal "$rate"; shift 2 ;;
+      --dry-run) dry=1; shift ;;
+      --force) force=1; shift ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  slug "$product"; slug "$operator"
+  [[ $product != any ]] || die "choose a product slug"
+  if [[ -n $cap ]]; then
+    [[ $operator == any && $rate == 0 ]] || die "5SIM enforces a price cap only with any operator and no operator-rate filter"
+    [[ $cap =~ [1-9] ]] || die "price cap must be positive"
+  fi
+
+  if ((!dry)); then
+    mkdir -p -- "$STATE_DIR"
+    exec 9>"$STATE_DIR/buy.lock"
+    flock -x 9
+    check_open_orders
+    if ((!force)); then check_attempts "$product" "$(date +%s)"; fi
+  fi
+  local profile balance rows pick chosen_country chosen_operator cost path body
+  profile=$(get /user/profile auth)
+  balance=$(jq -er '.balance | numbers' <<<"$profile")
+  rows=$(price_rows "$product" "$country" 0 "$rate")
+  pick=$(jq -ce --arg op "$operator" --arg cap "$cap" --argjson bal "$balance" '
+    map(select(($op == "any" or .operator == $op) and .cost <= $bal and ($cap == "" or .cost <= ($cap | tonumber)))) | first // empty
+  ' <<<"$rows") || die "no matching offer within the available balance and price limit"
+  read -r chosen_country chosen_operator cost < <(jq -r '[.country,.operator,.cost] | @tsv' <<<"$pick")
+  slug "$chosen_country"; slug "$chosen_operator"
+  if [[ -n $cap ]]; then chosen_operator=any; fi
+  printf 'BUY product=%s country=%s operator=%s quoted_cost=%s\n' "$product" "$chosen_country" "$chosen_operator" "$cost"
+  if ((dry)); then return 0; fi
+  path="/user/buy/activation/$chosen_country/$chosen_operator/$product"
+  if [[ -n $cap ]]; then path+="?maxPrice=$cap"; fi
+  # Count the request before dispatch. A timeout can still mean the order was placed.
+  jq -nc --argjson ts "$(date +%s)" --arg product "$product" --arg country "$chosen_country" \
+    --arg operator "$chosen_operator" --argjson price "$cost" \
+    '{ts:$ts, product:$product, country:$country, operator:$operator, price:$price, outcome:"attempted"}' >>"$ATTEMPTS"
+  body=$(get "$path" auth) || die "purchase result unknown; check orders before retrying"
+  jq -er 'select((.id | type) == "number" and .phone != null) |
+    "ORDER id=\(.id)\nPHONE \(.phone)\nPRICE \(.price)\nSTATUS \(.status)\nEXPIRES \(.expires)"' <<<"$body" 2>/dev/null ||
+    die "purchase unconfirmed; check orders before retrying"
+  record_order issued "$body" || die "order issued; could not update local history"
+}
+
+settle() {
+  local action=$1 id=${2:?missing order id} body
+  [[ $id =~ ^[0-9]+$ ]] || die "expected a numeric order ID"
+  body=$(get "/user/$action/$id" auth)
+  jq -er --arg id "$id" 'select((.id | tostring) == $id and .status != null) |
+    "STATUS \(.status)\nPRICE \(.price)"' <<<"$body" 2>/dev/null || die "settlement unconfirmed; check the order"
+  record_order "$action" "$body" || die "order updated; could not update local history"
+}
+
+check_json() {
+  local id=$1 body
+  [[ $id =~ ^[0-9]+$ ]] || die "invalid order id: $id"
+  body=$(get "/user/check/$id" auth)
+  jq -ce --arg id "$id" 'select((.id | tostring) == $id and (.status | type) == "string")' <<<"$body" 2>/dev/null ||
+    die "check $id: unexpected order response"
+}
+
+print_order() {
+  printf '%s' "$1" | jq -r '
+    "ORDER \(.id)",
+    "PHONE \(.phone)",
+    "PRODUCT \(.product)",
+    "COUNTRY \(.country // "-")",
+    "OPERATOR \(.operator // "-")",
+    "PRICE \(.price)",
+    "STATUS \(.status)",
+    "EXPIRES \(.expires)",
+    "SMS_COUNT \((.sms // []) | length)",
+    ((.sms // [])[] | "--- \(.sender // "SMS") @ \(.date // .created_at // "-")\n\(.text // "")\nCODE \(.code // "-")")
+  '
+}
+
+cmd_cheapest_any() {
+  local country="" min_rate=0 limit=10
+  while (($#)); do
+    case $1 in
+      --country) country=${2:-}; shift 2 ;;
+      --min-rate) min_rate=${2:?missing value}; decimal "$min_rate"; shift 2 ;;
+      --limit) limit=${2:?missing value}; integer "$limit"; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [[ -z "$country" ]] || slug "$country"
+  local prices products
+  prices=$(get /guest/prices)
+  [[ ${prices:0:1} == '{' ]] || die "unexpected price response"
+  products=$(get /guest/products/any/any)
+  [[ ${products:0:1} == '{' ]] || die "unexpected product response"
+  local rows
+  rows=$(printf '%s' "$prices" | jq -r --arg c "$country" --argjson mr "$min_rate" --argjson lim "$limit" \
+    --slurpfile prod <(printf '%s' "$products") '
+    [ to_entries[] as $co
+      | $co.value | to_entries[] as $p
+      | select(($prod[0][$p.key].Category // "") == "activation")
+      | $p.value | to_entries[]
+      | select(.value.count > 0 and (.value.rate // 0) >= $mr)
+      | select($c == "" or $co.key == $c)
+      | {country: $co.key, product: $p.key, operator: .key,
+         cost: .value.cost, count: .value.count, rate: (.value.rate // 0)}
+    ] | sort_by(.cost) | .[:$lim]
+    | .[] | [.cost, .product, .country, .operator, .count, .rate] | @tsv
+  ')
+  [[ -n "$rows" ]] || die "no in-stock activation offers match the filters"
+  printf 'COST\tPRODUCT\tCOUNTRY\tOPERATOR\tQTY\tRATE\n'
+  printf '%s\n' "$rows"
+}
+
+cmd_check() {
+  local id=${1:-} body
+  [[ -n "$id" ]] || die "usage: 5simctl check <id>"
+  body=$(check_json "$id")
+  print_order "$body"
+}
+
+cmd_wait() {
+  local id=${1:-}
+  shift || true
+  [[ -n "$id" ]] || die "usage: 5simctl wait <id> [--timeout 600] [--interval 5] [--code-only]"
+  local timeout=600 interval=5 code_only=0
+  while (($#)); do
+    case $1 in
+      --timeout) timeout=${2:?missing value}; integer "$timeout"; shift 2 ;;
+      --interval) interval=${2:?missing value}; integer "$interval"; shift 2 ;;
+      --code-only) code_only=1; shift ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  local start now body count status elapsed next_note=0
+  start=$(date +%s)
+  while :; do
+    body=$(check_json "$id")
+    count=$(printf '%s' "$body" | jq -r '(.sms // []) | length')
+    status=$(printf '%s' "$body" | jq -r '.status')
+    if ((count > 0)); then
+      if ((code_only)); then
+        printf '%s' "$body" | jq -er '[.sms[] | .code | select(. != null and . != "")] | last // empty' || die "SMS arrived without a parsed code; use check"
+      else
+        print_order "$body"
+      fi
+      return 0
+    fi
+    case $status in
+      FINISHED|CANCELED|TIMEOUT|BANNED)
+        die "order $id ended with status $status and no SMS (cancel/refund already handled if applicable)" ;;
+    esac
+    now=$(date +%s)
+    elapsed=$((now - start))
+    if ((elapsed >= timeout)); then
+      die "timeout after ${timeout}s waiting for SMS on order $id (status $status). If no code arrived, run: 5simctl cancel $id"
+    fi
+    if ((elapsed >= next_note)); then
+      printf 'waiting: id=%s status=%s elapsed=%ss\n' "$id" "$status" "$elapsed" >&2
+      next_note=$((elapsed + 30))
+    fi
+    if ((interval > timeout - elapsed)); then
+      sleep "$((timeout - elapsed))"
+    else
+      sleep "$interval"
+    fi
+  done
+}
+
+cmd_orders() {
+  local limit=10 status=""
+  while (($#)); do
+    case $1 in
+      --limit) limit=${2:?missing value}; integer "$limit"; shift 2 ;;
+      --status) status=${2:-}; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  local body
+  body=$(order_page "$limit" 0)
+  printf 'ID\tSTATUS\tPRODUCT\tCOUNTRY\tOPERATOR\tPRICE\tPHONE\tCREATED\n'
+  printf '%s' "$body" | jq -r --arg st "$status" '
+    (.Data // [])[]
+    | select($st == "" or .status == $st)
+    | [(.id|tostring), .status, .product, (.country // "-"), (.operator // "-"),
+       (.price|tostring), (.phone // "-"), (.created_at // "-")] | @tsv
+  '
+}
+
+cmd_attempts() {
+  local product=""
+  while (($#)); do
+    case $1 in
+      --product) product=${2:-}; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [[ -f "$ATTEMPTS" ]] || { echo "no attempts recorded"; return 0; }
+  printf 'TIME\tPRODUCT\tOUTCOME\tORDER\tCOUNTRY\tOPERATOR\tPRICE\n'
+  jq -r --arg p "$product" '
+    select($p == "" or .product == $p)
+    | [(.ts | strftime("%Y-%m-%dT%H:%M:%SZ")), .product, .outcome,
+       (.order // "-"), .country, .operator, .price] | @tsv
+  ' "$ATTEMPTS"
+}
+
+cmd=${1:-help}
+shift || true
+case $cmd in
+  balance|profile) cmd_balance "$@" ;;
+  countries) cmd_countries "$@" ;;
+  products) cmd_products "$@" ;;
+  search) cmd_search "$@" ;;
+  prices) cmd_prices "$@" ;;
+  cheapest) cmd_cheapest "$@" ;;
+  cheapest-any) cmd_cheapest_any "$@" ;;
+  buy) cmd_buy "$@" ;;
+  check) cmd_check "$@" ;;
+  wait) cmd_wait "$@" ;;
+  finish|cancel|ban) settle "$cmd" "$@" ;;
+  orders) cmd_orders "$@" ;;
+  attempts|log) cmd_attempts "$@" ;;
+  help|-h|--help) usage ;;
+  *) die "unknown command: $cmd (see: 5simctl help)" ;;
+esac

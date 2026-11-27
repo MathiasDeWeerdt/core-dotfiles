@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Read the configured IMAP mailbox and send test mail to its configured address."""
+import argparse
+from email import policy
+from email.message import EmailMessage
+from email.parser import BytesParser
+from email.utils import parseaddr
+from html.parser import HTMLParser
+import imaplib
+import json
+import os
+from pathlib import Path
+import re
+import ssl
+import subprocess
+import sys
+import time
+
+
+class MailError(ValueError):
+    """A diagnostic that contains no account or message data."""
+
+
+def config_path():
+    base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    preferred = base / "core-dotfiles/mail/config.json"
+    legacy = base / "mail/config.json"
+    return legacy if legacy.is_file() and not preferred.exists() else preferred
+
+
+def password(cfg):
+    path = Path(cfg["password_file"]).expanduser()
+    stat = path.stat()
+    if not path.is_file() or stat.st_uid != os.getuid() or stat.st_mode & 0o077:
+        raise MailError("IMAP password file must be private to its owner")
+    return path.read_text().rstrip("\r\n")
+
+
+class MessageHTML(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.text = []
+        self.urls = []
+        self.hidden = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("style", "script"):
+            self.hidden = True
+        elif tag in ("br", "p", "div"):
+            self.text.append("\n")
+        elif tag == "a":
+            url = dict(attrs).get("href") or ""
+            if re.match(r"^https?://", url, re.I):
+                self.urls.append(url)
+
+    def handle_endtag(self, tag):
+        if tag in ("style", "script"):
+            self.hidden = False
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.text.append(data)
+
+
+def content(msg, subtype):
+    part = msg.get_body(preferencelist=(subtype,))
+    if part is None:
+        return ""
+    raw = part.get_payload(decode=True) or b""
+    try:
+        return raw.decode(part.get_content_charset() or "utf-8", errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def body_and_links(msg):
+    plain = content(msg, "plain")
+    html = MessageHTML()
+    html.feed(content(msg, "html"))
+    html.close()
+    visible = "".join(html.text)
+    urls = re.findall(r"https?://[^\s<>\"'\])]+", plain + "\n" + visible, re.I)
+    links = [url.rstrip(".,;)") for url in urls] + html.urls
+    return (plain or visible).strip(), list(dict.fromkeys(links))
+
+
+HEADERS = ("From", "To", "Subject", "Date", "Message-ID")
+
+
+def fetch(box, uid, *, headers=False):
+    section = "HEADER.FIELDS (" + " ".join(HEADERS) + ")" if headers else ""
+    status, data = box.uid("FETCH", uid, f"(BODY.PEEK[{section}])")
+    if status == "OK":
+        for item in data:
+            if isinstance(item, tuple):
+                return item[1]
+    raise MailError(f"cannot fetch message UID {uid}")
+
+
+def uids(box):
+    status, data = box.uid("SEARCH", None, "ALL")
+    if status != "OK":
+        raise MailError("mailbox search failed")
+    return [int(uid) for uid in data[0].split()]
+
+
+def summary(uid, msg):
+    row = {key.lower().replace("-", "_"): str(msg.get(key, "")) for key in HEADERS}
+    return {"uid": str(uid), **row}
+
+
+def display(row):
+    print(f"{row['uid']:>7}  {row['date'][:31]:31}  {row['from'][:38]:38}  {row['subject']}")
+
+
+def wait(box, args):
+    seen = set(uids(box))
+    deadline = time.monotonic() + args.timeout
+    while time.monotonic() < deadline:
+        time.sleep(min(args.interval, max(0, deadline - time.monotonic())))
+        new = sorted(set(uids(box)) - seen)
+        if new:
+            for uid in new:
+                msg = BytesParser(policy=policy.default).parsebytes(fetch(box, str(uid), headers=True))
+                print(f"NEW {uid}\t{msg.get('From', '')}\t{msg.get('Subject', '')}")
+            return
+    raise SystemExit("timeout waiting for new mail")
+
+
+def mailbox_command(box, args):
+    parse = BytesParser(policy=policy.default).parsebytes
+    if args.command == "wait":
+        return wait(box, args)
+    if args.command in ("raw", "read", "links"):
+        raw = fetch(box, str(args.uid))
+        if args.command == "raw":
+            sys.stdout.buffer.write(raw)
+            return
+        msg = parse(raw)
+        body, links = body_and_links(msg)
+        if args.command == "links":
+            for url in links:
+                print(url)
+        elif args.json:
+            print(json.dumps({**summary(args.uid, msg), "body": body}, ensure_ascii=False))
+        else:
+            for key in HEADERS:
+                print(f"{key}: {msg.get(key, '')}")
+            print("\n" + body)
+        return
+    recent = uids(box)
+    if args.command == "latest-link":
+        for uid in reversed(recent[-args.scan:]):
+            _, links = body_and_links(parse(fetch(box, str(uid))))
+            for url in links:
+                if args.match.casefold() in url.casefold():
+                    print(url)
+                    return
+        raise SystemExit("no matching link")
+    rows = []
+    for uid in reversed(recent):
+        row = summary(uid, parse(fetch(box, str(uid), headers=True)))
+        if args.command == "search":
+            term = args.term.casefold()
+            if term not in (row["from"] + " " + row["subject"]).casefold():
+                if not args.body or term not in body_and_links(parse(fetch(box, str(uid))))[0].casefold():
+                    continue
+        rows.append(row)
+        if len(rows) == args.limit:
+            break
+    if args.command == "list" and args.json:
+        print(json.dumps(rows, ensure_ascii=False))
+    else:
+        for row in rows:
+            display(row)
+
+
+def send(cfg, args):
+    recipient = cfg.get("test_recipient", parseaddr(cfg["from"])[1])
+    if args.to != recipient or parseaddr(recipient)[1] != recipient or "@" not in recipient:
+        raise MailError("test mail can only go to the configured test address")
+    msg = EmailMessage(policy=policy.SMTP)
+    msg["From"], msg["To"], msg["Subject"] = cfg["from"], recipient, args.subject
+    msg.set_content(args.body)
+    subprocess.run(["msmtp", "--", recipient], input=msg.as_bytes(), check=True, stderr=subprocess.DEVNULL)
+    print("sent")
+
+
+def positive(value):
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return n
+
+
+def main():
+    cli = argparse.ArgumentParser(description=__doc__)
+    commands = cli.add_subparsers(dest="command", required=True)
+    for name in ("list", "read", "raw", "links", "latest-link", "search", "wait", "send"):
+        cmd = commands.add_parser(name)
+        if name in ("list", "search"):
+            cmd.add_argument("-n", "--limit", type=positive, default=20)
+        if name in ("list", "read"):
+            cmd.add_argument("--json", action="store_true")
+        if name in ("raw", "read", "links"):
+            cmd.add_argument("uid", type=positive)
+        if name == "latest-link":
+            cmd.add_argument("--match", default="")
+            cmd.add_argument("--scan", type=positive, default=5)
+        if name == "search":
+            cmd.add_argument("term")
+            cmd.add_argument("--body", action="store_true")
+        if name == "wait":
+            cmd.add_argument("--timeout", type=positive, default=180)
+            cmd.add_argument("--interval", type=positive, default=5)
+        if name == "send":
+            cmd.add_argument("to")
+            cmd.add_argument("subject")
+            cmd.add_argument("body")
+    args = cli.parse_args()
+    path = config_path()
+    if not path.is_file():
+        raise MailError("missing mail/config.json; see the skill's private setup instructions")
+    cfg = json.loads(path.read_text())
+    if args.command == "send":
+        return send(cfg, args)
+    secret = password(cfg)
+    with imaplib.IMAP4_SSL(cfg["imap_host"], int(cfg.get("imap_port", 993)),
+                           ssl_context=ssl.create_default_context(), timeout=30) as box:
+        box.login(cfg["username"], secret)
+        # IMAP mailbox names with spaces must be quoted.
+        mailbox = cfg.get("default_mailbox", "INBOX")
+        if any(char in mailbox for char in '\r\n"\\'):
+            raise MailError("invalid mailbox name")
+        if box.select(f'"{mailbox}"', readonly=True)[0] != "OK":
+            raise MailError("cannot open configured mailbox")
+        mailbox_command(box, args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except MailError as error:
+        sys.exit(str(error))
+    except (OSError, ValueError, KeyError, imaplib.IMAP4.error, subprocess.SubprocessError) as error:
+        # Server and configuration errors can include account data or message content.
+        sys.exit(f"mailctl failed ({type(error).__name__}); check private settings, mailbox access, or the test recipient")

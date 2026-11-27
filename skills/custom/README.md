@@ -1,5 +1,11 @@
 # Custom skills
 
+| Skill | Purpose |
+| --- | --- |
+| [mail](mail/SKILL.md) | Read a private IMAP inbox and send test mail to your own address. |
+| [5sim](5sim/SKILL.md) | Compare SMS activation prices and manage an order. |
+| [dehashed](dehashed/SKILL.md) | Query DeHashed with a private API key and credit budget. |
+
 Create `skills/custom/<name>/SKILL.md` with Agent Skills YAML frontmatter:
 
 ```markdown
@@ -20,3 +26,27 @@ These files are **public**. Keep passwords, tokens, private keys, customer conte
 and machine-specific instructions outside this repo. Existing private/global
 skills are not automatically imported. For private custom skills, use the private
 manifest described in [the skill management guide](../README.md).
+
+### Migrate an existing OpenCode copy
+
+If OpenCode already has its own `mail` or `5sim` directory, review the managed
+version above before switching. The skill manager stops on a conflicting
+agent-specific copy. Move the old skill instructions to a private backup,
+then run the normal sync. The bundled helpers can read the existing private
+service configs.
+
+```sh
+(
+set -e
+old="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills"
+backups="${XDG_STATE_HOME:-$HOME/.local/state}/core-dotfiles/backups"
+mkdir -p -m 700 "$backups"
+backup=$(mktemp -d "$backups/opencode-skills.XXXXXXXX")
+for name in mail 5sim; do
+  if [ -d "$old/$name" ] && [ ! -L "$old/$name" ]; then
+    mv -- "$old/$name" "$backup/"
+  fi
+done
+dotfiles-skills sync
+)
+```
