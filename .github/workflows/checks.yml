@@ -7,6 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
@@ -20,7 +22,9 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install flask
       - name: Reject credentials in public files
-        run: .venv/bin/python scripts/check-secrets.py
+        run: |
+          .venv/bin/python scripts/check-secrets.py
+          .venv/bin/python scripts/check-secrets.py --history
       - name: Check installer and repeated deployment
         run: |
           bash tests/install-packages.sh

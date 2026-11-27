@@ -55,11 +55,20 @@ def main():
                 if header[1] != b"blob":
                     continue
                 total += 1
+                if PRIVATE_NAMES.search(name) and not name.endswith(".example"):
+                    print(f"{oid[:12]} {name}: private credential filename must not be tracked")
+                    count += 1
                 for rule, line in findings(data):
                     print(f"{oid[:12]} {name}:{line}: {rule} (value redacted)")
                     count += 1
         finally:
             proc.stdin.close(); proc.stdout.close(); proc.wait()
+        messages = git("log", "--format=%H%x00%B%x00", "--all", *args.revision).split(b"\0")
+        for index in range(0, len(messages) - 1, 2):
+            oid, message = messages[index].strip(), messages[index + 1]
+            for rule, line in findings(message):
+                print(f"{oid.decode()[:12]} commit-message:{line}: {rule} (value redacted)")
+                count += 1
     else:
         options = ("--cached",) if args.staged else ("--cached", "--others", "--exclude-standard")
         for raw in git("ls-files", "-z", *options).split(b"\0"):
