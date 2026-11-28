@@ -247,11 +247,7 @@ MAGIC_ENTER_OTHER_COMMAND='ls -lh .'
 # Local credentials are kept outside this repository.
 [[ ! -r "$HOME/.config/core-dotfiles/secrets.zsh" ]] || source "$HOME/.config/core-dotfiles/secrets.zsh"
 
-# OpenRouter via Copilot CLI
-export COPILOT_PROVIDER_BASE_URL=https://openrouter.ai/api/v1
 
-export COPILOT_PROVIDER_MODEL_ID=deepseek-v4-pro
-export COPILOT_PROVIDER_WIRE_MODEL=deepseek/deepseek-v4-pro
 
 
 # bun completions

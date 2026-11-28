@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGES = ("zsh", "p10k", "foot", "tmux", "git", "fonts", "local-bin", "flameshot", "systemd")
+PACKAGES = ("zsh", "p10k", "alacritty", "tmux", "git", "fonts", "local-bin", "flameshot", "systemd")
 MEMORY_REF = ("At session start, read ~/.memory.md and, when present, ~/.memory.local.md. "
               "Follow those user preferences subject to repository instructions and explicit current requests. "
               "Keep credentials and private machine/customer context outside public repositories.")
@@ -52,7 +52,6 @@ def wire_memory(home):
         Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")) / "CLAUDE.md": "@~/.memory.md\n\n" + MEMORY_REF,
         Path(os.environ.get("PI_CODING_AGENT_DIR", home / ".pi/agent")) / "AGENTS.md": MEMORY_REF,
         Path(os.environ.get("XDG_CONFIG_HOME", home / ".config")) / "opencode/AGENTS.md": MEMORY_REF,
-        Path(os.environ.get("COPILOT_HOME", home / ".copilot")) / "copilot-instructions.md": MEMORY_REF,
         Path(os.environ.get("DSH_HOME", home / ".dsh")) / "AGENTS.md": MEMORY_REF,
     }
     for path, reference in destinations.items():
@@ -72,6 +71,10 @@ def deploy(home):
     unfolds = set()
     conflicts = []
     normalize = []
+    # Retire the previous terminal's config privately; never import host files.
+    legacy_terminal = home / ".config/foot"
+    if legacy_terminal.exists() or legacy_terminal.is_symlink():
+        conflicts.append((legacy_terminal, Path(".config/foot")))
     # Validate the entire plan before moving any existing user configuration.
     for package in PACKAGES:
         for source in sorted((ROOT / package).rglob("*")):
@@ -164,6 +167,9 @@ def main():
     wire_memory(home)
     if not args.memory_only:
         enable_sync(home)
+        if (home.resolve() == Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+                and "GNOME" in os.environ.get("XDG_CURRENT_DESKTOP", "") and shutil.which("alacritty")):
+            subprocess.run(["python3", str(ROOT / "scripts/configure-terminal.py")], check=True)
 
 
 if __name__ == "__main__":

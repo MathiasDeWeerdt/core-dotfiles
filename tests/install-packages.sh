@@ -102,7 +102,6 @@ DOTFILES="$ROOT"
 log() { :; }
 info() { :; }
 codex() { :; }
-copilot() { :; }
 pi() { :; }
 bun() { :; }
 python3() { echo managed-dsh; }
@@ -112,6 +111,6 @@ npm() {
     echo install-nest
 }
 BASH
-sed -n '/^NPM_GLOBALS=(/,/^# Copilot uses/p' "$ROOT/install.sh" >> "$TEST_DIR/npm.sh"
+sed -n '/^NPM_GLOBALS=(/,/^# Python security tools via pipx/p' "$ROOT/install.sh" >> "$TEST_DIR/npm.sh"
 [[ $(bash "$TEST_DIR/npm.sh") == $'managed-dsh\ninstall-nest' ]]
 echo 'PASS: Native agents and Bun do not gain duplicate npm installations'

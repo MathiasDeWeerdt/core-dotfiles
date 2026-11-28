@@ -16,7 +16,13 @@ class SyncTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
         self.env = dict(os.environ, HOME=str(self.base), XDG_STATE_HOME=str(self.base / "state"),
-                        GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, DOTFILES_SYNC_NOTIFY="0")
+                        GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+        binaries = self.base / "bin"
+        binaries.mkdir()
+        notification = binaries / "notify-send"
+        notification.write_text('#!/bin/sh\ntouch "$HOME/notification-sent"\n')
+        notification.chmod(0o700)
+        self.env["PATH"] = str(binaries) + os.pathsep + self.env["PATH"]
         self.env.pop("DOTFILES_DIR", None)
         self.remote = self.base / "remote.git"
         self.a = self.base / "a"
@@ -52,6 +58,7 @@ class SyncTests(unittest.TestCase):
         result = subprocess.run([str(ROOT / "local-bin/.local/bin/dotfiles-sync")], cwd=self.base,
                                 env=dict(self.env, DOTFILES_DIR=str(repo)), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0 if success else 1, result.stdout + result.stderr)
+        self.assertFalse((self.base / "notification-sent").exists(), "sync must never send desktop notifications")
         return result
 
     def test_push_pull_and_repeat(self):

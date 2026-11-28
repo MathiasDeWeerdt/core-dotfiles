@@ -20,7 +20,4 @@ if [[ "$remote_head" == "$local_head" ]]; then
     echo 'Dotfiles match the tracked upstream.'
 else
     echo 'Upstream differs. Review the checkout and run update.sh when ready.'
-    if command -v notify-send >/dev/null; then
-        notify-send 'Dotfiles revisions differ' 'Review core-dotfiles and run update.sh when ready. Active shells are unchanged.'
-    fi
 fi

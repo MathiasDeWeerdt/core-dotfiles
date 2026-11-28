@@ -65,26 +65,10 @@ shortcut() {
     gsettings set "$schema" command "$command"
     update_list org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$key_path"
 }
-shortcut terminal 'Terminal' '<Control><Alt>t' 'foot -m'
 shortcut screenshot 'Screenshot' '<Control><Shift>a' "$HOME/.local/bin/flameshot-gui"
 
-# Default terminal → foot (Nautilus "Open in Console")
-info "Terminal → foot"
-gsettings set org.gnome.desktop.default-applications.terminal exec foot
-gsettings set org.gnome.desktop.default-applications.terminal exec-arg ''
-# nautilus-open-any-terminal extension: set foot as the context-menu terminal
-if command -v nautilus &>/dev/null; then
-    gsettings set com.github.stunkymonkey.nautilus-open-any-terminal terminal foot 2>/dev/null || true
-    gsettings set com.github.stunkymonkey.nautilus-open-any-terminal use-generic-terminal-name true 2>/dev/null || true
-    # Hide built-in "Open in Console" (GNOME Console) — foot is the only terminal now
-    mkdir -p ~/.local/share/applications
-    cat > ~/.local/share/applications/org.gnome.Console.desktop <<'NAUT_DESKTOP'
-[Desktop Entry]
-NoDisplay=true
-NAUT_DESKTOP
-    # Leave running Nautilus windows intact on reruns.
-fi
-log "Terminal: foot"
+# Keep terminal-only changes reusable by config deployment and updates.
+python3 "$(dirname "${BASH_SOURCE[0]}")/configure-terminal.py"
 
 # Wallpapers
 BG_DIR="$HOME/.local/share/backgrounds"

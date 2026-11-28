@@ -1,7 +1,6 @@
 # Managed package inventory; kept in sync with install.sh.
 @deepseek-ai/dsh
 @openai/codex
-@github/copilot
 bun
 @nestjs/cli
 @earendil-works/pi-coding-agent

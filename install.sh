@@ -163,8 +163,8 @@ echo -e "  Target: ${GREEN}${PRETTY_NAME:-$DISTRO}${NC}  |  User: ${GREEN}$TARGE
 echo ""
 echo -e "  This will:"
 echo -e "    • Install ${BLUE}55+${NC} system packages"
-echo -e "    • Install ${BLUE}6${NC} CLI coding agents"
-echo -e "    • Configure zsh, tmux, foot, git"
+echo -e "    • Install ${BLUE}5${NC} CLI coding agents"
+echo -e "    • Configure zsh, tmux, alacritty, git"
 echo -e "    • Set hostname to ${YELLOW}${DESIRED_HOSTNAME}${NC}"
 echo -e "    • Change default shell to ${YELLOW}zsh${NC}"
 echo -e "    • Generate SSH key if none exists"
@@ -229,7 +229,7 @@ else
 PACMAN_PKGS=(
     # Shell & terminal
     zsh git curl wget
-    foot tmux fzf fd ripgrep jq zoxide
+    alacritty tmux fzf fd ripgrep jq zoxide
 
     # CLI tools
     htop fastfetch ncdu wl-clipboard stow
@@ -507,12 +507,11 @@ fi
 NPM_GLOBALS=(
     "@deepseek-ai/dsh"
     "@openai/codex"
-    "@github/copilot"
     bun
     "@nestjs/cli"
     "@earendil-works/pi-coding-agent"
 )
-declare -A NPM_COMMANDS=([@openai/codex]=codex [@github/copilot]=copilot
+declare -A NPM_COMMANDS=([@openai/codex]=codex
     [bun]=bun [@nestjs/cli]=nest [@earendil-works/pi-coding-agent]=pi)
 
 for pkg in "${NPM_GLOBALS[@]}"; do
@@ -530,7 +529,6 @@ for pkg in "${NPM_GLOBALS[@]}"; do
     fi
 done
 
-# Copilot uses the standalone @github/copilot package above.
 
 # Python security tools via pipx (isolated environments)
 PIPX_TOOLS=(
@@ -609,7 +607,7 @@ fi
 
 echo ""
 echo "  Shell:     zsh $(zsh --version 2>/dev/null | awk '{print $2}')"
-echo "  Terminal:  foot $(foot --version 2>/dev/null)"
+echo "  Terminal:  alacritty $(alacritty --version 2>/dev/null)"
 echo "  Node:      $(node --version 2>/dev/null || echo 'not loaded — restart shell')"
 echo "  Go:        $(go version 2>/dev/null | awk '{print $3}' || echo 'not found')"
 echo "  Rust:      $(rustc --version 2>/dev/null | awk '{print $2}' || echo 'not loaded')"
@@ -626,6 +624,5 @@ echo ""
 echo -e "${YELLOW}Notes:${NC}"
 echo "  - Log out and back in for docker group membership."
 echo "  - Run 'p10k configure' to customize your prompt."
-echo "  - Set API keys for Copilot / OpenRouter in your environment."
 
 (( ${#_ERRORS[@]} == 0 ))

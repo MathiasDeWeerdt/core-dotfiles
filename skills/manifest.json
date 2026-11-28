@@ -1,7 +1,7 @@
 {
   "version": 1,
   "cli_version": "1.9.1",
-  "agents": ["codex", "claude-code", "opencode", "github-copilot", "pi"],
+  "agents": ["codex", "claude-code", "opencode", "pi"],
   "skills": [
     {
       "name": "impeccable",

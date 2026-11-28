@@ -50,12 +50,10 @@ Validation: `bash tests/install-packages.sh`, `python3 tests/deployment.py`,
 | Codex | `codex` | npm: `@openai/codex` |
 | Claude Code | `claude` | AUR: `claude-code` |
 | OpenCode | `opencode` | AUR: `opencode-bin` |
-| GitHub Copilot CLI | `copilot` | npm: `@github/copilot` |
 | Pi | `pi` | npm: `@earendil-works/pi-coding-agent` |
 | DeepSeek Harness | `dsh web` | official npm: `@deepseek-ai/dsh`, isolated user prefix |
 
 Use each tool's native login or private configuration. Never add API keys here.
-The retired `github/gh-copilot` extension is not the standalone Copilot CLI.
 Provider configuration differs between agents; consult their current docs.
 
 ## Global instruction files
@@ -68,7 +66,6 @@ Deployment preserves custom instructions and adds one shared memory reference:
 | Claude Code | `~/.claude/CLAUDE.md` (native memory import) |
 | OpenCode | `~/.config/opencode/AGENTS.md` |
 | Pi | `~/.pi/agent/AGENTS.md` |
-| Copilot CLI | `~/.copilot/copilot-instructions.md` |
 | DeepSeek Harness | `~/.dsh/AGENTS.md` (`DSH_HOME` respected) |
 
 Standard harness directory overrides are respected. These private files and

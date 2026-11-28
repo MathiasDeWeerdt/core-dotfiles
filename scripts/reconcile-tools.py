@@ -58,6 +58,10 @@ def main():
     backup = home / ".local/state/core-dotfiles/backups" / ("tool-launchers-" + str(time.time_ns()))
     if backup.resolve().is_relative_to(ROOT):
         raise RuntimeError("Private backups must stay outside the public repository")
+    if (subprocess.run(["pacman", "-Q", "alacritty"], capture_output=True).returncode == 0
+            and subprocess.run(["pacman", "-Q", "foot"], capture_output=True).returncode == 0):
+        subprocess.run(["sudo", "pacman", "-R", "--noconfirm", "foot"], check=True)
+        print("Removed previous terminal package; Alacritty retained")
     for package, command, paths in (
         ("opencode-bin", "opencode", (home / ".opencode/bin/opencode", home / ".local/bin/opencode")),
         ("claude-code", "claude", (home / ".local/bin/claude",)),

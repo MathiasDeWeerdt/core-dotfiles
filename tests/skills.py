@@ -28,7 +28,7 @@ class Skills(unittest.TestCase):
         self.home.mkdir()
         (self.repo / "skills/custom").mkdir(parents=True)
         self.manifest = {"version": 1, "cli_version": "1.9.1",
-                         "agents": ["codex", "claude-code", "opencode", "github-copilot", "pi"], "skills": []}
+                         "agents": ["codex", "claude-code", "opencode", "pi"], "skills": []}
         self.write_manifest()
         self.addCleanup(mock.patch.stopall)
         mock.patch.object(manager, "ROOT", self.repo).start()

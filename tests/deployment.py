@@ -47,7 +47,7 @@ class Deployment(unittest.TestCase):
 
     def environment(self, home):
         env = dict(os.environ, HOME=str(home), USER="fixture-user", DESIRED_HOSTNAME="fixture-host", SKIP_CONSOLE_CLIENTS="true", SKIP_AGENT_SKILLS="true")
-        for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "COPILOT_HOME", "DSH_HOME", "DOTFILES_DIR", "DOTFILES_SYNC_ENABLE"):
+        for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "DSH_HOME", "DOTFILES_DIR", "DOTFILES_SYNC_ENABLE"):
             env.pop(key, None)
         return env
 
@@ -68,15 +68,15 @@ class Deployment(unittest.TestCase):
         (home / ".dsh/AGENTS.md").write_text("Custom DSH instructions\n")
         # A legacy Stow directory link must never cause source files to move.
         (home / ".config").mkdir()
-        (home / ".config/foot").symlink_to(self.repo / "foot/.config/foot", target_is_directory=True)
-        source_before = snapshot(self.repo / "foot")
+        (home / ".config/alacritty").symlink_to(self.repo / "alacritty/.config/alacritty", target_is_directory=True)
+        source_before = snapshot(self.repo / "alacritty")
         script = str(self.repo / "scripts/deploy-configs.py")
         self.run_script("python3", script, env=env)
         after_first = snapshot(home)
         for _ in range(99):
             self.run_script("python3", script, env=env)
         self.assertEqual(snapshot(home), after_first)
-        self.assertEqual(snapshot(self.repo / "foot"), source_before)
+        self.assertEqual(snapshot(self.repo / "alacritty"), source_before)
         self.assertEqual((home / ".memory.md").read_text(), "Private current workstation context\n")
         self.assertIn("Custom Pi instructions", (home / ".pi/agent/AGENTS.md").read_text())
         self.assertEqual((home / ".pi/agent/AGENTS.md").read_text().count("<!-- core-dotfiles:"), 1)
@@ -98,6 +98,21 @@ class Deployment(unittest.TestCase):
         self.run_script("python3", str(self.repo / "scripts/deploy-configs.py"), env=env)
         enabled = home / ".config/systemd/user/timers.target.wants/core-dotfiles-sync.timer"
         self.assertFalse(enabled.is_symlink())
+
+    def test_retired_terminal_config_is_backed_up_once(self):
+        home = self.base / "terminal-migration-home"
+        legacy = home / ".config/foot"
+        legacy.mkdir(parents=True)
+        (legacy / "foot.ini").write_text("custom retired terminal settings\n")
+        script = str(self.repo / "scripts/deploy-configs.py")
+        env = self.environment(home)
+        self.run_script("python3", script, env=env)
+        self.assertFalse(legacy.exists())
+        self.assertTrue((home / ".config/alacritty/alacritty.toml").is_symlink())
+        self.run_script("python3", script, env=env)
+        backups = list((home / ".local/state/core-dotfiles/backups").rglob("foot.ini"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(), "custom retired terminal settings\n")
         self.assertTrue((home / ".config/systemd/user/core-dotfiles-sync.timer").is_symlink())
 
     def test_shared_deployment_refreshes_skills_by_default(self):
@@ -199,7 +214,7 @@ class Deployment(unittest.TestCase):
         (home / ".config").mkdir()
         foreign = self.base / "foreign-config"
         foreign.mkdir()
-        (home / ".config/foot").symlink_to(foreign)
+        (home / ".config/alacritty").symlink_to(foreign)
         before = snapshot(home)
         process = subprocess.run(["python3", str(self.repo / "scripts/deploy-configs.py")], env=self.environment(home), capture_output=True)
         self.assertNotEqual(process.returncode, 0)

@@ -18,7 +18,7 @@ VERSIONED = {"python", "python-pip", "jdk8-openjdk", "jdk11-openjdk",
              "jdk17-openjdk", "jdk21-openjdk", "jdk-openjdk"}
 EXTRA = ("node", "npm", "npx", "rustc", "cargo", "rustup", "bunx", "qemu-system-x86_64", "nxc", "nxcdb",
          "donpapi", "mitm6", "expose", "expose-online", "dotfiles-sync", "dotfiles-skills")
-NPM = {"@deepseek-ai/dsh": "dsh", "@openai/codex": "codex", "@github/copilot": "copilot",
+NPM = {"@deepseek-ai/dsh": "dsh", "@openai/codex": "codex",
        "@earendil-works/pi-coding-agent": "pi", "bun": "bun", "@nestjs/cli": "nest"}
 
 

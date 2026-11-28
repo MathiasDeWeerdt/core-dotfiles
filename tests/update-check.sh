@@ -28,10 +28,10 @@ bash "$ROOT/local-bin/.local/bin/dotfiles-check-updates" > "$WORK/output"
 [[ ! -e "$CALLS" ]]
 export REMOTE_HEAD=2222222222222222222222222222222222222222
 bash "$ROOT/local-bin/.local/bin/dotfiles-check-updates" > "$WORK/output"
-[[ $(wc -l < "$CALLS") == 1 ]]
+[[ ! -e "$CALLS" ]]
 export REMOTE_STATUS=1
 if bash "$ROOT/local-bin/.local/bin/dotfiles-check-updates" > "$WORK/output" 2>&1; then
     echo 'Network failure was hidden' >&2; exit 1
 fi
-[[ $(wc -l < "$CALLS") == 1 ]]
+[[ ! -e "$CALLS" ]]
 echo 'Read-only update-check tests passed'

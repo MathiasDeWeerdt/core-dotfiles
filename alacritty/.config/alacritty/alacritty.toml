@@ -1,0 +1,17 @@
+[env]
+# Preserve compatibility with remote hosts that lack Alacritty's terminfo.
+TERM = "xterm-256color"
+
+[window]
+startup_mode = "Maximized"
+
+[font]
+normal = { family = "MesloLGS NF", style = "Regular" }
+size = 14.0
+
+[keyboard]
+# Clipboard Indicator sends Control+Shift+Insert when pasting into terminals.
+bindings = [
+    { key = "Insert", mods = "Control|Shift", action = "Paste" },
+    { key = "Paste", action = "Paste" },
+]

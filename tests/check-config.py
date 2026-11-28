@@ -71,7 +71,7 @@ class Checks(unittest.TestCase):
         self.run_check("--strict", code=1)
 
     def test_unused_provider_keys_are_ignored(self):
-        ignored = ("COPILOT_PROVIDER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY")
+        ignored = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
         missing = self.run_check("--strict")
         for name in ignored:
             self.env[name] = self.secret

@@ -3,7 +3,7 @@ zsh
 git
 curl
 wget
-foot
+alacritty
 tmux
 fzf
 fd

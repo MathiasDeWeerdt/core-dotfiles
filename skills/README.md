@@ -31,7 +31,7 @@ The launcher manages its checksum-verified engine when the skill is actually use
 No Impeccable commands, detector hooks, or project initialization run at install.
 
 The pinned CLI installs shared files under `~/.agents/skills/`. Codex, Pi,
-OpenCode, and Copilot use its shared global discovery flow; the CLI deliberately
+and OpenCode use its shared global discovery flow; the CLI deliberately
 avoids redundant agent-specific copies. Claude Code gets its native global
 discovery link, respecting `CLAUDE_CONFIG_DIR`. Private manifest/state paths
 respect XDG overrides. DeepSeek Harness natively discovers the same shared

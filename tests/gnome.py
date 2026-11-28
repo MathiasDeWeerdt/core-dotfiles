@@ -23,8 +23,16 @@ class Desktop(unittest.TestCase):
             enabled = "org.gnome.shell enabled-extensions"
             disabled = "org.gnome.shell disabled-extensions"
             indicator = "clipboard-indicator@tudmotu.com"
+            legacy = "/legacy/terminal/"
+            shortcut_schema = "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:"
             initial = {
-                key: "['/unrelated/shortcut/']",
+                key: repr(["/unrelated/shortcut/", legacy, "/legacy/command/"]),
+                shortcut_schema + "/unrelated/shortcut/ command": "echo preserved",
+                shortcut_schema + legacy + " command": "foot -m",
+                shortcut_schema + legacy + " binding": "<Control><Alt>t",
+                shortcut_schema + "/legacy/command/ command": "foot -m -e printf 'hello world'",
+                shortcut_schema + "/legacy/command/ binding": "<Control><Alt>y",
+                "org.gnome.shell favorite-apps": "['unrelated.desktop', 'foot.desktop', 'Alacritty.desktop']",
                 enabled: "['unrelated-enabled', 'clipboard-history@alexsaveau.dev']",
                 disabled: repr([indicator, "unrelated-disabled"]),
             }
@@ -35,9 +43,12 @@ import json, os, sys
 from pathlib import Path
 path = Path(os.environ['SETTINGS_STORE'])
 data = json.loads(path.read_text())
+if sys.argv[1] == 'list-schemas':
+    print('com.github.stunkymonkey.nautilus-open-any-terminal')
+    sys.exit(0)
 key = ' '.join(sys.argv[2:4])
 if sys.argv[1] == 'get':
-    print(data[key])
+    print(repr(data[key]) if sys.argv[3] in ('command', 'binding') else data[key])
 else:
     data[key] = sys.argv[4]
     path.write_text(json.dumps(data, sort_keys=True))
@@ -72,6 +83,13 @@ else:
             self.assertIn("/unrelated/shortcut/", shortcuts)
             self.assertEqual(shortcuts.count("core-dotfiles-terminal/"), 1)
             self.assertEqual(shortcuts.count("core-dotfiles-screenshot/"), 1)
+            self.assertNotIn(legacy, shortcuts)
+            self.assertIn("/legacy/command/", shortcuts)
+            self.assertEqual(configured[shortcut_schema + "/legacy/command/ command"], "alacritty -e printf 'hello world'")
+            self.assertEqual(configured[shortcut_schema + "/unrelated/shortcut/ command"], "echo preserved")
+            self.assertEqual(configured["org.gnome.desktop.default-applications.terminal exec"], "alacritty")
+            self.assertEqual(configured["com.github.stunkymonkey.nautilus-open-any-terminal terminal"], "alacritty")
+            self.assertEqual(configured["org.gnome.shell favorite-apps"], "['unrelated.desktop', 'Alacritty.desktop']")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-AGENTS = {"codex", "claude-code", "opencode", "github-copilot", "pi"}
+AGENTS = {"codex", "claude-code", "opencode", "pi"}
 
 
 class SkillError(Exception):
@@ -157,7 +157,7 @@ def resolve(item):
 def destinations(home, name, agents):
     roots = {
         "codex": home / ".agents/skills", "pi": home / ".agents/skills",
-        "opencode": home / ".agents/skills", "github-copilot": home / ".agents/skills",
+        "opencode": home / ".agents/skills",
         "claude-code": Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")) / "skills",
     }
     return list(dict.fromkeys(roots[agent] / name for agent in agents))
@@ -197,7 +197,7 @@ def sync_one(item, target, manifest, state, state_path, storage, *, allow_adopt=
     paths = destinations(home, item["name"], manifest["agents"])
     # Preserve older agent-specific installs even when the pinned CLI now uses
     # shared global discovery. Distinct copies can shadow the managed package.
-    legacy_paths = [home / ".codex/skills" / item["name"], home / ".copilot/skills" / item["name"],
+    legacy_paths = [home / ".codex/skills" / item["name"],
                     Path(os.environ.get("XDG_CONFIG_HOME", home / ".config")) / "opencode/skills" / item["name"],
                     home / ".pi/agent/skills" / item["name"]]
     missing_paths = [path for path in paths if not path.exists() and not path.is_symlink()]

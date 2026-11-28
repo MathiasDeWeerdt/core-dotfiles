@@ -15,9 +15,15 @@ cd ~/Documents/core-dotfiles && ./install.sh
 ## What gets installed
 
 ### Shell & Terminal
-- **Foot** — native Wayland terminal (MesloLGS NF, 14px)
+- **Alacritty** — GPU-accelerated terminal (MesloLGS NF, 14px, maximized)
 - **Zsh** — Oh My Zsh + Powerlevel10k (lean prompt, instant)
 - **Tmux** — multiplexer with 8 plugins, `C-a` prefix, dev session, command palette
+
+Alacritty is selected through GNOME defaults, Ctrl+Alt+T, Nautilus, and
+`~/.config/xdg-terminals.list`. Legacy terminal shortcuts and dock entries are
+migrated while unrelated settings are preserved. Previous terminal configs are
+backed up privately; full install/update removes the old terminal package after
+Alacritty is installed. Clipboard Indicator's paste shortcut remains supported.
 
 ### 16 Zsh plugins
 `git` `fzf` `fzf-tab` `docker` `docker-compose` `npm` `nvm` `dotnet` `node`
@@ -36,7 +42,7 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | Transfer | `flameshot` `xclip` `wl-clipboard` |
 | Browsers | `chromium` `firefox` `google-chrome` |
 
-### 6 coding agents
+### 5 coding agents
 [See AGENTS.md](AGENTS.md) for installation and private configuration conventions.
 
 | Agent | Install | Vendor |
@@ -45,7 +51,6 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | `codex` (`@openai/codex`) | npm global | OpenAI |
 | `claude-code` | AUR | Anthropic |
 | `opencode` | AUR | OpenCode |
-| `copilot` (`@github/copilot`) | npm global | GitHub |
 | `pi` (`@earendil-works/pi-coding-agent`) | npm global | Earendil |
 
 An existing native installation of a coding agent or Bun is reused rather than
@@ -122,7 +127,7 @@ All thin-provisioned qcow2, user-mode NAT networking (stable across WiFi/Etherne
 ### GNOME shortcuts
 | Keys | Action |
 |------|--------|
-| `Ctrl+Alt+T` | Terminal (foot -m) |
+| `Ctrl+Alt+T` | Terminal (alacritty) |
 | `Ctrl+Shift+A` | Screenshot (flameshot) |
 | `Ctrl+F9` | Open Clipboard Indicator (extension default) |
 
@@ -134,7 +139,7 @@ GNOME may need a new login to load a newly installed extension.
 - `expose` — serve files/dirs over HTTP with request inspection; password-protected operator UI, browser consoles, SOCKS proxy, and inbound callbacks (full source in `expose/`)
 - `expose-online` — publish `expose` through `singlecore.dev` with an authenticated session and a resilient SSH tunnel
 - `flameshot-gui` — screenshot → clipboard in one shot
-- Nautilus right-click → **Open in Terminal** opens foot (via `nautilus-open-any-terminal`)
+- Nautilus right-click → **Open in Terminal** opens Alacritty (via `nautilus-open-any-terminal`)
 
 ### Global agent memory
 A single `~/.memory.md` feeds identity, preferences, and development philosophy
@@ -156,7 +161,7 @@ core-dotfiles/
 │
 ├── zsh/          → ~/.zshrc, .zshenv
 ├── p10k/         → ~/.p10k.zsh
-├── foot/         → ~/.config/foot/
+├── alacritty/    → ~/.config/alacritty/, xdg-terminals.list
 ├── tmux/         → ~/.tmux.conf, dev-session, command-palette
 ├── git/          → ~/.gitconfig           (template)
 ├── fonts/        → ~/.local/share/fonts/  (MesloLGS NF ×4)
@@ -326,7 +331,7 @@ the isolated `./expose/playground.sh test` / `up` / `attach` playground.
 ## Login and daily update checks (opt-in)
 
 The installer deploys `core-dotfiles-update-check.service` and `.timer` without
-enabling them. To enable notifications after reviewing the setup:
+enabling them. To enable journal-only checks after reviewing the setup:
 
 ```bash
 ./install.sh --configs-only
@@ -340,8 +345,9 @@ shells. An optional private `~/.config/core-dotfiles/update.env` can override
 `DOTFILES_DIR`. Apply reviewed updates with `./update.sh`; resolve local changes
 first. Each laptop/desktop keeps its own SSH keys and private expose credentials.
 
-Keep full Arch/AUR upgrades interactive: perform complete system upgrades, read
-Arch news, and handle required interventions. Do not run unattended `pacman` or
+Perform complete system upgrades, read Arch news, and handle required
+interventions. The installer/updater accept managed package replacements
+automatically. Do not run unattended `pacman` or
 AUR upgrades at boot. Running shell sessions remain on their existing server
 build until you choose to restart it; they do not migrate across restarts.
 
@@ -352,7 +358,7 @@ also contains this setup). After reviewing and committing a change, `dotfiles-sy
 the secret-checking hook. On another device it fetches and fast-forwards a clean
 checkout. It never creates commits, stashes edits, merges divergent branches,
 force-pushes, installs packages, runs sudo, or restarts expose. Conflicts and local
-edits stop synchronization and produce a desktop notification and journal entry.
+edits stop synchronization and write a journal entry without desktop notifications.
 Fetched history is checked for credentials before it can reach linked configs.
 
 ```bash
@@ -377,7 +383,7 @@ To pause syncing: `systemctl --user disable --now core-dotfiles-sync.timer`.
 To deploy without activating it, use `DOTFILES_SYNC_ENABLE=false ./install.sh`
 (or the same prefix with `--configs-only` / `./update.sh`). This preserves an
 already enabled timer; disable it explicitly when you want to pause syncing.
-The notification-only update-check timer above is an alternative; it can remain
+The journal-only update-check timer above is an alternative; it can remain
 disabled when sync is enabled. Both support private `update.env` / `DOTFILES_DIR`.
 
 Fast-forwarding immediately changes files linked by Stow. This trusts commits on
