@@ -85,6 +85,11 @@ The [mail](skills/custom/mail/SKILL.md) and [5sim](skills/custom/5sim/SKILL.md)
 skills include their command-line helpers. Each device uses its own credentials.
 If a device already has OpenCode copies, see the [migration steps](skills/custom/README.md#migrate-an-existing-opencode-copy).
 
+The [security-tooling skill](skills/custom/security-tooling/SKILL.md) checks local
+tool syntax and reviews supplied security evidence. Full bootstrap installs its
+analysis tools. Each device builds its own help cache on first use.
+See the [Pi migration notes](skills/custom/README.md#migrate-an-existing-pi-copy) for an existing local copy.
+
 ### Dev runtimes
 | Runtime | Manager | Versions |
 |---------|---------|----------|
@@ -258,6 +263,7 @@ python3 tests/secret-checks.py
 python3 tests/sync.py             # Disposable local Git remotes; no network
 python3 tests/skills.py           # Skill ownership, updates, rollback, 100 repeats
 python3 tests/mail-5sim.py        # Offline mailbox and SMS order tests
+node --test tests/security-tooling.mjs  # Offline help cache and evidence checks
 python3 tests/dehashed.py         # Offline key handling and evidence isolation
 python3 tests/check-config.py     # Read-only checks, permissions, no secret output
 python3 tests/dsh.py              # Isolated official package installation/updates

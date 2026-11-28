@@ -5,6 +5,7 @@
 | [mail](mail/SKILL.md) | Read a private IMAP inbox and send test mail to your own address. |
 | [5sim](5sim/SKILL.md) | Compare SMS activation prices and manage an order. |
 | [dehashed](dehashed/SKILL.md) | Query DeHashed with a private API key and credit budget. |
+| [security-tooling](security-tooling/SKILL.md) | Verify installed tool syntax and review supplied security evidence. |
 
 Create `skills/custom/<name>/SKILL.md` with Agent Skills YAML frontmatter:
 
@@ -50,3 +51,11 @@ done
 dotfiles-skills sync
 )
 ```
+
+### Migrate an existing Pi copy
+
+A standalone `~/.pi/agent/skills/security-tooling` directory will block managed
+installation. After reviewing the shared skill, move the standalone directory
+to a private backup outside Pi's discovery path and run `dotfiles-skills sync`.
+Pi can then discover the shared version under `~/.agents/skills/`. The full
+installer installs its tool packages. Config-only deployment installs the skill.

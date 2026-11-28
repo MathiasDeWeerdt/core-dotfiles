@@ -38,6 +38,7 @@ jobs:
           .venv/bin/python tests/sync.py
           .venv/bin/python tests/skills.py
           .venv/bin/python tests/mail-5sim.py
+          node --test tests/security-tooling.mjs
           .venv/bin/python tests/dehashed.py
           .venv/bin/python tests/check-config.py
           .venv/bin/python tests/dsh.py

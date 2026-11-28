@@ -272,6 +272,8 @@ PACMAN_PKGS=(
     openbsd-netcat gawk nano vim lm_sensors binwalk
     bettercap aircrack-ng socat maven
     metasploit wireshark-qt tcpdump
+    # Local evidence review, software inventory, and configuration assessment
+    wireshark-cli openssl libxml2 syft trivy openscap zaproxy
     flameshot xclip
     orchis-theme
     wireguard-tools gnome-shell-extensions gnome-shell-extension-appindicator
@@ -330,6 +332,7 @@ AUR_PKGS=(
     bettercap-ui
     quickemu
     burpsuite
+    semgrep-bin
     visual-studio-code-bin
     gnome-shell-extension-no-overview
     gnome-shell-extension-clipboard-indicator

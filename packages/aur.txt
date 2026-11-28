@@ -8,6 +8,7 @@ netexec
 bettercap-ui
 quickemu
 burpsuite
+semgrep-bin
 visual-studio-code-bin
 gnome-shell-extension-no-overview
 gnome-shell-extension-clipboard-indicator

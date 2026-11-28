@@ -67,6 +67,13 @@ maven
 metasploit
 wireshark-qt
 tcpdump
+wireshark-cli
+openssl
+libxml2
+syft
+trivy
+openscap
+zaproxy
 flameshot
 xclip
 orchis-theme
