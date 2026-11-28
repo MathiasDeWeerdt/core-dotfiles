@@ -27,10 +27,18 @@ export EXPOSE_PROXY="$PROXY_BIND"
 # Public HTTP surface requires a password; override with EXPOSE_AUTH_PASSWORD.
 # Read operator credentials only from a private file outside the public repo.
 ONLINE_CONFIG="${EXPOSE_ONLINE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/expose/online.env}"
-if [[ -e "$ONLINE_CONFIG" ]]; then
-  if [[ ! -f "$ONLINE_CONFIG" || ! -O "$ONLINE_CONFIG" ]] ||
-     (( (8#$(stat -c %a "$ONLINE_CONFIG") & 077) != 0 )); then
-    printf 'expose-online: config must be owned by you and mode 0600: %s\n' "$ONLINE_CONFIG" >&2
+if [[ -e "$ONLINE_CONFIG" || -L "$ONLINE_CONFIG" ]]; then
+  if [[ -L "$ONLINE_CONFIG" || ! -f "$ONLINE_CONFIG" ]]; then
+    printf 'expose-online: expected a regular config file at %q. Set EXPOSE_ONLINE_CONFIG to a private regular file.\n' "$ONLINE_CONFIG" >&2
+    exit 1
+  fi
+  config_stat=$(stat -c '%u:%a' -- "$ONLINE_CONFIG") || exit 1
+  if [[ ${config_stat%:*} != "$EUID" ]]; then
+    printf 'expose-online: config must be owned by you and mode 0600. If you trust this file, run:\n  sudo chown -- "$(id -u)" %q && chmod 600 -- %q\n' "$ONLINE_CONFIG" "$ONLINE_CONFIG" >&2
+    exit 1
+  fi
+  if (( (8#${config_stat#*:} & 077) != 0 )); then
+    printf 'expose-online: config must be private. Set mode 0600 with:\n  chmod 600 -- %q\n' "$ONLINE_CONFIG" >&2
     exit 1
   fi
   # An explicit environment password takes precedence over the file.

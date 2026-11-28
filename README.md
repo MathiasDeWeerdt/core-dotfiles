@@ -233,7 +233,8 @@ Keep credentials outside this checkout, including ignored files: shell exports
 belong in `~/.config/core-dotfiles/secrets.zsh`, the expose password in
 `~/.config/expose/online.env`, and the DeHashed key in `~/.config/dehashed/api_key`.
 Use mode `0700` for private config directories and `0600` for their files.
-Native agent login stores remain private in their own directories.
+Codex and Claude Code use their native logins. The shell credential check
+covers `DEEPSEEK_API_KEY` and `GITHUB_PERSONAL_ACCESS_TOKEN`.
 
 ```bash
 ./check.sh                          # Read-only local presence/permission check

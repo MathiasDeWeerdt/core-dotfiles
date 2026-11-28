@@ -10,8 +10,8 @@ import stat
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-PROVIDERS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY",
-             "GITHUB_PERSONAL_ACCESS_TOKEN", "COPILOT_PROVIDER_API_KEY")
+DSH_KEY_NAME = "DEEPSEEK_API_KEY"
+SHELL_CREDENTIALS = (DSH_KEY_NAME, "GITHUB_PERSONAL_ACCESS_TOKEN")
 GROUPS = {"expose", "dehashed", "shell", "ssh", "dsh"}
 
 
@@ -105,7 +105,7 @@ class Checker:
                 line = line.strip()
                 if line.startswith("export "):
                     line = line[7:].lstrip()
-                if not re.match(r"^[A-Z_][A-Z0-9_]*=", line):
+                if not re.match(r"^[A-Z_][A-Z0-9_]*=", line) or not any(name + "=" in line for name in names):
                     continue
                 words = shlex.split(line, comments=True, posix=True)
                 for word in words:
@@ -148,10 +148,10 @@ class Checker:
 
         secret_file = self.home / ".config/core-dotfiles/secrets.zsh"
         present, safe, data = self.inspect(secret_file, "Shell secrets file")
-        known, dynamic = self.assignments(data, PROVIDERS, "Shell secrets file") if present and safe else ({}, set())
+        known, dynamic = self.assignments(data, SHELL_CREDENTIALS, "Shell secrets file") if present and safe else ({}, set())
         if not present:
             self.report("FAIL" if "shell" in self.required else "SKIP", "Shell secrets file", "not present; native agent login may be used instead")
-        for name in PROVIDERS:
+        for name in SHELL_CREDENTIALS:
             # No single provider is mandatory: OAuth/native login is an alternative.
             self.credential("provider", name, name, known, dynamic)
         if "shell" in self.required and present and safe and not data.strip():
@@ -214,14 +214,12 @@ class Checker:
         store, safe, _ = self.inspect(dsh_home / ".credentials.yaml", "DSH managed credentials", contents=False)
         store_present = store and safe and (dsh_home / ".credentials.yaml").stat().st_size > 0
         present, env_safe, data = self.inspect(dsh_home / ".env", "DSH fallback environment")
-        known, dynamic = self.assignments(data, PROVIDERS, "DSH fallback environment") if present and env_safe else ({}, set())
-        model_providers = {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"}
-        env_present = any(os.environ.get(name, "").strip() or known.get(name, False) for name in model_providers)
+        known, dynamic = self.assignments(data, {DSH_KEY_NAME}, "DSH fallback environment") if present and env_safe else ({}, set())
         if store_present:
             self.report("INFO", "DSH authentication", "managed store present; provider entries and login validity are not inspected")
-        elif env_present:
+        elif os.environ.get(DSH_KEY_NAME, "").strip() or known.get(DSH_KEY_NAME):
             self.report("OK", "DSH authentication", "provider environment declaration present; not authenticated")
-        elif dynamic & model_providers:
+        elif DSH_KEY_NAME in dynamic:
             self.report("FAIL" if "dsh" in self.required else "WARN", "DSH authentication", "computed provider declarations cannot be confirmed without executing config")
         else:
             self.report("FAIL" if "dsh" in self.required else "SKIP", "DSH authentication", "no managed credentials or provider environment found; configure Models in dsh web")

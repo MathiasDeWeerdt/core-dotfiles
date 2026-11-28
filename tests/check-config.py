@@ -64,11 +64,25 @@ class Checks(unittest.TestCase):
     def test_no_execution_or_secret_logging(self):
         marker = self.home / "executed"
         self.write(".config/core-dotfiles/secrets.zsh",
-                   'export OPENAI_API_KEY="$(touch ' + str(marker) + ')"\n' +
-                   'export ANTHROPIC_API_KEY="' + self.secret + '\n')
+                   'export DEEPSEEK_API_KEY="$(touch ' + str(marker) + ')"\n' +
+                   'export GITHUB_PERSONAL_ACCESS_TOKEN="' + self.secret + '\n')
         self.run_check()
         self.assertFalse(marker.exists())
         self.run_check("--strict", code=1)
+
+    def test_unused_provider_keys_are_ignored(self):
+        ignored = ("COPILOT_PROVIDER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY")
+        missing = self.run_check("--strict")
+        for name in ignored:
+            self.env[name] = self.secret
+        declarations = "".join(f'export {name}="$UNUSED"\n' for name in ignored)
+        self.write(".config/core-dotfiles/secrets.zsh", declarations)
+        self.write(".dsh/.env", declarations)
+        present = self.run_check("--strict", "--require", "dsh", code=1)
+        self.assertIn("[FAIL] DSH authentication", present)
+        self.assertIn("0 warnings.", present)
+        for name in ignored:
+            self.assertNotIn(name, missing + present)
 
     def test_symlink_and_repository_override(self):
         path = self.write(".config/dehashed/api_key", self.secret)
