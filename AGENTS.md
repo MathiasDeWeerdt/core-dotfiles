@@ -29,6 +29,14 @@ that tool's build and runtime conventions. Edit its sources, then rebuild.
   Use `--require expose,dehashed,ssh,dsh` to require those feature credentials.
 - Conflicting configs are backed up outside Git under
   `~/.local/state/core-dotfiles/backups/`.
+- Full bootstrap accepts package conflicts/replacements automatically. Reuse the
+  shared `scripts/package-policy.sh`; `--noconfirm` alone rejects some conflicts.
+  Keep package signatures and dependency validation enabled. Never pipe `yes`
+  indiscriminately into package managers or run bootstrap to test its logic.
+- NetExec uses upstream pipx with uv-managed Python 3.12, not the old AUR build.
+  Full install/update ends with known-duplicate reconciliation and fresh Zsh CLI
+  verification. Test these with `tests/netexec-install.py` and
+  `tests/tool-verification.py` using disposable homes.
 
 Validation: `bash tests/install-packages.sh`, `python3 tests/deployment.py`,
 `python3 tests/internetshare.py` (system Flask package required), and

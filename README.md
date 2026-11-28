@@ -9,7 +9,8 @@ cd ~/Documents/core-dotfiles && ./install.sh
 
 > **First time?** Defaults are your current user, hostname, and checkout.
 > Optionally copy `env.example` to ignored `env` to override these. The installer
-> asks for confirmation; `--dry-run` previews without changes.
+> accepts managed package replacements automatically; `--dry-run` previews
+> without changes. Sudo authentication still uses the normal system prompt.
 
 ## What gets installed
 
@@ -46,6 +47,10 @@ cd ~/Documents/core-dotfiles && ./install.sh
 | `opencode` | AUR | OpenCode |
 | `copilot` (`@github/copilot`) | npm global | GitHub |
 | `pi` (`@earendil-works/pi-coding-agent`) | npm global | Earendil |
+
+An existing native installation of a coding agent or Bun is reused rather than
+adding a competing npm installation. Those native installations keep their own
+update mechanism. Missing tools are installed through the listed managed channel.
 
 DeepSeek Harness uses the [official Linux npm package](https://github.com/deepseek-ai/deepseek-harness).
 Run `dsh web` for its local browser UI (default `127.0.0.1:3080`). Installation
@@ -122,7 +127,7 @@ All thin-provisioned qcow2, user-mode NAT networking (stable across WiFi/Etherne
 | `Ctrl+F9` | Open Clipboard Indicator (extension default) |
 
 The full installer uses Clipboard Indicator for text and image history. On systems
-with Clipboard History installed, yay asks you to approve the replacement.
+with Clipboard History installed, its replacement is accepted automatically.
 GNOME may need a new login to load a newly installed extension.
 
 ### Custom tooling
@@ -207,6 +212,33 @@ SSH_KEY_TYPE="ed25519"
 
 ## Safe updates and credentials
 
+The full installer has no bootstrap yes/no confirmation (`--yes` remains accepted
+for compatibility). Pacman/yay accept conflicting-package replacements, including
+OpenCode beta → managed OpenCode and GNU netcat → OpenBSD netcat. Signature and
+dependency checks remain enabled. AUR packages run as separate transactions, so a
+failed build does not hold back other tools. Failures remain visible in the final
+summary and produce a nonzero exit status.
+
+NetExec uses the [upstream pipx flow](https://www.netexec.wiki/getting-started/installation/installation-on-unix)
+with uv-managed Python 3.12, independently of Arch's system Python. Its upstream
+main branch is resolved to a full commit; unchanged installs are skipped. This
+avoids the obsolete Certipy dependency reference in the old AUR release. The old
+AUR NetExec package is removed only after the isolated replacement succeeds.
+
+At the end, installer and updater reconcile known duplicate launchers, then run
+`python3 scripts/verify-tools.py` in a fresh interactive Zsh login. It checks
+managed package presence, executable commands, startup errors, and competing
+executables on PATH. Startup output is captured privately in memory and never
+forwarded. Non-CLI packages (fonts, themes, libraries) have no command to check.
+Versioned Python/Node/JDK/Rust toolchains and identical expose copies are expected.
+This checks discoverability, not GUI launch, network access, or service health.
+Known legacy OpenCode, Claude, and pipx launchers are moved to private backups only
+after their managed replacement exists. The unmanaged system Burp Pro wrapper is
+also backed up and retired in favor of the repository's stowed launcher; its
+optional JAR remains untouched. A standalone pipx Impacket installation
+is removed when the managed Arch package exists; isolated dependencies inside
+other tools are preserved. Native authentication and application data stay private.
+
 `expose` and `expose-online` are built from `expose/src/`. Both installer and
 updater verify and install matching scripts to `/usr/local/bin`, including when
 an older system copy shadows `~/.local/bin`. Console connectors are rebuilt when
@@ -268,6 +300,8 @@ node --test tests/security-tooling.mjs  # Offline help cache and evidence checks
 python3 tests/dehashed.py         # Offline key handling and evidence isolation
 python3 tests/check-config.py     # Read-only checks, permissions, no secret output
 python3 tests/dsh.py              # Isolated official package installation/updates
+python3 tests/netexec-install.py  # Python migration and unchanged-commit handling
+python3 tests/tool-verification.py # Fresh login checks and duplicate cleanup
 python3 tests/internetshare.py    # requires the system python-flask package
 make -C expose console-clients test
 (cd expose/src/connector && go test ./... && go vet ./...)

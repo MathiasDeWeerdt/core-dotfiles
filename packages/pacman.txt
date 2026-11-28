@@ -26,6 +26,7 @@ python
 python-pip
 python-pipx
 python-setuptools
+uv
 nvm
 python-flask
 dnsmasq

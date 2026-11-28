@@ -2,6 +2,7 @@
 # Upgrade packages and redeploy the same configs/tools as install.sh.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$ROOT/scripts/package-policy.sh"
 DRY_RUN=false
 CONFIGS_ONLY=false
 ERRORS=()
@@ -43,9 +44,16 @@ update_checkout() {
     git -C "$directory" pull --ff-only
 }
 run 'Update repository' update_checkout "$ROOT"
-run 'Update official packages' sudo pacman -Syu --noconfirm
+mapfile -t OFFICIAL_PKGS < <(rg -v '^(#|$)' "$ROOT/packages/pacman.txt")
+run 'Update official packages' sudo pacman -Syu --needed "${PACMAN_FLAGS[@]}" "${OFFICIAL_PKGS[@]}"
+run 'Install/update isolated NetExec' bash "$ROOT/scripts/install-netexec.sh"
 if command -v yay >/dev/null; then
-    run 'Update AUR packages' yay -Sua --noconfirm --answerclean All --answerdiff None
+    # --needed also installs newly managed packages and replaces old variants.
+    while IFS= read -r package; do
+        [[ -z "$package" || "$package" == \#* ]] && continue
+        run "Install/update AUR: $package" yay -S --needed "${YAY_FLAGS[@]}" "$package"
+    done < "$ROOT/packages/aur.txt"
+    run 'Update other installed AUR packages' yay -Sua "${YAY_FLAGS[@]}"
 fi
 
 export NVM_DIR="$HOME/.nvm"
@@ -77,6 +85,8 @@ if [[ -x "$HOME/.tmux/plugins/tpm/bin/update_plugins" ]]; then
     run 'Update tmux plugins' "$HOME/.tmux/plugins/tpm/bin/update_plugins" all
 fi
 run 'Deploy configs, global memory, and expose' bash "$ROOT/scripts/deploy.sh"
+run 'Reconcile duplicate managed tools' python3 "$ROOT/scripts/reconcile-tools.py"
+run 'Verify tools in a fresh login shell' python3 "$ROOT/scripts/verify-tools.py"
 
 if (( ${#ERRORS[@]} )); then
     printf '\nUpdate incomplete (%s failed or skipped steps):\n' "${#ERRORS[@]}" >&2

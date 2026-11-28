@@ -4,7 +4,6 @@ opencode-bin
 jdk8-openjdk
 jdk11-openjdk
 google-chrome
-netexec
 bettercap-ui
 quickemu
 burpsuite

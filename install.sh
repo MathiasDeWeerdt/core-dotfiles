@@ -16,7 +16,6 @@ set -euo pipefail
 DRY_RUN=false
 SKIP_PACKAGES=false
 CONFIGS_ONLY=false
-ASSUME_YES=false
 _ERRORS=()
 
 usage() {
@@ -31,12 +30,12 @@ FLAGS
     --dry-run          Print what would happen without making changes
     --skip-packages    Skip pacman and AUR package installs (for re-runs)
     --configs-only     Deploy configs, global memory, and expose; no system setup
-    --yes              Accept the full bootstrap confirmation
+    --yes              Compatibility flag; bootstrap already accepts replacements
 
 EXAMPLES
     ./install.sh                        Full bootstrap
     ./install.sh --dry-run              Preview everything first
-    ./install.sh --skip-packages        Re-deploy configs only
+    ./install.sh --configs-only         Re-deploy configs only
 
 ENV
     TARGET_USER=name   Override target user (default: mathias)
@@ -50,7 +49,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run) DRY_RUN=true; shift ;;
         --skip-packages) SKIP_PACKAGES=true; shift ;;
         --configs-only) CONFIGS_ONLY=true; shift ;;
-        --yes) ASSUME_YES=true; shift ;;
+        --yes) shift ;;
         *) echo "Unknown flag: $1 (use --help)"; exit 1 ;;
     esac
 done
@@ -91,6 +90,7 @@ DESIRED_HOSTNAME="${DESIRED_HOSTNAME:-$(hostname)}"
 DOTFILES_DIR="${DOTFILES_DIR:-$SCRIPT_DIR}"
 SSH_KEY_TYPE="${SSH_KEY_TYPE:-ed25519}"
 DOTFILES="$DOTFILES_DIR"
+source "$DOTFILES/scripts/package-policy.sh"
 
 # Exit before any writes, downloads, prompts, sudo, or service commands.
 if $DRY_RUN; then
@@ -169,12 +169,7 @@ echo -e "    • Set hostname to ${YELLOW}${DESIRED_HOSTNAME}${NC}"
 echo -e "    • Change default shell to ${YELLOW}zsh${NC}"
 echo -e "    • Generate SSH key if none exists"
 echo ""
-if $ASSUME_YES; then REPLY=y; else read -rp "  Continue? [y/N] " REPLY; fi
-echo ""
-if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
-    err "Aborted by user."
-    exit 0
-fi
+info "Continuing automatically; managed package conflicts and replacements are accepted."
 
 # ── Hostname ────────────────────────────────────────────────────────
 CURRENT_HOSTNAME=$(hostnamectl --static 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "")
@@ -241,7 +236,7 @@ PACMAN_PKGS=(
     keychain tree rsync aria2 lsof
 
     # Dev runtimes
-    go dotnet-sdk python python-pip python-pipx python-setuptools nvm python-flask dnsmasq
+    go dotnet-sdk python python-pip python-pipx python-setuptools uv nvm python-flask dnsmasq
 
     # Java — all LTS versions (including latest)
     jdk17-openjdk jdk21-openjdk jdk-openjdk
@@ -281,17 +276,8 @@ PACMAN_PKGS=(
     nautilus-python
 )
 
-# --noconfirm keeps the default "No" for package conflicts.
-if pacman -Q gnu-netcat &>/dev/null; then
-    info "Replacing gnu-netcat with openbsd-netcat..."
-    if ! run "Remove conflicting gnu-netcat" sudo pacman -R --noconfirm gnu-netcat; then
-        err "Could not remove gnu-netcat; package installation stopped."
-        exit 1
-    fi
-fi
-
 info "Installing ${#PACMAN_PKGS[@]} packages..."
-if ! run "Install official packages" sudo pacman -Syu --needed --noconfirm "${PACMAN_PKGS[@]}"; then
+if ! run "Install official packages" sudo pacman -Syu --needed "${PACMAN_FLAGS[@]}" "${PACMAN_PKGS[@]}"; then
     err "Official package installation failed."
     exit 1
 fi
@@ -307,10 +293,10 @@ elif command -v yay &>/dev/null; then
     log "yay already installed"
 else
     info "Installing yay..."
-    sudo pacman -S --needed --noconfirm git base-devel
+    sudo pacman -S --needed "${PACMAN_FLAGS[@]}" git base-devel
     YAY_TMP=$(mktemp -d)
     git clone https://aur.archlinux.org/yay.git "$YAY_TMP"
-    (cd "$YAY_TMP" && makepkg -si --noconfirm)
+    (cd "$YAY_TMP" && makepkg -s --noconfirm && sudo pacman -U "${PACMAN_FLAGS[@]}" ./*.pkg.tar.*)
     rm -rf "$YAY_TMP"
     log "yay installed"
 fi
@@ -328,7 +314,6 @@ AUR_PKGS=(
     jdk8-openjdk
     jdk11-openjdk
     google-chrome
-    netexec
     bettercap-ui
     quickemu
     burpsuite
@@ -342,16 +327,16 @@ AUR_PKGS=(
 )
 
 info "Installing ${#AUR_PKGS[@]} AUR packages..."
-if pacman -Q gnome-shell-extension-clipboard-history &>/dev/null; then
-    info "Clipboard Indicator replaces Clipboard History. Review the package replacement before continuing."
-    yay -S --needed gnome-shell-extension-clipboard-indicator
-    if ! pacman -Q gnome-shell-extension-clipboard-indicator &>/dev/null; then
-        err "Clipboard Indicator was not installed. Stopping before the remaining AUR packages."
-        exit 1
+# Separate transactions keep one failed build from blocking unrelated tools.
+for pkg in "${AUR_PKGS[@]}"; do
+    if run "AUR: $pkg" yay -S --needed "${YAY_FLAGS[@]}" "$pkg"; then
+        if ! pacman -Q "$pkg" >/dev/null 2>&1; then
+            warn "AUR reported success but $pkg is missing"
+            _ERRORS+=("AUR verification: $pkg")
+        fi
     fi
-fi
-yay -S --needed --noconfirm --answerclean All --answerdiff None --combinedupgrade "${AUR_PKGS[@]}"
-log "AUR packages installed"
+done
+log "AUR package attempts complete; failures are included in the final summary"
 fi  # SKIP_PACKAGES
 
 # Enable preload daemon (adaptive readahead — faster app startup)
@@ -527,6 +512,8 @@ NPM_GLOBALS=(
     "@nestjs/cli"
     "@earendil-works/pi-coding-agent"
 )
+declare -A NPM_COMMANDS=([@openai/codex]=codex [@github/copilot]=copilot
+    [bun]=bun [@nestjs/cli]=nest [@earendil-works/pi-coding-agent]=pi)
 
 for pkg in "${NPM_GLOBALS[@]}"; do
     if [[ "$pkg" == "@deepseek-ai/dsh" ]]; then
@@ -535,6 +522,8 @@ for pkg in "${NPM_GLOBALS[@]}"; do
     fi
     if npm list -g "$pkg" --depth=0 2>/dev/null | grep -q "$pkg@"; then
         log "npm: $pkg already installed"
+    elif command -v "${NPM_COMMANDS[$pkg]}" >/dev/null 2>&1; then
+        log "${NPM_COMMANDS[$pkg]} already has a native installation; not installing a competing npm copy"
     else
         info "npm: installing $pkg..."
         npm install -g "$pkg"
@@ -560,7 +549,11 @@ for entry in "${PIPX_TOOLS[@]}"; do
     fi
 done
 
-log "Coding agents ready"
+log "Coding agent installation attempts complete"
+
+if ! run 'Install/update isolated NetExec' bash "$DOTFILES/scripts/install-netexec.sh"; then
+    warn 'NetExec setup failed; continuing with deployment and final verification'
+fi
 
 # ── Deploy public configs, private memory, and matching expose tools ──
 section "11/11 — Dotfiles and expose"
@@ -594,6 +587,12 @@ else
 fi
 
 # ── Final ────────────────────────────────────────────────────────────
+if ! run 'Reconcile duplicate managed tools' python3 "$DOTFILES/scripts/reconcile-tools.py"; then
+    warn 'Duplicate reconciliation failed; final verification will report remaining conflicts'
+fi
+if ! run 'Verify tools in a fresh login shell' python3 "$DOTFILES/scripts/verify-tools.py"; then
+    warn 'Fresh-session CLI verification failed; see the missing/conflicting tools above'
+fi
 section "Done"
 
 # Error summary
@@ -617,7 +616,11 @@ echo "  Rust:      $(rustc --version 2>/dev/null | awk '{print $2}' || echo 'not
 echo "  Java:      $(java --version 2>/dev/null | head -1 || echo 'not found')"
 echo "  Docker:    $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',')"
 echo ""
-echo -e "${GREEN}All done. Start a new terminal or run:${NC}"
+if (( ${#_ERRORS[@]} )); then
+    echo -e "${RED}Installation incomplete. Resolve the failures listed above, then rerun.${NC}"
+else
+    echo -e "${GREEN}All done. Start a new terminal or run:${NC}"
+fi
 echo "  exec zsh"
 echo ""
 echo -e "${YELLOW}Notes:${NC}"

@@ -16,6 +16,7 @@ check() {
     local status=0
     (
         DRY_RUN="$dry_run" SKIP_PACKAGES="$skip"
+        source "$ROOT/scripts/package-policy.sh"
         _ERRORS=()
         info() { echo "$*"; }
         warn() { echo "$*"; }
@@ -28,7 +29,7 @@ check() {
                 echo remove >> "$TEST_DIR/calls"
                 return "$remove_status"
             fi
-            [[ "$*" == 'pacman -Syu --needed --noconfirm '* ]]
+            [[ "$*" == 'pacman -Syu --needed --noconfirm --ask=4 '* ]]
             [[ " $* " == *' openbsd-netcat '* ]]
             echo install >> "$TEST_DIR/calls"
             return "$install_status"
@@ -45,49 +46,72 @@ check() {
 }
 
 : > "$TEST_DIR/calls"
-check 'replace GNU netcat' 0 0 0 false false 0 $'remove\ninstall'
+check 'replace GNU netcat atomically' 0 0 0 false false 0 install
 check 'no conflict' 1 0 0 false false 0 install
-check 'removal failure stops install' 0 1 0 false false 1 remove
 check 'installation failure is reported' 1 0 1 false false 1 install
 check 'dry run makes no changes' 0 0 0 true false 0 ''
 check 'skip packages makes no changes' 0 0 0 false true 0 ''
 
-# Run the AUR transaction under errexit, as install.sh does. A cancelled
-# interactive transaction can return success without installing a package.
+# Execute real AUR transactions against stubs, with stdin closed.
 cat > "$TEST_DIR/aur.sh" <<'BASH'
 set -eu
+source "$ROOT/scripts/package-policy.sh"
+DRY_RUN=false
+_ERRORS=()
 info() { :; }
 log() { :; }
+warn() { :; }
 err() { echo "$*" >&2; }
-pacman() {
-    case "$*" in
-        '-Q gnome-shell-extension-clipboard-history') [[ "$legacy" == yes ]] ;;
-        '-Q gnome-shell-extension-clipboard-indicator') [[ "$replacement" == accepted ]] ;;
-        *) exit 2 ;;
-    esac
-}
+BASH
+sed -n '/^run() {$/,/^}$/p' "$ROOT/install.sh" >> "$TEST_DIR/aur.sh"
+cat >> "$TEST_DIR/aur.sh" <<'BASH'
+pacman() { [[ "${MISSING:-}" != "$2" ]]; }
 yay() {
-    if [[ "$*" == '-S --needed gnome-shell-extension-clipboard-indicator' ]]; then
-        echo replacement
-        [[ "$replacement" != failed ]]
-    else
-        [[ " $* " == *' --noconfirm '* ]]
-        [[ " $* " == *' gnome-shell-extension-clipboard-indicator '* ]]
-        [[ " $* " != *' gnome-shell-extension-clipboard-history '* ]]
-        echo batch
-    fi
+    [[ " $* " == *' --noconfirm '* ]]
+    [[ " $* " == *' --useask '* ]]
+    [[ " $* " == *' --ask=4 '* ]]
+    [[ " $* " == *' --answeredit None '* ]]
+    [[ " $* " == *' --answerupgrade None '* ]]
+    [[ " $* " != *' netexec '* ]]
+    local target="${!#}"
+    echo "$target" >> "$TEST_DIR/aur-calls"
+    [[ "${FAILED:-}" != "$target" ]]
 }
 BASH
-sed -n '/^AUR_PKGS=(/,/^log "AUR packages installed"/p' \
-    "$ROOT/install.sh" >> "$TEST_DIR/aur.sh"
+sed -n '/^AUR_PKGS=(/,/^log "AUR package attempts complete/p' "$ROOT/install.sh" >> "$TEST_DIR/aur.sh"
+echo '(( ${#_ERRORS[@]} == 0 ))' >> "$TEST_DIR/aur.sh"
+export ROOT TEST_DIR
+for scenario in success build-failure missing-after-success; do
+    : > "$TEST_DIR/aur-calls"
+    status=0
+    case "$scenario" in
+        success) FAILED= MISSING= bash "$TEST_DIR/aur.sh" </dev/null || status=$? ;;
+        build-failure) FAILED=opencode-bin MISSING= bash "$TEST_DIR/aur.sh" </dev/null || status=$? ;;
+        missing-after-success) FAILED= MISSING=opencode-bin bash "$TEST_DIR/aur.sh" </dev/null || status=$? ;;
+    esac
+    if [[ "$scenario" == success ]]; then [[ "$status" == 0 ]]; else [[ "$status" != 0 ]]; fi
+    [[ $(wc -l < "$TEST_DIR/aur-calls") == $(grep -vc '^#\|^$' "$ROOT/packages/aur.txt") ]]
+    echo "PASS: AUR $scenario (all transactions attempted without prompts)"
+done
 
-check_aur() {
-    local status=0 calls
-    calls=$(legacy="$1" replacement="$2" bash "$TEST_DIR/aur.sh") || status=$?
-    [[ "$status" == "$3" && "$calls" == "$4" ]]
+# Existing native agent/Bun installs must not gain competing npm copies.
+cat > "$TEST_DIR/npm.sh" <<'BASH'
+set -eu
+PATH=/usr/bin:/bin
+DOTFILES="$ROOT"
+log() { :; }
+info() { :; }
+codex() { :; }
+copilot() { :; }
+pi() { :; }
+bun() { :; }
+python3() { echo managed-dsh; }
+npm() {
+    if [[ "$1" == list ]]; then return 1; fi
+    [[ "$*" == 'install -g @nestjs/cli' ]]
+    echo install-nest
 }
-check_aur no skipped 0 batch
-check_aur yes accepted 0 $'replacement\nbatch'
-check_aur yes cancelled 1 replacement
-check_aur yes failed 1 replacement
-echo 'PASS: Clipboard Indicator selection and migration'
+BASH
+sed -n '/^NPM_GLOBALS=(/,/^# Copilot uses/p' "$ROOT/install.sh" >> "$TEST_DIR/npm.sh"
+[[ $(bash "$TEST_DIR/npm.sh") == $'managed-dsh\ninstall-nest' ]]
+echo 'PASS: Native agents and Bun do not gain duplicate npm installations'
